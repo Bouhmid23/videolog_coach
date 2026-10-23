@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:intl/intl.dart';
 import 'package:livekit_client/livekit_client.dart';
-import 'package:livekitapp/theme.dart';
+import 'package:videolog_coach/core/call_foreground_service.dart';
+import 'package:videolog_coach/theme.dart';
 import 'package:logging/logging.dart';
 
 import 'router.dart';
@@ -14,6 +16,9 @@ void main() async {
   });
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterForegroundTask.initCommunicationPort();
+  CallForegroundService.initialize();
 
   await LiveKitClient.initialize(
     bypassVoiceProcessing: lkPlatformIsMobile(),

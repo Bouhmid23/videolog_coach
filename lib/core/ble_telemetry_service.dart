@@ -91,16 +91,16 @@ const int _flowStop    = 0x02;
 //
 const int _xLeft      = 10;   // marge gauche standard
 const int _yDistLabel = 5;
-const int _yDistValue = 25;
+const int _yDistValue = 35;
 const int _ySep1      = 60;
 const int _yBpmLabel  = 65;
-const int _yBpmValue  = 85;
+const int _yBpmValue  = 95;
 const int _ySep2      = 120;
 const int _yKcalLabel = 125;
-const int _yKcalValue = 145;
+const int _yKcalValue = 155;
 const int _ySep3      = 180;
 const int _yRpmLabel  = 185;
-const int _yRpmValue  = 205;
+const int _yRpmValue  = 215;
 const int _kSafeMarginX = 16;
 
 // ─── Modèle ───────────────────────────────────────────────────────────────────
@@ -450,7 +450,7 @@ class BleTelemetryService {
   Future<void> displayMetrics(
       String deviceId, {
         required double distanceMiles,
-        required int bpm,
+        int? bpm,
         required int kcal,
         int? cadence,
       }) async {
@@ -458,7 +458,7 @@ class BleTelemetryService {
 
     final distKm  = distanceMiles * 1.60934;
     final distStr = '${distKm.toStringAsFixed(2)} km';
-    final bpmStr  = '$bpm bpm';
+    final bpmStr  = bpm != null ? '$bpm bpm' : '-- bpm';
     final kcalStr = '$kcal kcal';
     final rpmStr  = '${cadence ?? 0} rpm';
 

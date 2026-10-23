@@ -4,6 +4,8 @@ class RemoteTelemetry {
   final double? speed;
   final double? lat;
   final double? lng;
+  final double? altitude;
+  final double? bearing;
   final String? role;
   final DateTime receivedAt;
 
@@ -13,6 +15,8 @@ class RemoteTelemetry {
     this.speed,
     this.lat,
     this.lng,
+    this.altitude,
+    this.bearing,
     this.role,
     required this.receivedAt,
   });
@@ -34,10 +38,15 @@ class RemoteTelemetry {
     final gps = inner['gps'];
     double? lat;
     double? lng;
+    double? altitude;
+    double? bearing;
+    
     if (gps is Map) {
       final gpsMap = Map<String, dynamic>.from(gps);
       lat = _readDouble(gpsMap['lat']);
       lng = _readDouble(gpsMap['lng']);
+      altitude = _readDouble(gpsMap['altitude']);
+      bearing = _readDouble(gpsMap['bearing']);
     }
 
     return RemoteTelemetry(
@@ -46,6 +55,8 @@ class RemoteTelemetry {
       speed: _readDouble(inner['speed']),
       lat: lat,
       lng: lng,
+      altitude: altitude,
+      bearing: bearing,
       role: inner['role'] is String ? inner['role'] as String : null,
       receivedAt: receivedAt ?? DateTime.now(),
     );

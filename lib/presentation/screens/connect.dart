@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
+import 'dart:math';
 
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
@@ -10,44 +10,37 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
+import '../../data/user_role.dart';
 import '../../exts.dart';
 import '../../theme.dart';
+import '../../utils.dart';
+import '../utils/ui_utils.dart';
 
-const String kApiBaseUrl    = 'https://api.videolog.app';
+const String kApiBaseUrl = 'https://api.videolog.app';
 
-// ─── Config POC ───────────────────────────────────────────────────────────────
-// Pointe vers le LiveKit Server Docker exposé sur le réseau local
-//
-// Android Emulator  → 10.0.2.2  (alias loopback vers l'hôte)
-// Device physique   → IP LAN de ta machine (ex: 192.168.1.42)
-// iOS Simulator     → localhost
-//
-/*const String kLiveKitWsUrl  = 'ws://192.168.1.7:7880';   // WebSocket LiveKit
-const String kLiveKitApiUrl = ApiService.localURL;  // HTTP API LiveKit
-const String kApiBaseUrl    = ApiService.localURL; */ // Dashboard API (token)
-const String kDefaultRoom   = 'poc-room';               // room utilisée par le POC
-
-//const String kLiveKitWsUrl  = 'wss://livekit.opkodelabs.com';   // WebSocket LiveKit
-const String kLiveKitWsUrl  = 'wss://livekit.videolog.app';   // WebSocket LiveKit
-//const String kLiveKitApiUrl = 'http://192.168.1.7:7880';  // HTTP API LiveKit
-//const String kApiBaseUrl    = 'http://192.168.1.7:8000';
+// Config POC
+const String kLiveKitWsUrl = 'wss://livekit.videolog.app';
+const String kDefaultRoom = 'poc-room';
 
 class JoinArgs {
   JoinArgs({
     required this.url,
     required this.token,
     required this.username,
+    this.role = UserRole.trainee,
     this.e2ee = false,
     this.e2eeKey,
-    this.simulcast = true,
+    this.simulcast = false,
     this.adaptiveStream = true,
-    this.dynacast = true,
-    this.preferredCodec = 'VP8',
+    this.dynacast = false,
+    this.preferredCodec = 'H264',
     this.enableBackupVideoCodec = true,
   });
+
   final String url;
   final String token;
   final String username;
+  final UserRole role;
   final bool e2ee;
   final String? e2eeKey;
   final bool simulcast;
@@ -56,6 +49,8 @@ class JoinArgs {
   final String preferredCodec;
   final bool enableBackupVideoCodec;
 }
+
+// ─── PreJoinPage ────────────────────────────────────────────────────────────
 
 class PreJoinPage extends StatefulWidget {
   const PreJoinPage({required this.args, super.key});
@@ -67,6 +62,15 @@ class PreJoinPage extends StatefulWidget {
 class _PreJoinPageState extends State<PreJoinPage> {
   static const _prefKeyEnableVideo = 'prejoin-enable-video';
   static const _prefKeyEnableAudio = 'prejoin-enable-audio';
+  static const _prefKeyCameraPosition = 'prejoin-camera-position';
+  static const _prefKeyVideoResolution = 'prejoin-video-resolution';
+
+  static final List<VideoParameters> _videoResolutionOptions = [
+    VideoParametersPresets.h480_43,
+    VideoParametersPresets.h540_169,
+    VideoParametersPresets.h720_169,
+    VideoParametersPresets.h1080_169,
+  ];
 
   List<MediaDevice> _audioInputs = [];
   List<MediaDevice> _videoInputs = [];
@@ -77,9 +81,12 @@ class _PreJoinPageState extends State<PreJoinPage> {
   bool _enableAudio = true;
   LocalAudioTrack? _audioTrack;
   LocalVideoTrack? _videoTrack;
-  MediaDevice? _selectedVideoDevice;
+  CameraPosition _cameraPosition = CameraPosition.front;
   MediaDevice? _selectedAudioDevice;
-  VideoParameters _selectedVideoParameters = VideoParametersPresets.h720_169;
+  VideoParameters _videoParameters = VideoParametersPresets.h480_43;
+
+  static String _resolutionKey(VideoParameters parameters) =>
+      '${parameters.dimensions.width}x${parameters.dimensions.height}';
 
   @override
   void initState() {
@@ -107,9 +114,6 @@ class _PreJoinPageState extends State<PreJoinPage> {
       _selectedAudioDevice = null;
     }
     if (_audioInputs.isEmpty) { await _audioTrack?.stop(); _audioTrack = null; }
-    if (_selectedVideoDevice != null && !_videoInputs.contains(_selectedVideoDevice)) {
-      _selectedVideoDevice = null;
-    }
     if (_videoInputs.isEmpty) { await _videoTrack?.stop(); _videoTrack = null; }
     if (_enableAudio && _audioInputs.isNotEmpty && _selectedAudioDevice == null) {
       _selectedAudioDevice = _audioInputs.first;
@@ -119,8 +123,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
         if (mounted) setState(() {});
       });
     }
-    if (_enableVideo && _videoInputs.isNotEmpty && _selectedVideoDevice == null) {
-      _selectedVideoDevice = _videoInputs.first;
+    if (_enableVideo && _videoInputs.isNotEmpty && _videoTrack == null) {
       Future.delayed(const Duration(milliseconds: 100), () async {
         if (!mounted) return;
         await _changeLocalVideoTrack();
@@ -136,11 +139,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
     if (!_enableVideo) {
       await _videoTrack?.stop();
       _videoTrack = null;
-      _selectedVideoDevice = null;
     } else {
-      if (_selectedVideoDevice == null && _videoInputs.isNotEmpty) {
-        _selectedVideoDevice = _videoInputs.first;
-      }
       await _changeLocalVideoTrack();
     }
     setState(() {});
@@ -176,13 +175,11 @@ class _PreJoinPageState extends State<PreJoinPage> {
   Future<void> _changeLocalVideoTrack() async {
     if (!_enableVideo) return;
     if (_videoTrack != null) { await _videoTrack!.stop(); _videoTrack = null; }
-    if (_selectedVideoDevice != null) {
-      _videoTrack = await LocalVideoTrack.createCameraTrack(CameraCaptureOptions(
-        deviceId: _selectedVideoDevice!.deviceId,
-        params: _selectedVideoParameters,
-      ));
-      await _videoTrack!.start();
-    }
+    _videoTrack = await LocalVideoTrack.createCameraTrack(CameraCaptureOptions(
+      cameraPosition: _cameraPosition,
+      params: _videoParameters,
+    ));
+    await _videoTrack!.start();
   }
 
   @override
@@ -205,8 +202,8 @@ class _PreJoinPageState extends State<PreJoinPage> {
         await keyProvider.setKey(args.e2eeKey!);
       }
 
-      const cameraEncoding  = VideoEncoding(maxBitrate: 5 * 1000 * 1000, maxFramerate: 30);
-      const screenEncoding  = VideoEncoding(maxBitrate: 3 * 1000 * 1000, maxFramerate: 15);
+      const cameraEncoding = VideoEncoding(maxBitrate: 2 * 1000 * 1000, maxFramerate: 30);
+      const screenEncoding = VideoEncoding(maxBitrate: 3 * 1000 * 1000, maxFramerate: 15);
 
       final room = Room(
         roomOptions: RoomOptions(
@@ -217,11 +214,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
           ),
           defaultCameraCaptureOptions: const CameraCaptureOptions(
             maxFrameRate: 30,
-            params: VideoParameters(dimensions: VideoDimensions(1280, 720)),
-          ),
-          defaultScreenShareCaptureOptions: const ScreenShareCaptureOptions(
-            useiOSBroadcastExtension: true,
-            params: VideoParameters(dimensions: VideoDimensionsPresets.h1080_169),
+            params: VideoParameters(dimensions: VideoDimensions(640, 480)),
           ),
           defaultVideoPublishOptions: VideoPublishOptions(
             simulcast: args.simulcast,
@@ -249,7 +242,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
       if (!context.mounted) return;
       await context.push<void>(
         '/room',
-        extra: (room, listener),
+        extra: (room, listener, args.role),
       );
     } catch (error) {
       debugPrint('Could not connect $error');
@@ -257,7 +250,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
       await context.showErrorDialog(error);
     } finally {
       setState(() { _busy = false; });
-      if (mounted) context.go('/home/${widget.args.username}');
+      if (context.mounted) context.go('/home/${widget.args.username}');
     }
   }
 
@@ -273,6 +266,16 @@ class _PreJoinPageState extends State<PreJoinPage> {
     setState(() {
       _enableVideo = prefs.getBool(_prefKeyEnableVideo) ?? true;
       _enableAudio = prefs.getBool(_prefKeyEnableAudio) ?? true;
+      final positionName = prefs.getString(_prefKeyCameraPosition);
+      _cameraPosition = CameraPosition.values.firstWhere(
+        (position) => position.name == positionName,
+        orElse: () => CameraPosition.front,
+      );
+      final resolutionKey = prefs.getString(_prefKeyVideoResolution);
+      _videoParameters = _videoResolutionOptions.firstWhere(
+        (parameters) => _resolutionKey(parameters) == resolutionKey,
+        orElse: () => VideoParametersPresets.h480_43,
+      );
     });
   }
 
@@ -280,178 +283,161 @@ class _PreJoinPageState extends State<PreJoinPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefKeyEnableVideo, _enableVideo);
     await prefs.setBool(_prefKeyEnableAudio, _enableAudio);
+    await prefs.setString(_prefKeyCameraPosition, _cameraPosition.name);
+    await prefs.setString(
+      _prefKeyVideoResolution,
+      _resolutionKey(_videoParameters),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: LKColors.background,
       appBar: AppBar(
-        title: const Text('Select Devices', style: TextStyle(color: Colors.white)),
+        backgroundColor: LKColors.surfaceElevated,
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: LKColors.textPrimary,
+        title: Text('Configurer les appareils', style: UIUtils.titleMedium(context)),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: UIUtils.textPrimaryIcon(Icons.arrow_back_rounded),
           onPressed: () => _actionBack(context),
         ),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        centerTitle: true,
       ),
-      body: Container(
-        alignment: Alignment.center,
-        child: SingleChildScrollView(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-            constraints: const BoxConstraints(maxWidth: 400),
+      body: SingleChildScrollView(
+        padding: UIUtils.paddingLG,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: SizedBox(
-                    width: 320,
+                // Video Preview
+                Card(
+                  color: LKColors.surface,
+                  surfaceTintColor: Colors.transparent,
+                  elevation: 0,
+                  margin: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: UIUtils.borderRadiusAllLG,
+                    side: BorderSide(color: LKColors.border, width: 0.5),
+                  ),
+                  child: Container(
                     height: 240,
-                    child: Container(
-                      alignment: Alignment.center,
-                      color: Colors.black54,
-                      child: _videoTrack != null
-                          ? VideoTrackRenderer(renderMode: VideoRenderMode.auto, _videoTrack!)
-                          : Container(
-                        alignment: Alignment.center,
-                        child: LayoutBuilder(
-                          builder: (ctx, constraints) => Icon(
-                            Icons.videocam_off,
-                            color: LKColors.lkBlue,
-                            size: math.min(constraints.maxHeight, constraints.maxWidth) * 0.3,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: LKColors.background,
+                      borderRadius: UIUtils.borderRadiusAllLG,
+                    ),
+                    child: _videoTrack != null
+                        ? ClipRRect(
+                            borderRadius: UIUtils.borderRadiusAllLG,
+                            child: VideoTrackRenderer(
+                              renderMode: VideoRenderMode.auto,
+                              _videoTrack!,
+                            ),
+                          )
+                        : AnimatedOpacity(
+                            opacity: _enableVideo ? 1.0 : 0.5,
+                            duration: UIUtils.animationDuration,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.videocam_off_rounded,
+                                  color: LKColors.textHint,
+                                  size: 60,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Caméra désactivée',
+                                  style: UIUtils.bodySmall(context).copyWith(
+                                        color: LKColors.textHint,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
                   ),
                 ),
-                // Camera toggle
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 5),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Camera:'),
-                      Switch(value: _enableVideo, onChanged: _setEnableVideo),
-                    ],
-                  ),
+                SizedBox(height: UIUtils.lg),
+                
+                // Camera Section
+                _buildToggleSection(
+                  icon: Icons.videocam_rounded,
+                  title: 'Caméra',
+                  value: _enableVideo,
+                  onChanged: _setEnableVideo,
+                  disabled: _videoInputs.isEmpty,
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 25),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton2<MediaDevice>(
-                      isExpanded: true,
-                      disabledHint: const Text('Disable Camera'),
-                      hint: const Text('Select Camera'),
-                      items: _enableVideo
-                          ? _videoInputs.map((d) => DropdownMenuItem<MediaDevice>(
-                        value: d,
-                        child: Text(d.label, style: const TextStyle(fontSize: 14)),
-                      )).toList()
-                          : [],
-                      value: _selectedVideoDevice,
-                      onChanged: (MediaDevice? value) async {
-                        if (value != null) {
-                          _selectedVideoDevice = value;
-                          await _changeLocalVideoTrack();
-                          setState(() {});
-                        }
-                      },
-                      buttonStyleData: const ButtonStyleData(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
-                          height: 40, width: 140),
-                      menuItemStyleData: const MenuItemStyleData(height: 40),
-                    ),
-                  ),
+                SizedBox(height: UIUtils.sm),
+                
+                if (_enableVideo && _videoInputs.isNotEmpty) ...[
+                  _buildCameraPositionSelector(context),
+                  SizedBox(height: UIUtils.sm),
+                  _buildVideoResolutionSelector(context),
+                ],
+                SizedBox(height: UIUtils.lg),
+                
+                // Microphone Section
+                _buildToggleSection(
+                  icon: Icons.mic_rounded,
+                  title: 'Microphone',
+                  value: _enableAudio,
+                  onChanged: _setEnableAudio,
+                  disabled: _audioInputs.isEmpty,
                 ),
-                if (_enableVideo)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 25),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton2<VideoParameters>(
-                        isExpanded: true,
-                        hint: const Text('Select Video Dimensions'),
-                        items: [
-                          VideoParametersPresets.h480_43,
-                          VideoParametersPresets.h540_169,
-                          VideoParametersPresets.h720_169,
-                          VideoParametersPresets.h1080_169,
-                        ].map((p) => DropdownMenuItem<VideoParameters>(
-                          value: p,
-                          child: Text('${p.dimensions.width}x${p.dimensions.height}',
-                              style: const TextStyle(fontSize: 14)),
-                        )).toList(),
-                        value: _selectedVideoParameters,
-                        onChanged: (VideoParameters? value) async {
-                          if (value != null) {
-                            _selectedVideoParameters = value;
-                            await _changeLocalVideoTrack();
-                            setState(() {});
-                          }
-                        },
-                        buttonStyleData: const ButtonStyleData(
-                            padding: EdgeInsets.symmetric(horizontal: 16),
-                            height: 40, width: 140),
-                        menuItemStyleData: const MenuItemStyleData(height: 40),
-                      ),
-                    ),
+                SizedBox(height: UIUtils.sm),
+                
+                if (_enableAudio && _audioInputs.isNotEmpty)
+                  _buildDropdown<MediaDevice>(
+                    label: 'Sélectionner le microphone',
+                    items: _audioInputs,
+                    value: _selectedAudioDevice,
+                    onChanged: (MediaDevice? value) async {
+                      if (value != null) {
+                        _selectedAudioDevice = value;
+                        await _changeLocalAudioTrack();
+                        setState(() {});
+                      }
+                    },
+                    itemBuilder: (d) => Text(d.label, style: UIUtils.bodySmall(context)),
                   ),
-                // Microphone toggle
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 5),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Microphone:'),
-                      Switch(value: _enableAudio, onChanged: _setEnableAudio),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 25),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton2<MediaDevice>(
-                      isExpanded: true,
-                      disabledHint: const Text('Disable Microphone'),
-                      hint: const Text('Select Microphone'),
-                      items: _enableAudio
-                          ? _audioInputs.map((d) => DropdownMenuItem<MediaDevice>(
-                        value: d,
-                        child: Text(d.label, style: const TextStyle(fontSize: 14)),
-                      )).toList()
-                          : [],
-                      value: _selectedAudioDevice,
-                      onChanged: (MediaDevice? value) async {
-                        if (value != null) {
-                          _selectedAudioDevice = value;
-                          await _changeLocalAudioTrack();
-                          setState(() {});
-                        }
-                      },
-                      buttonStyleData: const ButtonStyleData(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
-                          height: 40, width: 140),
-                      menuItemStyleData: const MenuItemStyleData(height: 40),
-                    ),
-                  ),
-                ),
-                ElevatedButton(
+                SizedBox(height: UIUtils.xxl),
+                
+                // Join Button
+                FilledButton(
                   onPressed: _busy ? null : () async => await _join(context),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_busy)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 10),
-                          child: SizedBox(
-                            height: 15, width: 15,
-                            child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2),
-                          ),
-                        ),
-                      const Text('JOIN'),
-                    ],
+                  style: FilledButton.styleFrom(
+                    backgroundColor: LKColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: UIUtils.paddingVerticalLG.add(UIUtils.paddingHorizontalXXL),
+                    shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
+                    elevation: 0,
+                    shadowColor: Colors.transparent,
                   ),
+                  child: _busy
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            ),
+                            SizedBox(width: UIUtils.sm),
+                            Text('REJOINDRE', style: UIUtils.labelLarge(context).copyWith(color: Colors.white)),
+                          ],
+                        )
+                      : Text('REJOINDRE', style: UIUtils.labelLarge(context).copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
@@ -460,9 +446,251 @@ class _PreJoinPageState extends State<PreJoinPage> {
       ),
     );
   }
+
+  Widget _buildCameraPositionSelector(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.cameraswitch_rounded,
+                color: LKColors.textPrimary,
+                size: 20,
+              ),
+              SizedBox(width: UIUtils.sm),
+              Text(
+                'Orientation de la caméra',
+                style: UIUtils.labelMedium(context).copyWith(
+                  color: LKColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: UIUtils.sm),
+          SegmentedButton<CameraPosition>(
+            segments: [
+              ButtonSegment<CameraPosition>(
+                value: CameraPosition.front,
+                label: Text('Frontale', style: UIUtils.bodySmall(context)),
+                icon: const Icon(Icons.camera_front_rounded, size: 18),
+              ),
+              ButtonSegment<CameraPosition>(
+                value: CameraPosition.back,
+                label: Text('Dorsale', style: UIUtils.bodySmall(context)),
+                icon: const Icon(Icons.camera_rear_rounded, size: 18),
+              ),
+            ],
+            selected: {_cameraPosition},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) async {
+              _cameraPosition = selection.first;
+              await _writePrefs();
+              await _changeLocalVideoTrack();
+              if (mounted) setState(() {});
+            },
+            style: SegmentedButton.styleFrom(
+              backgroundColor: LKColors.surface,
+              foregroundColor: LKColors.textPrimary,
+              selectedBackgroundColor: LKColors.primary,
+              selectedForegroundColor: Colors.white,
+              padding: UIUtils.paddingVerticalSM.add(
+                UIUtils.paddingHorizontalSM,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: UIUtils.borderRadiusAllSM,
+              ),
+              side: BorderSide(color: LKColors.border, width: 0.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVideoResolutionSelector(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.high_quality_rounded,
+                color: LKColors.textPrimary,
+                size: 20,
+              ),
+              SizedBox(width: UIUtils.sm),
+              Text(
+                'Résolution vidéo',
+                style: UIUtils.labelMedium(context).copyWith(
+                  color: LKColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: UIUtils.sm),
+          DropdownButtonHideUnderline(
+            child: DropdownButton2<VideoParameters>(
+              isExpanded: true,
+              value: _videoParameters,
+              items: _videoResolutionOptions
+                  .map(
+                    (parameters) => DropdownMenuItem<VideoParameters>(
+                      value: parameters,
+                      child: Text(
+                        '${parameters.dimensions.width} x ${parameters.dimensions.height}',
+                        style: UIUtils.bodySmall(context),
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) async {
+                if (value == null || value == _videoParameters) return;
+                _videoParameters = value;
+                await _writePrefs();
+                await _changeLocalVideoTrack();
+                if (mounted) setState(() {});
+              },
+              buttonStyleData: ButtonStyleData(
+                padding: UIUtils.paddingHorizontalMD,
+                height: 44,
+                decoration: BoxDecoration(
+                  borderRadius: UIUtils.borderRadiusAllSM,
+                ),
+              ),
+              menuItemStyleData: MenuItemStyleData(
+                height: 44,
+                padding: UIUtils.paddingHorizontalMD,
+              ),
+              dropdownStyleData: DropdownStyleData(
+                maxHeight: 200,
+                decoration: BoxDecoration(
+                  color: LKColors.surfaceElevated,
+                  borderRadius: UIUtils.borderRadiusAllMD,
+                  border: Border.all(color: LKColors.border, width: 0.5),
+                ),
+                elevation: 8,
+                offset: const Offset(0, 4),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToggleSection({
+    required IconData icon,
+    required String title,
+    required bool value,
+    required Future<void> Function(bool) onChanged,
+    bool disabled = false,
+  }) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: disabled ? LKColors.textHint : LKColors.textPrimary, size: 20),
+          SizedBox(width: UIUtils.sm),
+          Expanded(
+            child: Text(
+              title,
+              style: UIUtils.labelMedium(context).copyWith(
+                    color: disabled ? LKColors.textHint : LKColors.textPrimary,
+                  ),
+            ),
+          ),
+          Switch(
+            value: value,
+            onChanged: disabled ? null : onChanged,
+            activeThumbColor: LKColors.primary,
+            inactiveThumbColor: LKColors.textHint,
+            inactiveTrackColor: LKColors.border,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDropdown<T>({
+    required String label,
+    required List<T> items,
+    required T? value,
+    required void Function(T?) onChanged,
+    required Widget Function(T) itemBuilder,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton2<T>(
+          isExpanded: true,
+          hint: Padding(
+            padding: UIUtils.paddingHorizontalMD,
+            child: Text(
+              label,
+              style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint),
+            ),
+          ),
+          items: items.map((item) => DropdownMenuItem<T>(
+            value: item,
+            child: Padding(
+              padding: UIUtils.paddingHorizontalMD,
+              child: itemBuilder(item),
+            ),
+          )).toList(),
+          value: value,
+          onChanged: onChanged,
+          buttonStyleData: ButtonStyleData(
+            padding: UIUtils.paddingHorizontalMD,
+            height: 44,
+            decoration: BoxDecoration(
+              borderRadius: UIUtils.borderRadiusAllSM,
+            ),
+          ),
+          menuItemStyleData: MenuItemStyleData(
+            height: 44,
+            padding: UIUtils.paddingHorizontalMD,
+          ),
+          dropdownStyleData: DropdownStyleData(
+            maxHeight: 200,
+            decoration: BoxDecoration(
+              color: LKColors.surfaceElevated,
+              borderRadius: UIUtils.borderRadiusAllMD,
+              border: Border.all(color: LKColors.border, width: 0.5),
+            ),
+            elevation: 8,
+            offset: const Offset(0, 4),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-// ─── ConnectPage ──────────────────────────────────────────────────────────────
+// ─── ConnectPage ────────────────────────────────────────────────────────────
 
 class ConnectPage extends StatefulWidget {
   const ConnectPage({
@@ -480,11 +708,12 @@ class ConnectPage extends StatefulWidget {
 class _ConnectPageState extends State<ConnectPage> {
   final _usernameCtrl = TextEditingController();
   bool _busy = false;
-  final bool _simulcast = true;
+  final UserRole _role = UserRole.trainee;
+  final bool _simulcast = false;
   final bool _adaptiveStream = true;
   final bool _dynacast = true;
   final bool _e2ee = false;
-  final String _preferredCodec = 'VP8';
+  final String _preferredCodec = 'H264';
 
   @override
   void initState() {
@@ -515,17 +744,14 @@ class _ConnectPageState extends State<ConnectPage> {
     }
   }
 
-  /// Génère un token JWT LiveKit via le Dashboard API du POC.
-  /// L'API délègue à livekit-api Python qui signe le JWT avec API_KEY/SECRET.
   Future<String> _fetchToken({
-    required String username,
+    required String identity,
     required String room,
   }) async {
-    // Endpoint ajouté dans api.py du POC
     final response = await http.post(
       Uri.parse('$kApiBaseUrl/token'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'identity': username, 'room': room}),
+      body: jsonEncode({'identity': identity, 'room': room}),
     ).timeout(const Duration(seconds: 10));
 
     if (response.statusCode == 200) {
@@ -536,28 +762,9 @@ class _ConnectPageState extends State<ConnectPage> {
     }
   }
 
-  /*Future<String> _fetchToken({
-    required String username,
-    required String room,
-  }) async {
-    // Endpoint ajouté dans api.py du POC
-    final response = await http.post(
-      Uri.parse('${ApiService.baseUrl}/${ApiService.tokenEndpoint}'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': username, 'room': room}),
-    ).timeout(const Duration(seconds: 10));
-
-    if (response.statusCode == 201) {
-      final data = jsonDecode(response.body);
-      return data['token'] as String;
-    } else {
-      throw Exception('Token fetch failed (${response.statusCode}): ${response.body}');
-    }
-  }*/
-
   Future<void> _connect(BuildContext ctx) async {
     if (_usernameCtrl.text.trim().isEmpty) {
-      await ctx.showErrorDialog('Entrer un nom d\'utilisateur');
+      await ctx.showErrorDialog('Veuillez entrer un nom d\'utilisateur');
       return;
     }
 
@@ -565,23 +772,29 @@ class _ConnectPageState extends State<ConnectPage> {
 
     try {
       final username = _usernameCtrl.text.trim();
-      debugPrint('Connexion → room=${widget.roomName} user=$username');
+      // LiveKit identifie un participant par son identité : deux personnes avec
+      // le même nom se déconnectent mutuellement. On ajoute un suffixe unique
+      // à l'identité et on ne l'affiche pas (voir displayNameForIdentity).
+      final suffix = Random().nextInt(0xFFFFFF).toRadixString(36);
+      final identity = '$username$kIdentitySuffixSeparator$suffix';
+      debugPrint('Connexion → room=${widget.roomName} user=$username identity=$identity');
 
-      final token = await _fetchToken(username: username, room: widget.roomName);
+      final token = await _fetchToken(identity: identity, room: widget.roomName);
 
       if (!ctx.mounted) return;
       await ctx.push<void>(
         '/prejoin',
         extra: JoinArgs(
-          url:                  kLiveKitWsUrl,
-          username:             username,
-          token:                token,
-          e2ee:                 _e2ee,
-          simulcast:            _simulcast,
-          adaptiveStream:       _adaptiveStream,
-          dynacast:             _dynacast,
-          preferredCodec:       _preferredCodec,
-          enableBackupVideoCodec: ['VP9', 'AV1'].contains(_preferredCodec),
+          url: kLiveKitWsUrl,
+          username: username,
+          token: token,
+          role: _role,
+          e2ee: _e2ee,
+          simulcast: _simulcast,
+          adaptiveStream: _adaptiveStream,
+          dynacast: _dynacast,
+          preferredCodec: _preferredCodec,
+          enableBackupVideoCodec: _preferredCodec != 'VP8',
         ),
       );
     } catch (error) {
@@ -594,90 +807,146 @@ class _ConnectPageState extends State<ConnectPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0B1120), Color(0xFF0F1C37), Color(0xFF111827)],
-        ),
-      ),
-      alignment: Alignment.center,
-      child: SingleChildScrollView(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(18.0),
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: LKColors.background,
+      appBar: AppBar(),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Center(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: EdgeInsets.all(14),
-                    child: Image.asset('images/v.png',height: 60,),
-                  ),
-                  // Info room
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 20),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blueGrey.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blueGrey.withValues(alpha: 0.3)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Room: ${widget.roomName}',
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                        Text('Server: $kLiveKitWsUrl',
-                            style: const TextStyle(fontSize: 11, color: Colors.white54)),
-                        Text('API: $kApiBaseUrl',
-                            style: const TextStyle(fontSize: 11, color: Colors.white54)),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 25),
-                    child: TextField(
-                      controller: _usernameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Nom du participant',
-                        hintText: 'ex: driver-01',
-                        border: OutlineInputBorder(),
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Logo
+                    AnimatedContainer(
+                      duration: UIUtils.animationDuration,
+                      padding: UIUtils.paddingXXL,
+                      child: Image.asset(
+                        'images/v.png',
+                        height: 80,
+                        fit: BoxFit.contain,
                       ),
                     ),
-                  ),
-                  ElevatedButton(
-                    onPressed: _busy ? null : () => _connect(context),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+
+
+                    SizedBox(height: UIUtils.xxl),
+
+                    // Username Field
+                    TextField(
+                      controller: _usernameCtrl,
+                      decoration: UIUtils.inputDecoration(
+                        labelText: 'Nom du participant',
+                        hintText: 'ex: driver-01',
+                        prefixIcon: Icons.person_rounded,
+                      ),
+                      style: UIUtils.bodyLarge(context),
+                      cursorColor: LKColors.primary,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                    SizedBox(height: UIUtils.lg),
+
+                    // Role Selection
+                    /*Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (_busy)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 10),
-                            child: SizedBox(
-                              height: 15, width: 15,
-                              child: CircularProgressIndicator(
-                                  color: Colors.white, strokeWidth: 2),
+                        *//*Text(
+                          'Votre rôle',
+                          style: UIUtils.labelMedium(context),
+                        ),
+                        SizedBox(height: UIUtils.sm),
+                        Card(
+                          color: LKColors.surface,
+                          surfaceTintColor: Colors.transparent,
+                          elevation: 0,
+                          margin: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: UIUtils.borderRadiusAllMD,
+                            side: BorderSide(color: LKColors.border, width: 0.5),
+                          ),
+                          child: Padding(
+                            padding: UIUtils.paddingSM,
+                            child: SegmentedButton<UserRole>(
+                              segments: [
+                                ButtonSegment<UserRole>(
+                                  value: UserRole.trainee,
+                                  label: Text('Trainee', style: UIUtils.bodySmall(context)),
+                                  icon: Icon(Icons.directions_run_rounded, size: 18),
+                                ),
+                                ButtonSegment<UserRole>(
+                                  value: UserRole.coach,
+                                  label: Text('Coach', style: UIUtils.bodySmall(context)),
+                                  icon: Icon(Icons.sports_rounded, size: 18),
+                                ),
+                              ],
+                              selected: {_role},
+                              onSelectionChanged: (selection) =>
+                                  setState(() => _role = selection.first),
+                              style: SegmentedButton.styleFrom(
+                                backgroundColor: LKColors.surface,
+                                foregroundColor: LKColors.textPrimary,
+                                selectedBackgroundColor: LKColors.primary,
+                                selectedForegroundColor: Colors.white,
+                                padding: UIUtils.paddingVerticalSM.add(UIUtils.paddingHorizontalLG),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: UIUtils.borderRadiusAllSM,
+                                ),
+                                side: BorderSide(color: LKColors.border, width: 0.5),
+                              ),
                             ),
                           ),
-                        const Text('CONNECTER', style: TextStyle(fontSize: 16)),
+                        ),*//*
                       ],
+                    ),*/
+                    SizedBox(height: UIUtils.xxl),
+
+                    // Connect Button
+                    AnimatedContainer(
+                      duration: UIUtils.animationDuration,
+                      width: _busy ? 200 : double.infinity,
+                      child: FilledButton(
+                        onPressed: _busy ? null : () => _connect(context),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: LKColors.primary,
+                          foregroundColor: Colors.white,
+                          padding: UIUtils.paddingVerticalLG.add(UIUtils.paddingHorizontalXXL),
+                          shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
+                          elevation: 0,
+                          shadowColor: Colors.transparent,
+                        ),
+                        child: _busy
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  SizedBox(width: UIUtils.sm),
+                                  Text('CONNEXION...', style: UIUtils.labelLarge(context).copyWith(color: Colors.white)),
+                                ],
+                              )
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.login_rounded, size: 20, color: Colors.white),
+                                  SizedBox(width: UIUtils.sm),
+                                  Text('CONNECTER', style: UIUtils.labelLarge(context).copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
+                                ],
+                              ),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ),
         ),
-      ),
-    ),
-  );
+          ),
+    );
+  }
 }

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
 
-import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
+import '../../theme.dart';
+import '../utils/ui_utils.dart';
 
 enum ParticipantTrackType { kUserMedia, kScreenShare }
 
@@ -23,29 +23,28 @@ class ParticipantTrack {
   ParticipantTrack({
     required this.participant,
     this.type = ParticipantTrackType.kUserMedia,
-    this.posture,
     this.telemetry,
-    this.pose,
-    this.poseFrameSize,
-    this.avatarOnly = false,
-    this.showPosePip = true,
   });
   Participant participant;
   final ParticipantTrackType type;
-  final RemotePosture? posture;
-  final RemoteTelemetry? telemetry;
-  final Pose? pose;
-  final Size? poseFrameSize;
-  final bool avatarOnly;
-  final bool showPosePip;
+  RemoteTelemetry? telemetry;
 }
 
+/// Widget affichant les informations d'un participant (nom, audio, qualité, etc.)
+///
+/// Design moderne avec :
+/// - Fond semi-transparent
+/// - Icônes Material Design
+/// - Animations subtiles
+/// - Feedback visuel de l'état
 class ParticipantInfoWidget extends StatelessWidget {
   final String? title;
   final bool audioAvailable;
   final ConnectionQuality connectionQuality;
   final bool isScreenShare;
   final bool enabledE2EE;
+  final bool isLocal;
+  final bool isTop;
 
   const ParticipantInfoWidget({
     this.title,
@@ -53,175 +52,197 @@ class ParticipantInfoWidget extends StatelessWidget {
     this.connectionQuality = ConnectionQuality.excellent,
     this.isScreenShare = false,
     this.enabledE2EE = false,
+    this.isLocal = false,
+    this.isTop = false,
     super.key,
   });
 
   @override
   Widget build(BuildContext context) => Container(
     decoration: BoxDecoration(
-      color: Colors.black.withValues(alpha: 0.5),
-      borderRadius: const BorderRadius.only(
-        topLeft: Radius.circular(10),
-        topRight: Radius.circular(10),
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.black.withValues(alpha: 0.8),
+          Colors.black.withValues(alpha: 0.6),
+        ],
       ),
+      borderRadius: isTop
+          ? BorderRadius.only(
+              bottomLeft: Radius.circular(UIUtils.borderRadiusLG),
+              bottomRight: Radius.circular(UIUtils.borderRadiusLG),
+            )
+          : BorderRadius.only(
+              topLeft: Radius.circular(UIUtils.borderRadiusLG),
+              topRight: Radius.circular(UIUtils.borderRadiusLG),
+            ),
+      border: Border.all(
+        color: Colors.white.withValues(alpha: 0.1),
+        width: 0.5,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 8,
+          offset: const Offset(0, -2),
+          spreadRadius: 0,
+        ),
+      ],
     ),
-    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+    padding: EdgeInsets.symmetric(
+      vertical: UIUtils.sm,
+      horizontal: UIUtils.md,
+    ),
     child: Row(
-      mainAxisAlignment: MainAxisAlignment.end,
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        // Nom du participant
         if (title != null)
           Flexible(
             child: Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Text(title!,
+              padding: EdgeInsets.only(right: UIUtils.sm),
+              child: Text(
+                title!,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                ),
               ),
             ),
           ),
-        //_icon(Icons.monitor, null, isScreenShare),
-        _icon(
-          audioAvailable ? Icons.mic : Icons.mic_off,
-          audioAvailable ? null : Colors.red,
-          !isScreenShare,
+        
+        // Icônes d'état
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Icône audio
+            _buildStatusIcon(
+              context,
+              audioAvailable ? Icons.mic : Icons.mic_off,
+              audioAvailable ? null : Colors.red,
+              !isScreenShare,
+              audioAvailable ? 'Audio activé' : 'Audio désactivé',
+            ),
+            
+            // Icône qualité de connexion
+            if (connectionQuality != ConnectionQuality.unknown) ...[
+              _buildStatusIcon(
+                context,
+                _getConnectionIcon(connectionQuality),
+                _getConnectionColor(connectionQuality),
+                true,
+                _getConnectionTooltip(connectionQuality),
+              ),
+            ],
+            
+            // Icône E2EE
+            _buildStatusIcon(
+              context,
+              enabledE2EE ? Icons.lock : Icons.lock_open,
+              enabledE2EE ? Colors.green : Colors.red,
+              true,
+              enabledE2EE ? 'Chiffré (E2EE)' : 'Non chiffré',
+            ),
+            
+            // Icône participant local
+            if (isLocal) ...[
+              _buildStatusIcon(
+                context,
+                Icons.person,
+                LKColors.primary,
+                true,
+                'Vous',
+              ),
+            ],
+          ],
         ),
-        /*if (connectionQuality != ConnectionQuality.unknown)
-          _icon(
-            connectionQuality == ConnectionQuality.poor
-                ? Icons.wifi_off_outlined
-                : Icons.wifi,
-            {
-              ConnectionQuality.excellent: Colors.green,
-              ConnectionQuality.good: Colors.orange,
-              ConnectionQuality.poor: Colors.red,
-            }[connectionQuality],
-            true,
-          ),
-        _icon(
-          enabledE2EE ? Icons.lock : Icons.lock_open,
-          enabledE2EE ? Colors.green : Colors.red,
-          true,
-        ),*/
       ],
     ),
   );
 
-  Widget _icon(IconData icon, Color? color, bool show) {
+  /// Construit une icône d'état avec son tooltip
+  Widget _buildStatusIcon(
+    BuildContext context,
+    IconData icon,
+    Color? color,
+    bool show,
+    String tooltip,
+  ) {
     if (!show) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(left: 4),
-      child: Icon(icon, color: color ?? Colors.white, size: 20),
-    );
-  }
-}
-
-class TelemetryBadge extends StatelessWidget {
-  final RemoteTelemetry? telemetry;
-  final RemotePosture? posture;
-
-  const TelemetryBadge({super.key, this.telemetry, this.posture});
-
-  @override
-  Widget build(BuildContext context) {
-    final items = <Widget>[];
-
-    if (telemetry != null) {
-      if (telemetry!.hasHrm) {
-        items.add(_chip(
-          icon: Icons.favorite,
-          iconColor: Colors.redAccent,
-          value: '${telemetry!.heartRate}',
-          unit: 'BPM',
-        ));
-      }
-      if (telemetry!.speed != null) {
-        items.add(_chip(
-          icon: Icons.speed,
-          iconColor: Colors.amberAccent,
-          value: telemetry!.speed!.toStringAsFixed(1),
-          unit: 'km/h',
-        ));
-      }
-      if (telemetry!.cadence != null) {
-        items.add(_chip(
-          icon: Icons.pedal_bike,
-          iconColor: Colors.lightGreenAccent,
-          value: telemetry!.cadence!.toStringAsFixed(0),
-          unit: 'RPM',
-        ));
-      }
-      /*if (telemetry!.lat != null) {
-        items.add(_chip(
-          icon: Icons.my_location,
-          iconColor: Colors.lightBlueAccent,
-          value: telemetry!.lat!.toStringAsFixed(5),
-          unit: 'Lat',
-        ));
-      }
-      if (telemetry!.lng != null) {
-        items.add(_chip(
-          icon: Icons.my_location,
-          iconColor: Colors.lightBlueAccent,
-          value: telemetry!.lng!.toStringAsFixed(5),
-          unit: 'Lng',
-        ));
-      }*/
-    }
-
-    /*if (posture != null) {
-      items.add(_chip(
-        icon: Icons.accessibility_new,
-        iconColor: Colors.cyanAccent,
-        value: posture!.label,
-        unit: null,
-      ));
-    }*/
-
-    if (items.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+    
+    return Tooltip(
+      message: tooltip,
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
+        color: LKColors.surfaceElevated,
+        borderRadius: UIUtils.borderRadiusAllSM,
+        border: Border.all(color: LKColors.border, width: 0.5),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (int i = 0; i < items.length; i++) ...[
-            if (i > 0) const SizedBox(width: 6),
-            items[i],
-          ],
-        ],
+      textStyle: const TextStyle(
+        color: LKColors.textPrimary,
+        fontSize: 10,
+      ),
+      preferBelow: false,
+      margin: EdgeInsets.all(UIUtils.xs),
+      child: Padding(
+        padding: EdgeInsets.only(left: UIUtils.sm),
+        child: Icon(
+          icon,
+          color: color ?? Colors.white,
+          size: 16,
+        ),
       ),
     );
   }
 
-  Widget _chip({
-    required IconData icon,
-    required Color iconColor,
-    required String value,
-    String? unit,
-  }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: iconColor, size: 14),
-        const SizedBox(width: 3),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-          ),
-        ),
-        if (unit != null) ...[
-          const SizedBox(width: 1),
-          Text(unit, style: const TextStyle(color: Colors.white70, fontSize: 8)),
-        ],
-      ],
-    );
+  /// Retourne l'icône de connexion appropriée
+  IconData _getConnectionIcon(ConnectionQuality quality) {
+    switch (quality) {
+      case ConnectionQuality.excellent:
+        return Icons.wifi;
+      case ConnectionQuality.good:
+        return Icons.wifi_1_bar;
+      case ConnectionQuality.poor:
+        return Icons.wifi_off_outlined;
+      case ConnectionQuality.lost:
+        return Icons.signal_wifi_off;
+      case ConnectionQuality.unknown:
+        return Icons.help_outline;
+    }
+  }
+
+  /// Retourne la couleur de connexion appropriée
+  Color? _getConnectionColor(ConnectionQuality quality) {
+    switch (quality) {
+      case ConnectionQuality.excellent:
+        return Colors.green;
+      case ConnectionQuality.good:
+        return Colors.amber;
+      case ConnectionQuality.poor:
+        return Colors.red;
+      case ConnectionQuality.lost:
+        return Colors.redAccent;
+      case ConnectionQuality.unknown:
+        return Colors.grey;
+    }
+  }
+
+  /// Retourne le tooltip de connexion approprié
+  String _getConnectionTooltip(ConnectionQuality quality) {
+    switch (quality) {
+      case ConnectionQuality.excellent:
+        return 'Connexion excellente';
+      case ConnectionQuality.good:
+        return 'Connexion bonne';
+      case ConnectionQuality.poor:
+        return 'Connexion faible';
+      case ConnectionQuality.lost:
+        return 'Connexion perdue';
+      case ConnectionQuality.unknown:
+        return 'Connexion inconnue';
+    }
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -8,7 +9,9 @@ import 'package:livekit_client/livekit_client.dart';
 import '../../core/ble_sensor_service.dart';
 import '../../core/ble_telemetry_service.dart';
 import '../../exts.dart';
+import '../../theme.dart';
 import '../../viewmodels/controls_viewmodel.dart';
+import '../utils/ui_utils.dart';
 
 class ControlsWidget extends StatefulWidget {
   final Room room;
@@ -19,10 +22,6 @@ class ControlsWidget extends StatefulWidget {
   final ControlsViewModel controlsViewModel;
   final VoidCallback onBleConnected;
   final VoidCallback onBleDisconnected;
-  final bool showMap;
-  final VoidCallback onToggleMap;
-  final bool showPosePip;
-  final VoidCallback onTogglePosePip;
 
   const ControlsWidget(
     this.room,
@@ -32,10 +31,6 @@ class ControlsWidget extends StatefulWidget {
     required this.controlsViewModel,
     required this.onBleConnected,
     required this.onBleDisconnected,
-    required this.showMap,
-    required this.onToggleMap,
-    required this.showPosePip,
-    required this.onTogglePosePip,
     super.key,
   });
 
@@ -43,18 +38,25 @@ class ControlsWidget extends StatefulWidget {
   State<StatefulWidget> createState() => _ControlsWidgetState();
 }
 
-class _ControlsWidgetState extends State<ControlsWidget> {
+class _ControlsWidgetState extends State<ControlsWidget> with SingleTickerProviderStateMixin {
   ControlsViewModel get _vm => widget.controlsViewModel;
+  late AnimationController _pulseController;
 
   @override
   void initState() {
     super.initState();
     _vm.addListener(_onViewModelChanged);
+    
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    )..repeat(reverse: true);
   }
 
   @override
   void dispose() {
     _vm.removeListener(_onViewModelChanged);
+    _pulseController.dispose();
     super.dispose();
   }
 
@@ -67,10 +69,8 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.black87,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (_) => _BleSheetContent(
         bleService: widget.bleService,
         onConnect: (deviceId) async {
@@ -94,10 +94,7 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.black87,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.7,
@@ -115,233 +112,294 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     if (result == true) await widget.room.disconnect();
   }
 
+  Widget _buildControlButton({
+    required IconData icon,
+    required VoidCallback? onPressed,
+    required String tooltip,
+    Color? iconColor,
+    double iconSize = 24,
+    bool isActive = false,
+    Widget? badge,
+  }) {
+    return AnimatedScale(
+      duration: UIUtils.animationDurationFast,
+      scale: isActive ? 1.05 : 1.0,
+      child: Tooltip(
+        message: tooltip,
+        decoration: BoxDecoration(
+          color: LKColors.surfaceElevated,
+          borderRadius: UIUtils.borderRadiusAllSM,
+          border: Border.all(color: LKColors.border, width: 0.5),
+        ),
+        textStyle: TextStyle(
+          color: LKColors.textPrimary,
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+        ),
+        padding: UIUtils.paddingHorizontalSM.add(UIUtils.paddingVerticalSM),
+        margin: UIUtils.paddingXS,
+        child: IconButton(
+          onPressed: onPressed,
+          icon: badge != null 
+              ? Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Icon(icon, size: iconSize, color: iconColor),
+                    Positioned.fill(child: badge),
+                  ],
+                )
+              : Icon(icon, size: iconSize, color: iconColor),
+          tooltip: tooltip,
+          style: IconButton.styleFrom(
+            foregroundColor: LKColors.textPrimary,
+            backgroundColor: Colors.transparent,
+            hoverColor: LKColors.primary.withValues(alpha: 0.1),
+            disabledForegroundColor: LKColors.textHint,
+            padding: UIUtils.paddingSM,
+            shape: RoundedRectangleBorder(
+              borderRadius: UIUtils.borderRadiusAllSM,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBleBadge(int battery) {
+    return Positioned(
+      bottom: 0,
+      right: 0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          color: LKColors.success.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: LKColors.success.withValues(alpha: 0.3)),
+        ),
+        child: Text(
+          '$battery%',
+          style: TextStyle(
+            fontSize: 9,
+            color: LKColors.success,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSensorBadge() {
+    return Positioned(
+      bottom: 0,
+      right: 0,
+      child: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: LKColors.success,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: LKColors.success.withValues(alpha: 0.4),
+              blurRadius: 4,
+              offset: Offset(0, 0),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 15),
-      child: Wrap(
-        alignment: WrapAlignment.spaceEvenly,
-        spacing: 3,
-        runSpacing: 3,
-        children: [
-          // ── Microphone ──
-          if (widget.participant.isMicrophoneEnabled())
-            if (lkPlatformIs(PlatformType.android))
-              IconButton(
-                onPressed: _vm.disableAudio,
-                icon: const Icon(Icons.mic),
-                iconSize: 24,
-                tooltip: 'mute audio',
-              )
-            else
-              PopupMenuButton<MediaDevice>(
-                icon: const Icon(Icons.settings_voice),
-                offset: const Offset(0, -90),
-                itemBuilder: (BuildContext context) {
-                  return [
-                    PopupMenuItem<MediaDevice>(
-                      value: null,
-                      onTap: _vm.toggleMicrophone,
-                      child: const ListTile(
-                        leading: Icon(Icons.mic_off, color: Colors.white),
-                        title: Text('Mute Microphone'),
-                      ),
-                    ),
-                    if (_vm.audioInputs != null)
-                      ..._vm.audioInputs!.map((device) {
-                        return PopupMenuItem<MediaDevice>(
-                          value: device,
+    return ClipRRect(
+      //borderRadius: UIUtils.borderRadiusAllSM,
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          width: double.infinity,
+          padding: UIUtils.paddingVerticalSM.add(UIUtils.paddingHorizontalMD),
+          decoration: BoxDecoration(
+            color: LKColors.surface.withValues(alpha: 0.85),
+            borderRadius: UIUtils.noBorderRadius,
+            border: Border.all(color: LKColors.border.withValues(alpha: 0.3), width: 0.5),
+            boxShadow: UIUtils.shadowMD,
+          ),
+          child: Wrap(
+            alignment: WrapAlignment.spaceEvenly,
+            spacing: 2,
+            runSpacing: 2,
+            children: [
+              // ── Microphone ──
+              if (widget.participant.isMicrophoneEnabled())
+                if (lkPlatformIs(PlatformType.android))
+                  _buildControlButton(
+                    icon: Icons.mic_rounded,
+                    onPressed: _vm.disableAudio,
+                    tooltip: 'Désactiver le microphone',
+                    iconColor: LKColors.textPrimary,
+                  )
+                else
+                  PopupMenuButton<MediaDevice>(
+                    icon: UIUtils.textPrimaryIcon(Icons.mic_rounded, size: 24),
+                    offset: const Offset(0, -90),
+                    tooltip: 'Options microphone',
+                    itemBuilder: (BuildContext context) {
+                      return [
+                        PopupMenuItem<MediaDevice>(
+                          value: null,
+                          onTap: _vm.toggleMicrophone,
                           child: ListTile(
-                            leading: device.deviceId ==
-                                    widget.room.selectedAudioInputDeviceId
-                                ? const Icon(Icons.check_box_outlined, color: Colors.white)
-                                : const Icon(Icons.check_box_outline_blank, color: Colors.white),
-                            title: Text(device.label),
+                            leading: Icon(Icons.mic_off_rounded, color: LKColors.danger),
+                            title: Text('Désactiver le microphone', style: UIUtils.labelMedium(context)),
+                            contentPadding: UIUtils.paddingHorizontalSM,
                           ),
-                          onTap: () => _vm.selectAudioInput(device),
-                        );
-                      }),
-                  ];
-                },
-              )
-          else
-            IconButton(
-              onPressed: _vm.enableAudio,
-              icon: const Icon(Icons.mic_off),
-              tooltip: 'un-mute audio',
-              iconSize: 24,
-            ),
-
-          // ── Audio output (desktop) ──
-          if (!lkPlatformIsMobile())
-            PopupMenuButton<MediaDevice>(
-              icon: const Icon(Icons.volume_up),
-              itemBuilder: (BuildContext context) {
-                return [
-                  const PopupMenuItem<MediaDevice>(
-                    value: null,
-                    child: ListTile(
-                      leading: Icon(Icons.speaker, color: Colors.white,size: 24,),
-                      title: Text('Select Audio Output'),
-                    ),
-                  ),
-                  if (_vm.audioOutputs != null)
-                    ..._vm.audioOutputs!.map((device) {
-                      return PopupMenuItem<MediaDevice>(
-                        value: device,
-                        child: ListTile(
-                          leading: device.deviceId ==
-                                  widget.room.selectedAudioOutputDeviceId
-                              ? const Icon(Icons.check_box_outlined, color: Colors.white)
-                              : const Icon(Icons.check_box_outline_blank, color: Colors.white),
-                          title: Text(device.label),
                         ),
-                        onTap: () => _vm.selectAudioOutput(device),
-                      );
-                    }),
-                ];
-              },
-            ),
-
-          // ── Speakerphone ──
-          if (!kIsWeb && lkPlatformIsMobile())
-            IconButton(
-              disabledColor: Colors.grey,
-              onPressed: _vm.toggleSpeakerphone,
-              icon: Icon(_vm.speakerphoneOn ? Icons.speaker_phone : Icons.hearing),
-              tooltip: 'Switch SpeakerPhone',
-              iconSize: 24,
-            ),
-
-          // ── Camera ──
-          if (widget.participant.isCameraEnabled())
-            IconButton(
-              onPressed: _vm.disableVideo,
-              icon: const Icon(Icons.videocam),
-              tooltip: 'disable_video',
-              iconSize: 24,
-            )
-          else
-            IconButton(
-              onPressed: _vm.enableVideo,
-              icon: const Icon(Icons.videocam_off),
-              tooltip: 'un-mute video',
-              iconSize: 24,
-            ),
-          IconButton(
-            icon: const Icon(Icons.cameraswitch),
-            onPressed: _vm.switchCamera,
-            tooltip: 'toggle camera',
-            iconSize: 24,
-          ),
-
-          // ── BLE glasses ──
-          Stack(
-            children: [
-              IconButton(
-                tooltip: _vm.bleGlassesConnected ? 'BLE connect\u00e9' : 'BLE d\u00e9connect\u00e9',
-                onPressed: _openBleSheet,
-                icon: Icon(
-                  _vm.bleGlassesConnected
-                      ? Icons.bluetooth_connected
-                      : Icons.bluetooth_searching,
-                  color: _vm.bleGlassesConnected ? Colors.greenAccent : null,
-                  size: 24,
+                        if (_vm.audioInputs != null)
+                          ..._vm.audioInputs!.map((device) {
+                            return PopupMenuItem<MediaDevice>(
+                              value: device,
+                              child: ListTile(
+                                leading: device.deviceId ==
+                                        widget.room.selectedAudioInputDeviceId
+                                    ? Icon(Icons.check_circle_rounded, color: LKColors.success)
+                                    : Icon(Icons.radio_button_unchecked_rounded, color: LKColors.textHint),
+                                title: Text(device.label, style: UIUtils.labelMedium(context)),
+                                contentPadding: UIUtils.paddingHorizontalSM,
+                              ),
+                              onTap: () => _vm.selectAudioInput(device),
+                            );
+                          }),
+                      ];
+                    },
+                    shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
+                    color: LKColors.surfaceElevated,
+                    surfaceTintColor: Colors.transparent,
+                    elevation: 4,
+                    shadowColor: Colors.black.withValues(alpha: 0.3),
+                  )
+              else
+                _buildControlButton(
+                  icon: Icons.mic_off_rounded,
+                  onPressed: _vm.enableAudio,
+                  tooltip: 'Activer le microphone',
+                  iconColor: LKColors.danger,
                 ),
-              ),
-              if (_vm.bleBattery != null)
-                Positioned(
-                  bottom: 2,
-                  right: 2,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: Colors.black87,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      '${_vm.bleBattery}%',
-                      style: const TextStyle(
-                        fontSize: 9,
-                        color: Colors.greenAccent,
-                        fontWeight: FontWeight.bold,
+
+              // ── Audio output (desktop) ──
+              if (!lkPlatformIsMobile())
+                PopupMenuButton<MediaDevice>(
+                  icon: UIUtils.textPrimaryIcon(Icons.volume_up_rounded, size: 24),
+                  tooltip: 'Sélectionner la sortie audio',
+                  itemBuilder: (BuildContext context) {
+                    return [
+                      PopupMenuItem<MediaDevice>(
+                        value: null,
+                        child: ListTile(
+                          leading: Icon(Icons.speaker_rounded, color: LKColors.textSecondary),
+                          title: Text('Sélectionner la sortie audio', style: UIUtils.labelMedium(context)),
+                          contentPadding: UIUtils.paddingHorizontalSM,
+                        ),
                       ),
-                    ),
-                  ),
+                      if (_vm.audioOutputs != null)
+                        ..._vm.audioOutputs!.map((device) {
+                          return PopupMenuItem<MediaDevice>(
+                            value: device,
+                            child: ListTile(
+                              leading: device.deviceId ==
+                                      widget.room.selectedAudioOutputDeviceId
+                                  ? Icon(Icons.check_circle_rounded, color: LKColors.success)
+                                  : Icon(Icons.radio_button_unchecked_rounded, color: LKColors.textHint),
+                              title: Text(device.label, style: UIUtils.labelMedium(context)),
+                              contentPadding: UIUtils.paddingHorizontalSM,
+                            ),
+                            onTap: () => _vm.selectAudioOutput(device),
+                          );
+                        }),
+                    ];
+                  },
+                  shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
+                  color: LKColors.surfaceElevated,
+                  surfaceTintColor: Colors.transparent,
+                  elevation: 4,
+                  shadowColor: Colors.black.withValues(alpha: 0.3),
                 ),
-            ],
-          ),
 
-          // ── Sensors (HRM + Cadence) ──
-          Stack(
-            children: [
-              IconButton(
-                tooltip: _vm.sensorHrConnected || _vm.sensorCadenceConnected
-                    ? 'Capteurs connect\u00e9s'
-                    : 'Capteurs sport',
-                onPressed: _openSensorSheet,
-                icon: Icon(
-                  _vm.sensorHrConnected || _vm.sensorCadenceConnected
-                      ? Icons.favorite
-                      : Icons.favorite_border,
-                  color: _vm.sensorHrConnected
-                      ? Colors.redAccent
-                      : _vm.sensorCadenceConnected
-                          ? Colors.cyanAccent
-                          : null,
-                  size: 24,
+              // ── Speakerphone ──
+              if (!kIsWeb && lkPlatformIsMobile())
+                _buildControlButton(
+                  icon: _vm.speakerphoneOn ? Icons.speaker_rounded : Icons.headphones_rounded,
+                  onPressed: _vm.toggleSpeakerphone,
+                  tooltip: _vm.speakerphoneOn ? 'Passer en haut-parleur' : 'Passer en écouteur',
+                  iconColor: _vm.speakerphoneOn ? LKColors.secondary : LKColors.textPrimary,
                 ),
+
+              // ── Camera ──
+              if (widget.participant.isCameraEnabled())
+                _buildControlButton(
+                  icon: Icons.videocam_rounded,
+                  onPressed: _vm.disableVideo,
+                  tooltip: 'Désactiver la caméra',
+                  iconColor: LKColors.textPrimary,
+                )
+              else
+                _buildControlButton(
+                  icon: Icons.videocam_off_rounded,
+                  onPressed: _vm.enableVideo,
+                  tooltip: 'Activer la caméra',
+                  iconColor: LKColors.danger,
+                ),
+              _buildControlButton(
+                icon: Icons.cameraswitch_rounded,
+                onPressed: _vm.switchCamera,
+                tooltip: 'Changer de caméra',
+                iconColor: LKColors.textPrimary,
               ),
-              if (_vm.sensorHrConnected || _vm.sensorCadenceConnected)
-                Positioned(
-                  bottom: 2,
-                  right: 2,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.greenAccent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
+
+              // ── BLE glasses ──
+              _buildControlButton(
+                icon: _vm.bleGlassesConnected ? Icons.bluetooth_connected_rounded : Icons.bluetooth_searching_rounded,
+                onPressed: _openBleSheet,
+                tooltip: _vm.bleGlassesConnected ? 'BLE connecté' : 'Connecter BLE',
+                iconColor: _vm.bleGlassesConnected ? LKColors.success : LKColors.textSecondary,
+                badge: _vm.bleBattery != null ? _buildBleBadge(_vm.bleBattery!) : null,
+                isActive: _vm.bleGlassesConnected,
+              ),
+
+              // ── Sensors (HRM + Cadence) ──
+              _buildControlButton(
+                icon: _vm.sensorHrConnected || _vm.sensorCadenceConnected
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                onPressed: _openSensorSheet,
+                tooltip: _vm.sensorHrConnected || _vm.sensorCadenceConnected
+                    ? 'Capteurs connectés'
+                    : 'Connecter capteurs sport',
+                iconColor: _vm.sensorHrConnected
+                    ? LKColors.danger
+                    : _vm.sensorCadenceConnected
+                        ? LKColors.secondary
+                        : LKColors.textSecondary,
+                badge: (_vm.sensorHrConnected || _vm.sensorCadenceConnected) ? _buildSensorBadge() : null,
+                isActive: _vm.sensorHrConnected || _vm.sensorCadenceConnected,
+              ),
+
+              // ── Disconnect ──
+              _buildControlButton(
+                icon: Icons.call_end_rounded,
+                onPressed: _onTapDisconnect,
+                tooltip: 'Quitter l\'appel',
+                iconColor: LKColors.danger,
+              ),
             ],
           ),
-
-          // ── Mini-map ──
-          IconButton(
-            onPressed: widget.onToggleMap,
-            icon: Icon(widget.showMap ? Icons.map : Icons.map_outlined),
-            tooltip: widget.showMap ? 'Masquer la carte' : 'Afficher la carte',
-            iconSize: 24,
-          ),
-
-          // ── D�tecteur de posture ──
-          IconButton(
-            onPressed: widget.onTogglePosePip,
-            icon: Icon(
-              widget.showPosePip ? Icons.visibility : Icons.visibility_off_outlined,
-            ),
-            tooltip: widget.showPosePip
-                ? 'Masquer le d\u00e9tecteur de posture'
-                : 'Afficher le d\u00e9tecteur de posture',
-            iconSize: 24,
-          ),
-
-          // ── Disconnect ──
-          IconButton(
-            onPressed: _onTapDisconnect,
-            icon: const Icon(Icons.call_end_rounded, color: Colors.red),
-            tooltip: 'disconnect',
-            iconSize: 24,
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-// ─── BLE Glasses Bottom Sheet (unchanged) ───────────────────────────────────
+// ─── BLE Glasses Bottom Sheet ─────────────────────────────────────────────────
 class _BleSheetContent extends StatefulWidget {
   final BleTelemetryService bleService;
   final Future<void> Function(String deviceId) onConnect;
@@ -393,47 +451,47 @@ class _BleSheetContentState extends State<_BleSheetContent> {
   IconData _phaseIcon(BleConnectionPhase phase) {
     switch (phase) {
       case BleConnectionPhase.ready:
-        return Icons.check_circle;
+        return Icons.check_circle_rounded;
       case BleConnectionPhase.failed:
-        return Icons.error;
+        return Icons.error_outline_rounded;
       case BleConnectionPhase.disconnected:
-        return Icons.bluetooth_disabled;
+        return Icons.bluetooth_disabled_rounded;
       default:
-        return Icons.bluetooth_searching;
+        return Icons.bluetooth_searching_rounded;
     }
   }
 
   Color _phaseColor(BleConnectionPhase phase) {
     switch (phase) {
       case BleConnectionPhase.ready:
-        return Colors.greenAccent;
+        return LKColors.success;
       case BleConnectionPhase.failed:
-        return Colors.redAccent;
+        return LKColors.danger;
       case BleConnectionPhase.disconnected:
-        return Colors.white38;
+        return LKColors.textHint;
       default:
-        return Colors.amber;
+        return LKColors.warning;
     }
   }
 
   String _statusLabel(BleConnectionPhase phase) {
     switch (phase) {
       case BleConnectionPhase.idle:
-        return 'Pr\u00eat';
+        return 'Prêt';
       case BleConnectionPhase.connecting:
         return 'Connexion en cours...';
       case BleConnectionPhase.connected:
-        return 'Connexion \u00e9tablie';
+        return 'Connexion établie';
       case BleConnectionPhase.initializing:
         return 'Initialisation...';
       case BleConnectionPhase.ready:
-        return 'Connect\u00e9 \u2713';
+        return 'Connecté ✓';
       case BleConnectionPhase.disconnecting:
-        return 'D\u00e9connexion...';
+        return 'Déconnexion...';
       case BleConnectionPhase.disconnected:
-        return 'D\u00e9connect\u00e9';
+        return 'Déconnecté';
       case BleConnectionPhase.failed:
-        return '\u00c9chec de connexion';
+        return 'Échec de connexion';
     }
   }
 
@@ -444,26 +502,50 @@ class _BleSheetContentState extends State<_BleSheetContent> {
         status.phase != BleConnectionPhase.disconnected;
 
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Devices BLE', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            const Text('Connecte un capteur BLE pour envoyer la t\u00e9l\u00e9m\u00e9trie r\u00e9elle.',
-                style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 12),
-            if (hasActiveStatus) _buildStatusCard(status),
-            if (hasActiveStatus) const SizedBox(height: 12),
-            Expanded(child: _buildDeviceList(status)),
-            if (_connectedDeviceId != null) ...[
-              const SizedBox(height: 8),
-              _buildSessionSection(),
-            ],
-            const SizedBox(height: 8),
-            _buildActionRow(),
-          ],
+      child: Container(
+        margin: UIUtils.paddingHorizontalLG.add(UIUtils.paddingVerticalLG),
+        child: ClipRRect(
+          borderRadius: UIUtils.borderRadiusAllLG,
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              padding: UIUtils.paddingLG,
+              decoration: BoxDecoration(
+                color: LKColors.surfaceElevated,
+                borderRadius: UIUtils.borderRadiusAllLG,
+                border: Border.all(color: LKColors.border, width: 0.5),
+                boxShadow: UIUtils.shadowXL,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.bluetooth_rounded, color: LKColors.primary, size: 24),
+                      const SizedBox(width: 8),
+                      Text('Devices BLE', style: UIUtils.titleMedium(context)),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Connectez un appareil BLE pour envoyer la téléométrie en temps réel.',
+                    style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint),
+                  ),
+                  const SizedBox(height: 12),
+                  if (hasActiveStatus) _buildStatusCard(status),
+                  if (hasActiveStatus) const SizedBox(height: 12),
+                  Flexible(child: _buildDeviceList(status)),
+                  if (_connectedDeviceId != null) ...[
+                    const SizedBox(height: 8),
+                    _buildSessionSection(),
+                  ],
+                  const SizedBox(height: 16),
+                  _buildActionRow(),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -478,12 +560,13 @@ class _BleSheetContentState extends State<_BleSheetContent> {
         ? status.message
         : null;
 
-    return Container(
+    return AnimatedContainer(
+      duration: UIUtils.animationDuration,
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: UIUtils.paddingMD,
       decoration: BoxDecoration(
         color: _phaseColor(phase).withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: UIUtils.borderRadiusAllMD,
         border: Border.all(color: _phaseColor(phase).withValues(alpha: 0.3)),
       ),
       child: Row(
@@ -507,19 +590,36 @@ class _BleSheetContentState extends State<_BleSheetContent> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(_statusLabel(phase),
-                    style: TextStyle(color: _phaseColor(phase), fontWeight: FontWeight.w600, fontSize: 13)),
+                    style: TextStyle(
+                      color: _phaseColor(phase), 
+                      fontWeight: FontWeight.w600, 
+                      fontSize: 13,
+                    )),
                 if (sessionMsg != null) ...[
                   const SizedBox(height: 2),
-                  Text(sessionMsg, style: TextStyle(color: _phaseColor(phase).withValues(alpha: 0.8), fontSize: 12)),
+                  Text(sessionMsg, 
+                      style: TextStyle(
+                        color: _phaseColor(phase).withValues(alpha: 0.8), 
+                        fontSize: 12
+                      )),
                 ],
                 if (status.message.isNotEmpty && phase != BleConnectionPhase.ready && !isProgress) ...[
                   const SizedBox(height: 2),
-                  Text(status.message, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                  Text(status.message, 
+                      style: TextStyle(
+                        color: LKColors.textHint, 
+                        fontSize: 12
+                      )),
                 ],
                 if (status.error != null && status.error!.isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text(status.error!, style: const TextStyle(color: Colors.redAccent, fontSize: 11),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  Text(status.error!,
+                      style: TextStyle(
+                        color: LKColors.danger, 
+                        fontSize: 11
+                      ),
+                      maxLines: 2, 
+                      overflow: TextOverflow.ellipsis),
                 ],
               ],
             ),
@@ -530,68 +630,169 @@ class _BleSheetContentState extends State<_BleSheetContent> {
   }
 
   Widget _buildDeviceList(BleConnectionStatus status) {
-    if (_devices.isEmpty) return const Center(child: Text('Scan BLE en cours...'));
+    if (_devices.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.bluetooth_searching_rounded, size: 30, color: LKColors.textHint),
+            const SizedBox(height: 8),
+            Text('Scan BLE en cours...', style: UIUtils.bodySmall(context)),
+          ],
+        ),
+      );
+    }
 
     return ListView.builder(
+      shrinkWrap: true,
       itemCount: _devices.length,
       itemBuilder: (context, i) {
         final device = _devices[i];
-        final name = device.name.isEmpty ? 'Unnamed (${device.id})' : device.name;
+        final name = device.name.isEmpty ? 'Inconnu (${device.id})' : device.name;
         final isConnected = _connectedDeviceId == device.id;
         final isConnectingThis = status.deviceId == device.id &&
             (status.phase == BleConnectionPhase.connecting ||
                 status.phase == BleConnectionPhase.connected ||
                 status.phase == BleConnectionPhase.initializing);
 
-        return ListTile(
-          title: Text(name),
-          subtitle: Text('RSSI ${device.rssi}'),
-          trailing: isConnected
-              ? const Text('Connect\u00e9', style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.w600))
-              : isConnectingThis
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        return AnimatedPadding(
+          duration: UIUtils.animationDuration,
+          padding: UIUtils.paddingVerticalSM,
+          child: Card(
+            color: LKColors.surface,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: UIUtils.borderRadiusAllMD,
+              side: BorderSide(color: LKColors.border, width: 0.5),
+            ),
+            child: ListTile(
+              title: Text(name, style: UIUtils.labelMedium(context)),
+              subtitle: Text('RSSI ${device.rssi}', style: UIUtils.bodySmall(context)),
+              trailing: isConnected
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: LKColors.success.withValues(alpha: 0.1),
+                        borderRadius: UIUtils.borderRadiusAllSM,
                       ),
-                      onPressed: _isBusy ? null : () => widget.onConnect(device.id),
-                      child: Text('Connecter', style: TextStyle(fontSize: 11, color: _isBusy ? Colors.white24 : null)),
-                    ),
+                      child: Text('Connecté', 
+                          style: TextStyle(
+                            fontSize: 11, 
+                            color: LKColors.success,
+                            fontWeight: FontWeight.bold
+                          )),
+                    )
+                  : isConnectingThis
+                      ? SizedBox(
+                          width: 20, 
+                          height: 20, 
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(LKColors.primary),
+                          ))
+                      : OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: UIUtils.borderRadiusAllSM,
+                            ),
+                            side: BorderSide(color: LKColors.border, width: 0.5),
+                          ),
+                          onPressed: _isBusy ? null : () => widget.onConnect(device.id),
+                          child: Text('Connecter', 
+                              style: TextStyle(
+                                fontSize: 11, 
+                                color: _isBusy ? LKColors.textHint : LKColors.textPrimary
+                              )),
+                        ),
+            ),
+          ),
         );
       },
     );
   }
 
   Widget _buildSessionSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 4),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            icon: Icon(_isDisplaySessionActive ? Icons.stop : Icons.play_arrow),
-            onPressed: widget.onToggleDisplay,
-            label: Text(_isDisplaySessionActive ? 'Arr\u00eater la session' : 'D\u00e9marrer la session'),
+    return AnimatedContainer(
+      duration: UIUtils.animationDuration,
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface.withValues(alpha: 0.5),
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            _isDisplaySessionActive ? Icons.stop_circle_rounded : Icons.play_circle_fill_rounded,
+            color: _isDisplaySessionActive ? LKColors.danger : LKColors.success,
+            size: 20,
           ),
-        ),
-      ],
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _isDisplaySessionActive ? 'Session en cours' : 'Session arrêtée',
+              style: UIUtils.labelMedium(context),
+            ),
+          ),
+          const SizedBox(width: 10),
+          ElevatedButton.icon(
+            icon: Icon(_isDisplaySessionActive ? Icons.stop_rounded : Icons.play_arrow_rounded, size: 16),
+            onPressed: widget.onToggleDisplay,
+            label: Text(
+              _isDisplaySessionActive ? 'Arrêter' : 'Démarrer',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            style: ElevatedButton.styleFrom(
+              padding: UIUtils.paddingHorizontalMD.add(UIUtils.paddingVerticalSM),
+              backgroundColor: _isDisplaySessionActive ? LKColors.danger : LKColors.success,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+              elevation: 0,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildActionRow() {
     return Row(
       children: [
-        Expanded(child: OutlinedButton(onPressed: () => widget.onDisconnect(), child: const Text('D\u00e9connecter'))),
+        Expanded(
+          child: OutlinedButton(
+            onPressed: () => widget.onDisconnect(),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: LKColors.textPrimary,
+              padding: UIUtils.paddingVerticalSM,
+              shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+              side: BorderSide(color: LKColors.border, width: 0.5),
+            ),
+            child: Text('Déconnecter', style: UIUtils.labelMedium(context)),
+          ),
+        ),
         const SizedBox(width: 12),
-        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Fermer'))),
+        Expanded(
+          child: FilledButton(
+            onPressed: () => Navigator.pop(context),
+            style: FilledButton.styleFrom(
+              backgroundColor: LKColors.primary,
+              foregroundColor: Colors.white,
+              padding: UIUtils.paddingVerticalSM,
+              shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+            ),
+            child: Text('Fermer', style: UIUtils.labelMedium(context).copyWith(color: Colors.white)),
+          ),
+        ),
       ],
     );
   }
 }
 
-// ─── Sensor Bottom Sheet (unchanged) ────────────────────────────────────────
+// ─── Sensor Bottom Sheet ────────────────────────────────────────────────────
 class _SensorSheetContent extends StatefulWidget {
   final BleSensorService sensorService;
   const _SensorSheetContent({required this.sensorService});
@@ -644,41 +845,73 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Capteurs Sport', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            const Text('Connecte un capteur cardiaque et/ou cadence.',
-                style: TextStyle(color: Colors.white70, fontSize: 12)),
-            const SizedBox(height: 16),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildHrmSection(),
-                    const SizedBox(height: 16),
-                    _buildCscSection(),
-                    if (_unknownDevices().isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      _buildUnknownSection(),
+      child: Container(
+        margin: UIUtils.paddingHorizontalLG.add(UIUtils.paddingVerticalLG),
+        child: ClipRRect(
+          borderRadius: UIUtils.borderRadiusAllLG,
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              padding: UIUtils.paddingLG,
+              decoration: BoxDecoration(
+                color: LKColors.surfaceElevated,
+                borderRadius: UIUtils.borderRadiusAllLG,
+                border: Border.all(color: LKColors.border, width: 0.5),
+                boxShadow: UIUtils.shadowXL,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.favorite_rounded, color: LKColors.danger, size: 24),
+                      const SizedBox(width: 8),
+                      Icon(Icons.speed_rounded, color: LKColors.secondary, size: 24),
+                      const SizedBox(width: 8),
+                      Text('Capteurs Sport', style: UIUtils.titleMedium(context)),
                     ],
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Connectez un capteur cardiaque et/ou de cadence.',
+                    style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint),
+                  ),
+                  const SizedBox(height: 16),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildHrmSection(),
+                          const SizedBox(height: 16),
+                          _buildCscSection(),
+                          if (_unknownDevices().isNotEmpty) ...[
+                            const SizedBox(height: 16),
+                            _buildUnknownSection(),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: LKColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: UIUtils.paddingVerticalSM,
+                        shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+                      ),
+                      child: Text('Fermer', style: UIUtils.labelMedium(context).copyWith(color: Colors.white)),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Fermer'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -687,33 +920,48 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
   Widget _buildHrmSection() {
     final devices = _devicesForType(SensorType.hrm);
     return _SensorCard(
-      title: 'Fr\u00e9quence Cardiaque',
-      icon: Icons.favorite,
-      iconColor: Colors.redAccent,
+      title: 'Fréquence Cardiaque',
+      icon: Icons.favorite_rounded,
+      iconColor: LKColors.danger,
       status: _hrmStatus,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_hrmStatus.isConnected)
-            _buildConnectedBanner(deviceId: _hrmStatus.deviceId, battery: _hrmStatus.battery,
-                onDisconnect: () => widget.sensorService.disconnectHrm())
+            _buildConnectedBanner(
+              deviceId: _hrmStatus.deviceId, 
+              battery: _hrmStatus.battery,
+              onDisconnect: () => widget.sensorService.disconnectHrm()
+            )
           else if (_hrmStatus.isBusy)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Row(children: [
-                SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                SizedBox(width: 8),
-                Text('Connexion...', style: TextStyle(fontSize: 12)),
-              ]),
+            Padding(
+              padding: UIUtils.paddingVerticalSM,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 14, 
+                    height: 14, 
+                    child: CircularProgressIndicator(strokeWidth: 2, color: LKColors.primary),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Connexion...', style: UIUtils.bodySmall(context)),
+                ]),
             )
           else if (devices.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('Aucun capteur HRM trouv\u00e9', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            Padding(
+              padding: UIUtils.paddingVerticalSM,
+              child: Center(
+                child: Text(
+                  'Aucun capteur HRM trouvé', 
+                  style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint)
+                ),
+              ),
             )
           else
             ...devices.map((d) => _buildDeviceTile(
-                device: d, sensorType: SensorType.hrm,
+                device: d, 
+                sensorType: SensorType.hrm,
                 onConnect: () => widget.sensorService.connectHrm(d.id))),
         ],
       ),
@@ -724,32 +972,47 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
     final devices = _devicesForType(SensorType.cadence);
     return _SensorCard(
       title: 'Cadence',
-      icon: Icons.speed,
-      iconColor: Colors.cyanAccent,
+      icon: Icons.speed_rounded,
+      iconColor: LKColors.secondary,
       status: _cscStatus,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_cscStatus.isConnected)
-            _buildConnectedBanner(deviceId: _cscStatus.deviceId, battery: _cscStatus.battery,
-                onDisconnect: () => widget.sensorService.disconnectCadence())
+            _buildConnectedBanner(
+              deviceId: _cscStatus.deviceId, 
+              battery: _cscStatus.battery,
+              onDisconnect: () => widget.sensorService.disconnectCadence()
+            )
           else if (_cscStatus.isBusy)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Row(children: [
-                SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                SizedBox(width: 8),
-                Text('Connexion...', style: TextStyle(fontSize: 12)),
-              ]),
+            Padding(
+              padding: UIUtils.paddingVerticalSM,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 14, 
+                    height: 14, 
+                    child: CircularProgressIndicator(strokeWidth: 2, color: LKColors.primary),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Connexion...', style: UIUtils.bodySmall(context)),
+                ]),
             )
           else if (devices.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('Aucun capteur cadence trouv\u00e9', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            Padding(
+              padding: UIUtils.paddingVerticalSM,
+              child: Center(
+                child: Text(
+                  'Aucun capteur cadence trouvé', 
+                  style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint)
+                ),
+              ),
             )
           else
             ...devices.map((d) => _buildDeviceTile(
-                device: d, sensorType: SensorType.cadence,
+                device: d, 
+                sensorType: SensorType.cadence,
                 onConnect: () => widget.sensorService.connectCadence(d.id))),
         ],
       ),
@@ -759,8 +1022,8 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
   Widget _buildUnknownSection() {
     return _SensorCard(
       title: 'Autres appareils',
-      icon: Icons.devices_other,
-      iconColor: Colors.white38,
+      icon: Icons.devices_other_rounded,
+      iconColor: LKColors.textHint,
       status: const SensorStatus(type: SensorType.unknown, state: SensorConnectionState.disconnected),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -768,21 +1031,34 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
             .map((d) => ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  title: Text(d.name.isEmpty ? 'Inconnu (${d.id})' : d.name, style: const TextStyle(fontSize: 13)),
-                  subtitle: Text('RSSI ${d.rssi}', style: const TextStyle(fontSize: 11)),
+                  title: Text(
+                    d.name.isEmpty ? 'Inconnu (${d.id})' : d.name, 
+                    style: UIUtils.bodySmall(context)
+                  ),
+                  subtitle: Text('RSSI ${d.rssi}', style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint, fontSize: 10)),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       OutlinedButton(
                         onPressed: () => widget.sensorService.connectHrm(d.id),
-                        style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 4)),
-                        child: const Text('Cardio', style: TextStyle(fontSize: 10)),
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+                          side: BorderSide(color: LKColors.border, width: 0.5),
+                        ),
+                        child: Text('Cardio', style: TextStyle(fontSize: 10, color: LKColors.textPrimary)),
                       ),
                       const SizedBox(width: 4),
                       OutlinedButton(
                         onPressed: () => widget.sensorService.connectCadence(d.id),
-                        style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 4)),
-                        child: const Text('Cadence', style: TextStyle(fontSize: 10)),
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+                          side: BorderSide(color: LKColors.border, width: 0.5),
+                        ),
+                        child: Text('Cadence', style: TextStyle(fontSize: 10, color: LKColors.textPrimary)),
                       ),
                     ],
                   ),
@@ -798,29 +1074,39 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.greenAccent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.25)),
+        color: LKColors.success.withValues(alpha: 0.08),
+        borderRadius: UIUtils.borderRadiusAllSM,
+        border: Border.all(color: LKColors.success.withValues(alpha: 0.25)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.bluetooth_connected, size: 16, color: Colors.greenAccent),
+          Icon(Icons.bluetooth_connected_rounded, size: 16, color: LKColors.success),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(displayId, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(displayId, 
+                    style: UIUtils.labelMedium(context).copyWith(fontSize: 11),
+                    maxLines: 1, 
+                    overflow: TextOverflow.ellipsis),
                 if (battery != null)
-                  Text('Batterie: $battery%', style: const TextStyle(fontSize: 10, color: Colors.white54)),
+                  Text('Batterie: $battery%', 
+                      style: UIUtils.bodySmall(context).copyWith(fontSize: 10, color: LKColors.textHint)),
               ],
             ),
           ),
           TextButton(
             onPressed: onDisconnect,
-            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), visualDensity: VisualDensity.compact),
-            child: const Text('D\u00e9connecter', style: TextStyle(fontSize: 11)),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8), 
+              visualDensity: VisualDensity.compact,
+            ),
+            child: Text('Déconnecter', 
+                style: TextStyle(
+                  fontSize: 11, 
+                  color: LKColors.danger
+                )),
           ),
         ],
       ),
@@ -830,17 +1116,34 @@ class _SensorSheetContentState extends State<_SensorSheetContent> {
   Widget _buildDeviceTile({required DiscoveredDevice device, required SensorType sensorType, required VoidCallback onConnect}) {
     final name = device.name.isEmpty
         ? 'Inconnu (${device.id.substring(0, math.min(8, device.id.length))})' : device.name;
-    return ListTile(
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(sensorType == SensorType.hrm ? Icons.favorite : Icons.speed, size: 18, color: Colors.white54),
-      title: Text(name, style: const TextStyle(fontSize: 13)),
-      subtitle: Text('RSSI ${device.rssi}', style: const TextStyle(fontSize: 11, color: Colors.white38)),
-      trailing: OutlinedButton(
-        onPressed: onConnect,
-        style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2)),
-        child: const Text('Connecter', style: TextStyle(fontSize: 11)),
+    return AnimatedPadding(
+      duration: UIUtils.animationDuration,
+      padding: UIUtils.paddingVerticalSM,
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(
+          sensorType == SensorType.hrm ? Icons.favorite_rounded : Icons.speed_rounded, 
+          size: 18, 
+          color: sensorType == SensorType.hrm ? LKColors.danger : LKColors.secondary
+        ),
+        title: Text(name, style: UIUtils.bodySmall(context)),
+        subtitle: Text('RSSI ${device.rssi}', 
+            style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint, fontSize: 10)),
+        trailing: OutlinedButton(
+          onPressed: onConnect,
+          style: OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllSM),
+            side: BorderSide(color: LKColors.border, width: 0.5),
+          ),
+          child: Text('Connecter', 
+              style: TextStyle(
+                fontSize: 11, 
+                color: LKColors.textPrimary
+              )),
+        ),
       ),
     );
   }
@@ -867,35 +1170,43 @@ class _SensorCard extends StatelessWidget {
     final isConnected = status.isConnected;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: UIUtils.paddingMD,
       decoration: BoxDecoration(
         color: isConnected
-            ? Colors.greenAccent.withValues(alpha: 0.04)
-            : Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(12),
+            ? LKColors.success.withValues(alpha: 0.04)
+            : LKColors.surface.withValues(alpha: 0.3),
+        borderRadius: UIUtils.borderRadiusAllMD,
         border: Border.all(color: isConnected
-            ? Colors.greenAccent.withValues(alpha: 0.3) : Colors.white12),
+            ? LKColors.success.withValues(alpha: 0.3) 
+            : LKColors.border.withValues(alpha: 0.5), width: 0.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(icon, size: 18, color: isConnected ? Colors.greenAccent : iconColor),
+              Icon(icon, size: 18, color: isConnected ? LKColors.success : iconColor),
               const SizedBox(width: 8),
-              Text(title, style: TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w600,
-                  color: isConnected ? Colors.greenAccent : Colors.white)),
+              Text(title, 
+                  style: TextStyle(
+                    fontSize: 14, 
+                    fontWeight: FontWeight.w600,
+                    color: isConnected ? LKColors.success : LKColors.textPrimary
+                  )),
               const Spacer(),
               if (isConnected)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.greenAccent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(4),
+                    color: LKColors.success.withValues(alpha: 0.15),
+                    borderRadius: UIUtils.borderRadiusAllSM,
                   ),
-                  child: const Text('CONNECT\u00c9',
-                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                  child: Text('CONNECTÉ',
+                      style: TextStyle(
+                        fontSize: 9, 
+                        fontWeight: FontWeight.bold, 
+                        color: LKColors.success
+                      )),
                 ),
             ],
           ),

@@ -1,26 +1,28 @@
-import 'dart:async';
-import 'dart:math' as math;
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import '../../core/pip_service.dart';
+import '../../data/user_role.dart';
+import '../../theme.dart';
 import '../../utils.dart';
-import '../models/map_tile_source.dart';
+import '../utils/ui_utils.dart';
 import '../widgets/controls.dart';
 import '../widgets/participant.dart';
-import '../widgets/participants_map.dart';
-import '../widgets/tile_source_toggle.dart';
 import '../../viewmodels/room_viewmodel.dart';
 
 class RoomPage extends StatefulWidget {
   final Room room;
   final EventsListener<RoomEvent> listener;
+  final UserRole role;
   final bool fastConnection;
 
   const RoomPage(
     this.room,
     this.listener, {
+    this.role = UserRole.trainee,
     this.fastConnection = false,
     super.key,
   });
@@ -31,49 +33,9 @@ class RoomPage extends StatefulWidget {
 
 class _RoomPageState extends State<RoomPage> {
   late final RoomViewModel _vm;
-  bool _showMap = true;
-  MapTileSource _tileSource = MapTileSource.openStreetMap;
 
-  static const double _mapSize = ParticipantsMapWidget.size;
-  static const double _galleryHeight = 140;
-
-  List<ParticipantsMapEntry> _mapEntries() {
-    final entries = <ParticipantsMapEntry>[];
-
-    final local = _vm.room?.localParticipant;
-    if (local != null) {
-      final localShape = local.name.isNotEmpty ? local.name : local.identity;
-      entries.add(ParticipantsMapEntry(
-        identity: local.identity,
-        label: 'Moi ($localShape)',
-        lat: _vm.localTelemetry.lat,
-        lng: _vm.localTelemetry.lng,
-        isLocal: true,
-      ));
-    }
-
-    final room = _vm.room;
-    if (room != null) {
-      for (final p in room.remoteParticipants.values) {
-        final telemetry = _vm.telemetryForParticipant(p);
-        entries.add(ParticipantsMapEntry(
-          identity: p.identity,
-          label: p.name.isNotEmpty ? p.name : p.identity,
-          lat: telemetry?.lat,
-          lng: telemetry?.lng,
-        ));
-      }
-    }
-
-    return entries;
-  }
-
-  // Insets de la galerie pour ne chevaucher ni la cart (haut-droit) ni le PIP posture (bas-droit).
-  double _galleryRightInset() {
-    final poseInset = _vm.showPosePip ? 16.0 + 135.0 : 16.0;
-    final mapInset = _showMap ? 16.0 + _mapSize + 12.0 : 16.0;
-    return math.max(poseInset, mapInset);
-  }
+  static const double _galleryHeight = 180;
+  static const double _galleryHudHeight = 84;  // Valeurs visibles sur plusieurs lignes
 
   @override
   void initState() {
@@ -81,10 +43,15 @@ class _RoomPageState extends State<RoomPage> {
     _vm = RoomViewModel();
     _vm.addListener(_onStateChanged);
 
+    PipService.initialize();
+    PipService.isInPip.addListener(_onStateChanged);
+    unawaited(PipService.enableAutoEnter());
+
     WidgetsBindingCompatible.instance?.addPostFrameCallback((_) async {
-      await _vm.init(widget.room, widget.listener, onDisconnected: () {
+      await _vm.init(widget.room, widget.listener,
+          role: widget.role, onDisconnected: () {
         if (mounted) {
-          context.pop(); // Returns to previous screen (Rooms or Home)
+          context.pop();
         }
       });
       if (mounted) setState(() {});
@@ -110,6 +77,8 @@ class _RoomPageState extends State<RoomPage> {
 
   @override
   void dispose() {
+    PipService.isInPip.removeListener(_onStateChanged);
+    unawaited(PipService.disableAutoEnter());
     _vm.removeListener(_onStateChanged);
     _vm.dispose();
     onWindowShouldClose = null;
@@ -120,89 +89,161 @@ class _RoomPageState extends State<RoomPage> {
   Widget build(BuildContext context) {
     final primaryTrack = _vm.primaryTrack;
     final secondaryTracks = _vm.secondaryTracks;
+    final inPip = PipService.isInPip.value;
 
     return Scaffold(
+      extendBody: true,
+      extendBodyBehindAppBar: true,
+      backgroundColor: LKColors.background,
       body: Stack(
         children: [
-          Column(
-            children: [
-              Expanded(
-                child: primaryTrack != null
-                    ? ParticipantWidget.widgetFor(
-                        primaryTrack,
-                        showStatsLayer: true,
-                      )
-                    : Container(),
-              ),
-              if (_vm.room?.localParticipant != null)
-                SafeArea(
-                  top: false,
-                  child: ControlsWidget(
-                    _vm.room!,
-                    _vm.room!.localParticipant!,
-                    bleService: _vm.bleService,
-                    sensorService: _vm.sensorService,
-                    controlsViewModel: _vm.controlsViewModel,
-                    onBleConnected: _vm.onBleConnected,
-                    onBleDisconnected: _vm.onBleDisconnected,
-                    showMap: _showMap,
-                    onToggleMap: () => setState(() => _showMap = !_showMap),
-                    showPosePip: _vm.showPosePip,
-                    onTogglePosePip: _vm.togglePosePip,
-                  ),
-                ),
-            ],
+          // ========================================================================
+          // FLUX VIDEO PRINCIPAL EN ARRIERE-PLAN (plein Ã©cran)
+          // ========================================================================
+          Positioned.fill(
+            child: Container(
+              color: LKColors.surface,
+              child: primaryTrack != null
+                  ? ParticipantWidget.widgetFor(
+                      primaryTrack,
+                      showStatsLayer: !inPip,
+                      infoAtTop: !inPip,
+                    )
+                  : _buildEmptyState('Aucun participant principal'),
+            ),
           ),
 
-          // ── Galerie des peers : fond transparent, superpos�e au flux vid�o principal ──
-          if (secondaryTracks.isNotEmpty)
+          // ========================================================================
+          // OVERLAY BAS : autres users -> contr��les
+          // ========================================================================
+          if (!inPip)
             Positioned(
-              left: 12,
-              right: _galleryRightInset(),
-              bottom: 160,
-              child: SizedBox(
-                height: _galleryHeight,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  itemCount: secondaryTracks.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 10),
-                  itemBuilder: (BuildContext context, int index) => SizedBox(
-                    width: 140,
-                    height: _galleryHeight,
-                    child: ParticipantWidget.widgetFor(
-                      secondaryTracks[index],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-          // ── Mini-map (coin sup�rieur droit) + toggle tuiles ──
-          if (_showMap)
-            Positioned(
-              top: 30,
-              right: 16,
-              child: SizedBox(
-                width: _mapSize,
-                height: _mapSize,
-                child: Stack(
-                  children: [
-                    ParticipantsMapWidget(
-                      participants: _mapEntries(),
-                      tileSource: _tileSource,
-                    ),
-                    TileSourceToggle(
-                      current: _tileSource,
-                      onToggle: () => setState(
-                        () => _tileSource = _tileSource.next,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ===========================================================
+                // GALERIE DES PARTICIPANTS SECONDAIRES (scrollable horizontalement)
+                // ===========================================================
+                if (secondaryTracks.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: UIUtils.sm),
+                    child: SizedBox(
+                      height: _galleryHeight + _galleryHudHeight,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        padding: EdgeInsets.symmetric(horizontal: UIUtils.md),
+                        itemCount: secondaryTracks.length,
+                        separatorBuilder: (_, _) => SizedBox(width: UIUtils.sm),
+                        itemBuilder: (BuildContext context, int index) {
+                          final track = secondaryTracks[index];
+                          final hasHud =
+                              track.telemetry != null ;
+                          return SizedBox(
+                            width: _galleryHeight,
+                            height: _galleryHeight + _galleryHudHeight,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // HUD de télémétrie au-dessus de la tuile
+                                SizedBox(
+                                  height: _galleryHudHeight,
+                                  child: hasHud
+                                      ? DataHud(
+                                          telemetry: track.telemetry,
+                                          //posture: track.posture,
+                                          //showPosture: track.showPosture,
+                                        )
+                                      : const SizedBox.shrink(),
+                                ),
+                                // Tuile vidéo du participant (HUD interne désactivé)
+                                SizedBox(
+                                  width: _galleryHeight,
+                                  height: _galleryHeight,
+                                  child: ParticipantWidget.widgetFor(
+                                    track,
+                                    showDataHud: false,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
                     ),
-                  ],
+                  ),
+
+                // ===========================================================
+                // CONTROLES = LIMITE BASSE DU WIDGET
+                // ===========================================================
+                if (_vm.room?.localParticipant != null)
+                  SafeArea(
+                    top: false,
+                    child: ControlsWidget(
+                        _vm.room!,
+                        _vm.room!.localParticipant!,
+                        bleService: _vm.bleService,
+                        sensorService: _vm.sensorService,
+                        controlsViewModel: _vm.controlsViewModel,
+                        onBleConnected: _vm.onBleConnected,
+                        onBleDisconnected: _vm.onBleDisconnected,
+                      ),
+                    ),
+            ],
+            ),
+          ),
+
+          // ========================================================================
+          // INDICATEUR DE CHARGEMENT (si necessaire)
+          // ========================================================================
+          if (!inPip && _vm.room?.connectionState != ConnectionState.connected)
+            Positioned.fill(
+              child: Container(
+                color: LKColors.background.withValues(alpha: 0.8),
+                child: const Center(
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(LKColors.primary),
+                  ),
                 ),
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// Construit un Ã©tat vide avec un message
+  Widget _buildEmptyState(String message) {
+    return Container(
+      color: LKColors.surface,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.videocam_off_rounded,
+              size: 64,
+              color: LKColors.textSecondary,
+            ),
+             SizedBox(height: UIUtils.md),
+            Text(
+              message,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: LKColors.textSecondary,
+              ),
+            ),
+            SizedBox(height: UIUtils.sm),
+            Text(
+              'En attente des participants...',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: LKColors.textHint,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

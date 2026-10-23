@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import 'data/user_role.dart';
 import 'presentation/screens/connect.dart';
 import 'presentation/screens/home_screen.dart';
 import 'presentation/screens/login_screen.dart';
@@ -49,8 +50,8 @@ final goRouter = GoRouter(
       path: '/room',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (context, state) {
-        final args = state.extra as (Room, EventsListener<RoomEvent>);
-        return RoomPage(args.$1, args.$2, fastConnection: true);
+        final args = state.extra as (Room, EventsListener<RoomEvent>, UserRole);
+        return RoomPage(args.$1, args.$2, role: args.$3, fastConnection: true);
       },
     ),
   ],

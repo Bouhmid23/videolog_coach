@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../exts.dart';
 import '../../theme.dart';
+import '../utils/ui_utils.dart';
 
 class JoinArgs {
   JoinArgs({
@@ -17,10 +17,10 @@ class JoinArgs {
     required this.username,
     this.e2ee = false,
     this.e2eeKey,
-    this.simulcast = true,
+    this.simulcast = false,
     this.adaptiveStream = true,
     this.dynacast = true,
-    this.preferredCodec = 'VP8',
+    this.preferredCodec = 'H264',
     this.enableBackupVideoCodec = true,
   });
   final String url;
@@ -48,6 +48,15 @@ class PreJoinPage extends StatefulWidget {
 class _PreJoinPageState extends State<PreJoinPage> {
   static const _prefKeyEnableVideo = 'prejoin-enable-video';
   static const _prefKeyEnableAudio = 'prejoin-enable-audio';
+  static const _prefKeyCameraPosition = 'prejoin-camera-position';
+  static const _prefKeyVideoResolution = 'prejoin-video-resolution';
+
+  static final List<VideoParameters> _videoResolutionOptions = [
+    VideoParametersPresets.h480_43,
+    VideoParametersPresets.h540_169,
+    VideoParametersPresets.h720_169,
+    VideoParametersPresets.h1080_169,
+  ];
 
   List<MediaDevice> _audioInputs = [];
   List<MediaDevice> _videoInputs = [];
@@ -59,9 +68,12 @@ class _PreJoinPageState extends State<PreJoinPage> {
   LocalAudioTrack? _audioTrack;
   LocalVideoTrack? _videoTrack;
 
-  MediaDevice? _selectedVideoDevice;
+  CameraPosition _cameraPosition = CameraPosition.front;
   MediaDevice? _selectedAudioDevice;
-  VideoParameters _selectedVideoParameters = VideoParametersPresets.h720_169;
+  VideoParameters _videoParameters = VideoParametersPresets.h480_43;
+
+  static String _resolutionKey(VideoParameters parameters) =>
+      '${parameters.dimensions.width}x${parameters.dimensions.height}';
 
   @override
   void initState() {
@@ -93,9 +105,6 @@ class _PreJoinPageState extends State<PreJoinPage> {
       await _audioTrack?.stop();
       _audioTrack = null;
     }
-    if (_selectedVideoDevice != null && !_videoInputs.contains(_selectedVideoDevice)) {
-      _selectedVideoDevice = null;
-    }
     if (_videoInputs.isEmpty) {
       await _videoTrack?.stop();
       _videoTrack = null;
@@ -112,15 +121,12 @@ class _PreJoinPageState extends State<PreJoinPage> {
       }
     }
 
-    if (_enableVideo && _videoInputs.isNotEmpty) {
-      if (_selectedVideoDevice == null) {
-        _selectedVideoDevice = _videoInputs.first;
-        Future.delayed(const Duration(milliseconds: 100), () async {
-          if (!mounted) return;
-          await _changeLocalVideoTrack();
-          if (mounted) setState(() {});
-        });
-      }
+    if (_enableVideo && _videoInputs.isNotEmpty && _videoTrack == null) {
+      Future.delayed(const Duration(milliseconds: 100), () async {
+        if (!mounted) return;
+        await _changeLocalVideoTrack();
+        if (mounted) setState(() {});
+      });
     }
     if (mounted) setState(() {});
   }
@@ -131,11 +137,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
     if (!_enableVideo) {
       await _videoTrack?.stop();
       _videoTrack = null;
-      _selectedVideoDevice = null;
     } else {
-      if (_selectedVideoDevice == null && _videoInputs.isNotEmpty) {
-        _selectedVideoDevice = _videoInputs.first;
-      }
       await _changeLocalVideoTrack();
     }
     setState(() {});
@@ -181,13 +183,11 @@ class _PreJoinPageState extends State<PreJoinPage> {
       _videoTrack = null;
     }
 
-    if (_selectedVideoDevice != null) {
-      _videoTrack = await LocalVideoTrack.createCameraTrack(CameraCaptureOptions(
-        deviceId: _selectedVideoDevice!.deviceId,
-        params: _selectedVideoParameters,
-      ));
-      await _videoTrack!.start();
-    }
+    _videoTrack = await LocalVideoTrack.createCameraTrack(CameraCaptureOptions(
+      cameraPosition: _cameraPosition,
+      params: _videoParameters,
+    ));
+    await _videoTrack!.start();
   }
 
   @override
@@ -198,15 +198,13 @@ class _PreJoinPageState extends State<PreJoinPage> {
 
   Future<void> _join(BuildContext context) async {
     _busy = true;
-
     setState(() {});
 
     final args = widget.args;
 
     try {
-      //create new room
       const cameraEncoding = VideoEncoding(
-        maxBitrate: 5 * 1000 * 1000,
+        maxBitrate: 2 * 1000 * 1000,
         maxFramerate: 30,
       );
 
@@ -232,7 +230,7 @@ class _PreJoinPageState extends State<PreJoinPage> {
           defaultCameraCaptureOptions: const CameraCaptureOptions(
               maxFrameRate: 30,
               params: VideoParameters(
-                dimensions: VideoDimensions(1280, 720),
+                dimensions: VideoDimensions(640, 480),
               )),
           defaultScreenShareCaptureOptions: const ScreenShareCaptureOptions(
               useiOSBroadcastExtension: true,
@@ -251,14 +249,11 @@ class _PreJoinPageState extends State<PreJoinPage> {
           encryption: e2eeOptions,
         ),
       );
-      // Create a Listener before connecting
+
       final listener = room.createListener();
 
       await room.prepareConnection(args.url, args.token);
-      //final token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzI3MTY1NjQsImlkZW50aXR5IjoidGVzdC11c2VyIiwiaXNzIjoiZGV2a2V5IiwibmFtZSI6InRlc3QtdXNlciIsIm5iZiI6MTc3MjcxNjI2NCwic3ViIjoidGVzdC11c2VyIiwidmlkZW8iOnsicm9vbSI6InRlc3Ryb29tIiwicm9vbUpvaW4iOnRydWV9fQ.56DANoM5Qa4QR1B_U2C2De4s6jsRulSgzJL1EfKZ9jc";
 
-      // Try to connect to the room
-      // This will throw an Exception if it fails for any reason.
       await room.connect(
         args.url,
         args.token,
@@ -296,6 +291,16 @@ class _PreJoinPageState extends State<PreJoinPage> {
     setState(() {
       _enableVideo = prefs.getBool(_prefKeyEnableVideo) ?? true;
       _enableAudio = prefs.getBool(_prefKeyEnableAudio) ?? true;
+      final positionName = prefs.getString(_prefKeyCameraPosition);
+      _cameraPosition = CameraPosition.values.firstWhere(
+        (position) => position.name == positionName,
+        orElse: () => CameraPosition.front,
+      );
+      final resolutionKey = prefs.getString(_prefKeyVideoResolution);
+      _videoParameters = _videoResolutionOptions.firstWhere(
+        (parameters) => _resolutionKey(parameters) == resolutionKey,
+        orElse: () => VideoParametersPresets.h720_169,
+      );
     });
   }
 
@@ -303,231 +308,415 @@ class _PreJoinPageState extends State<PreJoinPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefKeyEnableVideo, _enableVideo);
     await prefs.setBool(_prefKeyEnableAudio, _enableAudio);
+    await prefs.setString(_prefKeyCameraPosition, _cameraPosition.name);
+    await prefs.setString(
+      _prefKeyVideoResolution,
+      _resolutionKey(_videoParameters),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        appBar: AppBar(
-          title: const Text(
-            'Select Devices',
-            style: TextStyle(
-              color: Colors.white,
+      backgroundColor: LKColors.background,
+      appBar: AppBar(
+        backgroundColor: LKColors.surfaceElevated,
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: LKColors.textPrimary,
+        title: Text('Configurer les appareils', style: UIUtils.titleMedium(context)),
+        leading: IconButton(
+          icon: UIUtils.textPrimaryIcon(Icons.arrow_back_rounded),
+          onPressed: () => _actionBack(context),
+        ),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        centerTitle: true,
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          padding: UIUtils.paddingLG,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                // Video Preview
+                Card(
+                  color: LKColors.surface,
+                  surfaceTintColor: Colors.transparent,
+                  elevation: 0,
+                  margin: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: UIUtils.borderRadiusAllLG,
+                    side: BorderSide(color: LKColors.border, width: 0.5),
+                  ),
+                  child: Container(
+                    height: 240,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: LKColors.background,
+                      borderRadius: UIUtils.borderRadiusAllLG,
+                    ),
+                    child: _videoTrack != null
+                        ? ClipRRect(
+                            borderRadius: UIUtils.borderRadiusAllLG,
+                            child: VideoTrackRenderer(
+                              renderMode: VideoRenderMode.auto,
+                              _videoTrack!,
+                            ),
+                          )
+                        : AnimatedOpacity(
+                            opacity: _enableVideo ? 1.0 : 0.5,
+                            duration: UIUtils.animationDuration,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.videocam_off_rounded,
+                                  color: LKColors.textHint,
+                                  size: 60,
+                                ),
+                                SizedBox(height: UIUtils.sm),
+                                Text(
+                                  'Caméra désactivée',
+                                  style: UIUtils.bodySmall(context).copyWith(
+                                        color: LKColors.textHint,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
+                ),
+                SizedBox(height: UIUtils.lg),
+                
+                // Camera Section
+                _buildToggleSection(
+                  icon: Icons.videocam_rounded,
+                  title: 'Caméra',
+                  value: _enableVideo,
+                  onChanged: _setEnableVideo,
+                  disabled: _videoInputs.isEmpty,
+                ),
+                SizedBox(height: UIUtils.sm),
+                
+                if (_enableVideo && _videoInputs.isNotEmpty) ...[
+                  _buildCameraPositionSelector(context),
+                  SizedBox(height: UIUtils.sm),
+                  _buildVideoResolutionSelector(context),
+                ],
+                SizedBox(height: UIUtils.lg),
+                
+                // Microphone Section
+                _buildToggleSection(
+                  icon: Icons.mic_rounded,
+                  title: 'Microphone',
+                  value: _enableAudio,
+                  onChanged: _setEnableAudio,
+                  disabled: _audioInputs.isEmpty,
+                ),
+                SizedBox(height: UIUtils.sm),
+                
+                if (_enableAudio && _audioInputs.isNotEmpty)
+                  _buildDropdown<MediaDevice>(
+                    label: 'Sélectionner le microphone',
+                    items: _audioInputs,
+                    value: _selectedAudioDevice,
+                    onChanged: (MediaDevice? value) async {
+                      if (value != null) {
+                        _selectedAudioDevice = value;
+                        await _changeLocalAudioTrack();
+                        setState(() {});
+                      }
+                    },
+                    itemBuilder: (d) => Text(d.label, style: UIUtils.bodySmall(context)),
+                  ),
+                SizedBox(height: UIUtils.xxl),
+                
+                // Join Button
+                FilledButton(
+                  onPressed: _busy ? null : () async => await _join(context),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: LKColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: UIUtils.paddingVerticalLG.add(UIUtils.paddingHorizontalXXL),
+                    shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
+                    elevation: 0,
+                    shadowColor: Colors.transparent,
+                  ),
+                  child: _busy
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            ),
+                            SizedBox(width: UIUtils.sm),
+                            Text('REJOINDRE', style: UIUtils.labelLarge(context).copyWith(color: Colors.white)),
+                          ],
+                        )
+                      : Text('REJOINDRE', style: UIUtils.labelLarge(context).copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
+                ),
+              ],
             ),
           ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () => _actionBack(context),
+        ),
+      ),
+      ),
+      ),
+    );
+  }
+
+  Widget _buildCameraPositionSelector(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.cameraswitch_rounded,
+                color: LKColors.textPrimary,
+                size: 20,
+              ),
+              SizedBox(width: UIUtils.sm),
+              Text(
+                'Orientation de la caméra',
+                style: UIUtils.labelMedium(context).copyWith(
+                  color: LKColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: UIUtils.sm),
+          SegmentedButton<CameraPosition>(
+            segments: [
+              ButtonSegment<CameraPosition>(
+                value: CameraPosition.front,
+                label: Text('Frontale', style: UIUtils.bodySmall(context)),
+                icon: const Icon(Icons.camera_front_rounded, size: 18),
+              ),
+              ButtonSegment<CameraPosition>(
+                value: CameraPosition.back,
+                label: Text('Dorsale', style: UIUtils.bodySmall(context)),
+                icon: const Icon(Icons.camera_rear_rounded, size: 18),
+              ),
+            ],
+            selected: {_cameraPosition},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) async {
+              _cameraPosition = selection.first;
+              await _writePrefs();
+              await _changeLocalVideoTrack();
+              if (mounted) setState(() {});
+            },
+            style: SegmentedButton.styleFrom(
+              backgroundColor: LKColors.surface,
+              foregroundColor: LKColors.textPrimary,
+              selectedBackgroundColor: LKColors.primary,
+              selectedForegroundColor: Colors.white,
+              padding: UIUtils.paddingVerticalSM.add(
+                UIUtils.paddingHorizontalSM,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: UIUtils.borderRadiusAllSM,
+              ),
+              side: BorderSide(color: LKColors.border, width: 0.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVideoResolutionSelector(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.high_quality_rounded,
+                color: LKColors.textPrimary,
+                size: 20,
+              ),
+              SizedBox(width: UIUtils.sm),
+              Text(
+                'Résolution vidéo',
+                style: UIUtils.labelMedium(context).copyWith(
+                  color: LKColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: UIUtils.sm),
+          DropdownButtonHideUnderline(
+            child: DropdownButton2<VideoParameters>(
+              isExpanded: true,
+              value: _videoParameters,
+              items: _videoResolutionOptions
+                  .map(
+                    (parameters) => DropdownMenuItem<VideoParameters>(
+                      value: parameters,
+                      child: Text(
+                        '${parameters.dimensions.width} x ${parameters.dimensions.height}',
+                        style: UIUtils.bodySmall(context),
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) async {
+                if (value == null || value == _videoParameters) return;
+                _videoParameters = value;
+                await _writePrefs();
+                await _changeLocalVideoTrack();
+                if (mounted) setState(() {});
+              },
+              buttonStyleData: ButtonStyleData(
+                padding: UIUtils.paddingHorizontalMD,
+                height: 44,
+                decoration: BoxDecoration(
+                  borderRadius: UIUtils.borderRadiusAllSM,
+                ),
+              ),
+              menuItemStyleData: MenuItemStyleData(
+                height: 44,
+                padding: UIUtils.paddingHorizontalMD,
+              ),
+              dropdownStyleData: DropdownStyleData(
+                maxHeight: 200,
+                decoration: BoxDecoration(
+                  color: LKColors.surfaceElevated,
+                  borderRadius: UIUtils.borderRadiusAllMD,
+                  border: Border.all(color: LKColors.border, width: 0.5),
+                ),
+                elevation: 8,
+                offset: const Offset(0, 4),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToggleSection({
+    required IconData icon,
+    required String title,
+    required bool value,
+    required Future<void> Function(bool) onChanged,
+    bool disabled = false,
+  }) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: disabled ? LKColors.textHint : LKColors.textPrimary, size: 20),
+          SizedBox(width: UIUtils.sm),
+          Expanded(
+            child: Text(
+              title,
+              style: UIUtils.labelMedium(context).copyWith(
+                    color: disabled ? LKColors.textHint : LKColors.textPrimary,
+                  ),
+            ),
+          ),
+          Switch(
+            value: value,
+            onChanged: disabled ? null : onChanged,
+            activeThumbColor: LKColors.textHint,
+            activeTrackColor:LKColors.border,
+            inactiveThumbColor: LKColors.textHint,
+            inactiveTrackColor: LKColors.border,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDropdown<T>({
+    required String label,
+    required List<T> items,
+    required T? value,
+    required void Function(T?) onChanged,
+    required Widget Function(T) itemBuilder,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton2<T>(
+          isExpanded: true,
+          hint: Padding(
+            padding: UIUtils.paddingHorizontalMD,
+            child: Text(
+              label,
+              style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint),
+            ),
+          ),
+          items: items.map((item) => DropdownMenuItem<T>(
+            value: item,
+            child: Padding(
+              padding: UIUtils.paddingHorizontalMD,
+              child: itemBuilder(item),
+            ),
+          )).toList(),
+          value: value,
+          onChanged: onChanged,
+          buttonStyleData: ButtonStyleData(
+            padding: UIUtils.paddingHorizontalMD,
+            height: 44,
+            decoration: BoxDecoration(
+              borderRadius: UIUtils.borderRadiusAllSM,
+            ),
+          ),
+          menuItemStyleData: MenuItemStyleData(
+            height: 44,
+            padding: UIUtils.paddingHorizontalMD,
+          ),
+          dropdownStyleData: DropdownStyleData(
+            maxHeight: 200,
+            decoration: BoxDecoration(
+              color: LKColors.surfaceElevated,
+              borderRadius: UIUtils.borderRadiusAllMD,
+              border: Border.all(color: LKColors.border, width: 0.5),
+            ),
+            elevation: 8,
+            offset: const Offset(0, 4),
           ),
         ),
-        body: Container(
-            alignment: Alignment.center,
-            child: SingleChildScrollView(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 20,
-                  ),
-                  constraints: const BoxConstraints(maxWidth: 400),
-                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: SizedBox(
-                            width: 320,
-                            height: 240,
-                            child: Container(
-                              alignment: Alignment.center,
-                              color: Colors.black54,
-                              child: _videoTrack != null
-                                  ? VideoTrackRenderer(
-                                renderMode: VideoRenderMode.auto,
-                                _videoTrack!,
-                              )
-                                  : Container(
-                                alignment: Alignment.center,
-                                child: LayoutBuilder(
-                                  builder: (ctx, constraints) => Icon(
-                                    Icons.videocam_off,
-                                    color: LKColors.lkBlue,
-                                    size: math.min(constraints.maxHeight, constraints.maxWidth) * 0.3,
-                                  ),
-                                ),
-                              ),
-                            ))),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 5),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Camera:'),
-                          Switch(
-                            value: _enableVideo,
-                            onChanged: (value) => _setEnableVideo(value),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 25),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton2<MediaDevice>(
-                          isExpanded: true,
-                          disabledHint: const Text('Disable Camera'),
-                          hint: const Text(
-                            'Select Camera',
-                          ),
-                          items: _enableVideo
-                              ? _videoInputs
-                              .map((MediaDevice item) => DropdownMenuItem<MediaDevice>(
-                            value: item,
-                            child: Text(
-                              item.label,
-                              style: const TextStyle(
-                                fontSize: 14,
-                              ),
-                            ),
-                          ))
-                              .toList()
-                              : [],
-                          value: _selectedVideoDevice,
-                          onChanged: (MediaDevice? value) async {
-                            if (value != null) {
-                              _selectedVideoDevice = value;
-                              await _changeLocalVideoTrack();
-                              setState(() {});
-                            }
-                          },
-                          buttonStyleData: const ButtonStyleData(
-                            padding: EdgeInsets.symmetric(horizontal: 16),
-                            height: 40,
-                            width: 140,
-                          ),
-                          menuItemStyleData: const MenuItemStyleData(
-                            height: 40,
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (_enableVideo)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 25),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton2<VideoParameters>(
-                            isExpanded: true,
-                            hint: const Text(
-                              'Select Video Dimensions',
-                            ),
-                            items: [
-                              VideoParametersPresets.h480_43,
-                              VideoParametersPresets.h540_169,
-                              VideoParametersPresets.h720_169,
-                              VideoParametersPresets.h1080_169,
-                            ]
-                                .map((VideoParameters item) => DropdownMenuItem<VideoParameters>(
-                              value: item,
-                              child: Text(
-                                '${item.dimensions.width}x${item.dimensions.height}',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ))
-                                .toList(),
-                            value: _selectedVideoParameters,
-                            onChanged: (VideoParameters? value) async {
-                              if (value != null) {
-                                _selectedVideoParameters = value;
-                                await _changeLocalVideoTrack();
-                                setState(() {});
-                              }
-                            },
-                            buttonStyleData: const ButtonStyleData(
-                              padding: EdgeInsets.symmetric(horizontal: 16),
-                              height: 40,
-                              width: 140,
-                            ),
-                            menuItemStyleData: const MenuItemStyleData(
-                              height: 40,
-                            ),
-                          ),
-                        ),
-                      ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 5),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Microphone:'),
-                          Switch(
-                            value: _enableAudio,
-                            onChanged: (value) => _setEnableAudio(value),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 25),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton2<MediaDevice>(
-                          isExpanded: true,
-                          disabledHint: const Text('Disable Microphone'),
-                          hint: const Text(
-                            'Select Microphone',
-                          ),
-                          items: _enableAudio
-                              ? _audioInputs
-                              .map((MediaDevice item) => DropdownMenuItem<MediaDevice>(
-                            value: item,
-                            child: Text(
-                              item.label,
-                              style: const TextStyle(
-                                fontSize: 14,
-                              ),
-                            ),
-                          ))
-                              .toList()
-                              : [],
-                          value: _selectedAudioDevice,
-                          onChanged: (MediaDevice? value) async {
-                            if (value != null) {
-                              _selectedAudioDevice = value;
-                              await _changeLocalAudioTrack();
-                              setState(() {});
-                            }
-                          },
-                          buttonStyleData: const ButtonStyleData(
-                            padding: EdgeInsets.symmetric(horizontal: 16),
-                            height: 40,
-                            width: 140,
-                          ),
-                          menuItemStyleData: const MenuItemStyleData(
-                            height: 40,
-                          ),
-                        ),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: _busy ? null : () async => await _join(context),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_busy)
-                            const Padding(
-                              padding: EdgeInsets.only(right: 10),
-                              child: SizedBox(
-                                height: 15,
-                                width: 15,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            ),
-                          const Text('JOIN'),
-                        ],
-                      ),
-                    ),
-                  ]),
-                ))));
+      ),
+    );
   }
 }

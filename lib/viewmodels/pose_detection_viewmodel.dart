@@ -1,139 +1,457 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb, debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
 
-import '../core/posture_detection_service.dart';
+import '../data/posture_codec.dart';
 import '../data/remote_posture.dart';
 
-class LocalPoseAnalysis {
-  const LocalPoseAnalysis({
-    required this.pose,
-    required this.frameSize,
-    required this.posture,
-  });
+/// Octets d'une frame et instant où elle a été capturée. Le timestamp reste
+/// attaché à l'image : la capture N+1 tourne pendant la détection N.
+class _CapturedFrame {
+  const _CapturedFrame(this.bytes, this.capturedAt);
 
-  final Pose pose;
-  final Size frameSize;
-  final RemotePosture? posture;
+  final Uint8List bytes;
+  final DateTime capturedAt;
 }
 
+/// Capture la caméra locale, détecte la pose (NPU) et publie le squelette
+/// en binaire sur le topic `posture`. Aucun rendu côté mobile.
+///
+/// Choix pour le temps réel :
+///  - pipeline à 2 étages : la capture N+1 démarre pendant la détection N ;
+///  - aucune limitation de cadence ni delta encoding (≈3 Ko/s à 30 fps) ;
+///  - canal lossy, `publishData` non attendu ;
+///  - taille de frame lue dans l'en-tête PNG (pas de décodage d'image) ;
+///  - paquet « pose perdue » pour que le web efface le squelette.
 class PoseDetectionViewModel extends ChangeNotifier {
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
     config: PoseDetectorConfig.realtime(),
   );
-  final PostureSmoothing _postureSmoothing = PostureSmoothing(alpha: 0.35);
 
-  Timer? _poseTimer;
-  bool _busy = false;
-  Pose? _currentPose;
-  Size? _currentFrameSize;
+  /// Nombre de frames consécutives requises pour changer de label.
+  static const int _labelHoldFrames = 3;
+  static const Size _fallbackSize = Size(480, 640);
+
+  bool _running = false;
   Room? _room;
+  List<String>? _destinationIdentities;
+  int _seq = 0;
 
-  Pose? get currentPose => _currentPose;
-  Size? get currentFrameSize => _currentFrameSize;
-  bool get isBusy => _busy;
+  Size? _lastSize;
+  bool _hadPose = false;
+  DateTime _lastLostSent = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Mesures (moyennes et débits calculés sur une fenêtre d'une seconde).
+  int _captureMicros = 0;
+  int _captureSamples = 0;
+  int _detectMicros = 0;
+  int _detectSamples = 0;
+  int _publishMicros = 0;
+  int _publishSamples = 0;
+  int _publishedSinceStats = 0;
+  int _seqAtLastStats = 0;
+  DateTime _statsWindowStart = DateTime.now();
+
+  // Stabilisation du label (hystérésis)
+  String? _stableLabel;
+  String? _candidateLabel;
+  int _candidateCount = 0;
+
+  RemotePosture? _currentPosture;
+
+  RemotePosture? get currentPosture => _currentPosture;
+  bool get isBusy => _running;
 
   Future<void> init() async {
-    await _poseDetector.initialize();
+    final acceleration = await _poseDetector.initialize();
+    final config = _poseDetector.config;
+    debugPrint('🧠 Pose detector ready: acceleration=${acceleration.name} '
+        'mode=${config.mode.name} maxPoses=${config.maxPoses} '
+        'zEstimation=${config.enableZEstimation}');
   }
 
-  void start(Room room) {
+  /// [destinationIdentities] : si seul le viewer web consomme le squelette,
+  /// renseigne son identité pour éviter le fan-out vers les autres participants.
+  void start(Room room, {List<String>? destinationIdentities}) {
     _room = room;
-    _poseTimer ??= Timer.periodic(
-      const Duration(milliseconds: 100),
-      (_) => unawaited(_detectPoseTick()),
-    );
-    debugPrint('🏃 Pose detection started (10 Hz)');
+    setDestinationIdentities(destinationIdentities);
+    if (_running) return;
+    _running = true;
+    _statsWindowStart = DateTime.now();
+    _seqAtLastStats = _seq;
+    unawaited(_poseLoop());
+    debugPrint('🏃 Pose detection started (temps réel)');
+  }
+
+  /// Met à jour les destinataires sans redémarrer la boucle. Une liste vide
+  /// (aucun viewer connu) revient au comportement par défaut : tous les
+  /// participants, car LiveKit traite une liste vide comme un broadcast.
+  void setDestinationIdentities(List<String>? identities) {
+    _destinationIdentities = (identities == null || identities.isEmpty)
+        ? null
+        : List<String>.unmodifiable(identities);
   }
 
   void stop() {
-    _poseTimer?.cancel();
-    _poseTimer = null;
-    _busy = false;
-    _currentPose = null;
-    _currentFrameSize = null;
+    if (_running && _hadPose) _publishLost(DateTime.now());
+    _running = false;
+    _hadPose = false;
+    _lastSize = null;
+    _stableLabel = null;
+    _candidateLabel = null;
+    _candidateCount = 0;
+    _currentPosture = null;
   }
 
-  Future<void> _detectPoseTick() async {
-    if (_busy || kIsWeb) return;
+  // ---------------------------------------------------------------------------
+  // Boucle capture -> détection -> publication
+  // ---------------------------------------------------------------------------
 
-    final room = _room;
-    final localParticipant = room?.localParticipant;
-    if (localParticipant == null) return;
+  Future<void> _poseLoop() async {
+    if (kIsWeb) return;
+    Future<_CapturedFrame?>? next;
 
-    LocalVideoTrack? cameraTrack;
-    for (final publication in localParticipant.videoTrackPublications) {
+    while (_running) {
+      final track = _cameraTrack();
+      if (track == null) {
+        next = null;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        continue;
+      }
+
+      // La frame courante a été capturée pendant la détection précédente ;
+      // son timestamp de capture voyage avec ses octets.
+      final frame = await (next ?? _capture(track));
+      // Lance déjà la capture suivante, en parallèle de la détection.
+      next = _running ? _capture(track) : null;
+
+      if (frame == null) {
+        _onLost(DateTime.now());
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+
+      final detectWatch = Stopwatch()..start();
+      try {
+        final result = await _poseDetector.detectPose(frame.bytes);
+        detectWatch.stop();
+        _detectMicros += detectWatch.elapsedMicroseconds;
+        _detectSamples++;
+
+        if (!result.hasPoses) {
+          _onLost(frame.capturedAt);
+        } else {
+          final size = await _frameSize(frame.bytes);
+          if (kDebugMode) _debugLog(frame.bytes, result.firstPose!, size);
+          _lastSize = size;
+          final pose = result.firstPose!;
+          final posture = _stabilizedPosture(classifyPosture(pose));
+          _hadPose = true;
+          _publish(pose, posture, size, capturedAt: frame.capturedAt);
+        }
+      } catch (error) {
+        if (detectWatch.isRunning) {
+          detectWatch.stop();
+          _detectMicros += detectWatch.elapsedMicroseconds;
+          _detectSamples++;
+        }
+        debugPrint('⚠️ Pose detection error: $error');
+      }
+
+      _logStats();
+
+      // Rend la main à la boucle d'événements.
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
+  /// Moyennes capture/détection/publication et débits sur la dernière seconde.
+  /// `publishData/s` doit être égal au débit de `seq`.
+  void _logStats() {
+    final now = DateTime.now();
+    final elapsed = now.difference(_statsWindowStart);
+    if (elapsed < const Duration(seconds: 1)) return;
+
+    final seconds = elapsed.inMicroseconds / 1000000.0;
+    double averageMs(int micros, int samples) =>
+        samples == 0 ? 0 : micros / samples / 1000.0;
+
+    debugPrint(
+      '📊 pose ${seconds.toStringAsFixed(2)}s '
+      'capture=${averageMs(_captureMicros, _captureSamples).toStringAsFixed(1)}ms '
+      'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
+      'publish=${averageMs(_publishMicros, _publishSamples).toStringAsFixed(1)}ms '
+      'capture=${(_captureSamples / seconds).toStringAsFixed(1)}fps '
+      'publishData=${(_publishedSinceStats / seconds).toStringAsFixed(1)}/s '
+      'seq=${((_seq - _seqAtLastStats) / seconds).toStringAsFixed(1)}/s',
+    );
+
+    _captureMicros = 0;
+    _captureSamples = 0;
+    _detectMicros = 0;
+    _detectSamples = 0;
+    _publishMicros = 0;
+    _publishSamples = 0;
+    _publishedSinceStats = 0;
+    _seqAtLastStats = _seq;
+    _statsWindowStart = now;
+  }
+
+  LocalVideoTrack? _cameraTrack() {
+    final participant = _room?.localParticipant;
+    if (participant == null) return null;
+    for (final publication in participant.videoTrackPublications) {
       final track = publication.track;
-      if (track != null && track.source == TrackSource.camera) {
-        cameraTrack = track;
-        break;
-      }
+      if (track != null && track.source == TrackSource.camera) return track;
     }
-    if (cameraTrack == null) return;
-
-    _busy = true;
-    try {
-      final analysis = await _detectPoseFromTrack(cameraTrack);
-      if (analysis == null) {
-        _currentPose = null;
-        _currentFrameSize = null;
-        notifyListeners();
-        return;
-      }
-
-      _currentPose = _postureSmoothing.smooth(analysis.pose);
-      _currentFrameSize = analysis.frameSize;
-      notifyListeners();
-    } catch (error) {
-      debugPrint('⚠️ Pose detection error: $error');
-    } finally {
-      _busy = false;
-    }
+    return null;
   }
 
-  Future<LocalPoseAnalysis?> _detectPoseFromTrack(
-    LocalVideoTrack track,
-  ) async {
+  Future<_CapturedFrame?> _capture(LocalVideoTrack track) async {
+    final watch = Stopwatch()..start();
+    // Horodatage AVANT la capture : c'est l'instant où l'image est prise, pas
+    // celui où l'inférence se termine ni celui de la publication.
+    final capturedAt = DateTime.now();
     try {
       final buffer = await track.mediaStreamTrack.captureFrame();
-      final bytes = Uint8List.view(buffer);
-
-      final result = await _poseDetector.detectPose(bytes);
-      if (!result.hasPoses) return null;
-
-      final codec = await ui.instantiateImageCodec(bytes);
-      try {
-        final frameInfo = await codec.getNextFrame();
-        final frameSize = Size(
-          frameInfo.image.width.toDouble(),
-          frameInfo.image.height.toDouble(),
-        );
-        frameInfo.image.dispose();
-
-        final pose = result.firstPose!;
-        return LocalPoseAnalysis(
-          pose: pose,
-          frameSize: frameSize,
-          posture: classifyPosture(pose),
-        );
-      } finally {
-        codec.dispose();
-      }
+      return _CapturedFrame(Uint8List.view(buffer), capturedAt);
     } catch (error) {
-      debugPrint('⚠️ Pose capture/detect failed: $error');
+      debugPrint('⚠️ Pose capture failed: $error');
+      return null;
+    } finally {
+      watch.stop();
+      _captureMicros += watch.elapsedMicroseconds;
+      _captureSamples++;
+    }
+  }
+
+  DateTime _sizeCheckedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastDebug = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Taille de la frame capturée : en-tête PNG/JPEG (gratuit) ; sinon décodage
+  /// de l'image, mis en cache et revérifié toutes les 3 s (rotation).
+  /// Une taille fausse fausse toute la normalisation des landmarks.
+  Future<Size> _frameSize(Uint8List bytes) async {
+    final header = _pngSize(bytes) ?? _jpegSize(bytes);
+    if (header != null) {
+      _lastSize = header;
+      return header;
+    }
+    final now = DateTime.now();
+    if (_lastSize == null ||
+        now.difference(_sizeCheckedAt) > const Duration(seconds: 3)) {
+      _sizeCheckedAt = now;
+      try {
+        final codec = await ui.instantiateImageCodec(bytes);
+        try {
+          final frame = await codec.getNextFrame();
+          _lastSize = Size(
+            frame.image.width.toDouble(),
+            frame.image.height.toDouble(),
+          );
+          frame.image.dispose();
+        } finally {
+          codec.dispose();
+        }
+      } catch (error) {
+        debugPrint('⚠️ Frame size decode failed: $error');
+      }
+    }
+    return _lastSize ?? _fallbackSize;
+  }
+
+  /// Taille d'un JPEG lue dans le marqueur SOF. Renvoie null si [b] n'est pas un JPEG.
+  Size? _jpegSize(Uint8List b) {
+    if (b.length < 4 || b[0] != 0xFF || b[1] != 0xD8) return null;
+    var i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] != 0xFF) {
+        i++;
+        continue;
+      }
+      final marker = b[i + 1];
+      if (marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
+        i += 2;
+        continue;
+      }
+      final len = (b[i + 2] << 8) | b[i + 3];
+      final isSof = marker >= 0xC0 &&
+          marker <= 0xCF &&
+          marker != 0xC4 &&
+          marker != 0xC8 &&
+          marker != 0xCC;
+      if (isSof) {
+        final h = (b[i + 5] << 8) | b[i + 6];
+        final w = (b[i + 7] << 8) | b[i + 8];
+        return Size(w.toDouble(), h.toDouble());
+      }
+      i += 2 + len;
+    }
+    return null;
+  }
+
+  /// Une ligne toutes les 2 s (debug uniquement) : sert à vérifier la taille de
+  /// frame et l'espace des coordonnées (pixels ou 0..1) renvoyés par le détecteur.
+  void _debugLog(Uint8List bytes, Pose pose, Size size) {
+    final now = DateTime.now();
+    if (now.difference(_lastDebug) < const Duration(seconds: 2)) return;
+    _lastDebug = now;
+    final shoulder = pose.getLandmark(LandmarkType.leftShoulder);
+    final hip = pose.getLandmark(LandmarkType.leftHip);
+    final zs = pose.landmarks
+        .where((l) => l.visibility > 0.5)
+        .map((l) => l.z)
+        .toList();
+    final zMin = zs.isEmpty ? 0.0 : zs.reduce(math.min);
+    final zMax = zs.isEmpty ? 0.0 : zs.reduce(math.max);
+    debugPrint('📐 frame=${size.width.toInt()}x${size.height.toInt()} '
+        'magic=${bytes[0].toRadixString(16)}${bytes[1].toRadixString(16)} '
+        'shoulder=(${shoulder.x}, ${shoulder.y}) '
+        'hip=(${hip.x}, ${hip.y}, vis=${hip.visibility}) '
+        'z[min..max]=${zMin.toStringAsFixed(3)}..${zMax.toStringAsFixed(3)}');
+  }
+
+  /// Taille d'un PNG lue dans l'en-tête IHDR (largeur 16-19, hauteur 20-23).
+  /// Renvoie null si [b] n'est pas un PNG.
+  Size? _pngSize(Uint8List b) {
+    if (b.length < 24 || b[0] != 0x89 || b[1] != 0x50) return null;
+    final bd = ByteData.sublistView(b);
+    return Size(bd.getUint32(16).toDouble(), bd.getUint32(20).toDouble());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Publication
+  // ---------------------------------------------------------------------------
+
+  void _publish(
+    Pose pose,
+    RemotePosture? posture,
+    Size frameSize, {
+    required DateTime capturedAt,
+  }) {
+    if (_room?.localParticipant == null) return;
+
+    final bytes = PostureCodec.encode(
+      label: posture?.label ?? 'inconnu',
+      confidence: posture?.confidence,
+      landmarks: pose.landmarks,
+      frameSize: frameSize,
+      seq: ++_seq,
+      timestampMs: capturedAt.millisecondsSinceEpoch,
+    );
+    _send(bytes, 'posture');
+  }
+
+  void _publishLost(DateTime capturedAt) {
+    if (_room?.localParticipant == null) return;
+    _send(
+      PostureCodec.encodeLost(
+        ++_seq,
+        timestampMs: capturedAt.millisecondsSinceEpoch,
+      ),
+      'lost',
+    );
+  }
+
+  /// Envoi lossy non attendu, avec mesure de la durée jusqu'au retour du futur.
+  void _send(Uint8List bytes, String kind) {
+    final participant = _room?.localParticipant;
+    if (participant == null) return;
+
+    _publishedSinceStats++;
+    final watch = Stopwatch()..start();
+    unawaited(
+      participant
+          .publishData(
+        bytes,
+        reliable: false,
+        topic: 'posture',
+        destinationIdentities: _destinationIdentities,
+      )
+          .then((_) {
+        watch.stop();
+        _publishMicros += watch.elapsedMicroseconds;
+        _publishSamples++;
+      })
+          .catchError((Object e) {
+        watch.stop();
+        _publishMicros += watch.elapsedMicroseconds;
+        _publishSamples++;
+        debugPrint('⚠️ Failed to publish $kind: $e');
+      }),
+    );
+  }
+
+  /// Pose absente : un paquet « perdu » à la transition, puis un rappel
+  /// toutes les 500 ms tant que la pose reste absente.
+  void _onLost(DateTime capturedAt) {
+    final now = DateTime.now();
+    if (_hadPose || now.difference(_lastLostSent) > const Duration(milliseconds: 500)) {
+      _hadPose = false;
+      _lastLostSent = now;
+      _publishLost(capturedAt);
+    }
+    _stableLabel = null;
+    _candidateLabel = null;
+    _candidateCount = 0;
+    if (_currentPosture != null) {
+      _currentPosture = null;
+      notifyListeners();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Classification
+  // ---------------------------------------------------------------------------
+
+  /// Hystérésis : le label ne change qu'après [_labelHoldFrames] frames
+  /// consécutives identiques. N'affecte pas le squelette, seulement le label.
+  RemotePosture? _stabilizedPosture(RemotePosture? raw) {
+    if (raw == null) {
       return null;
     }
+
+    if (_stableLabel == null) {
+      _stableLabel = raw.label;
+    } else if (raw.label == _stableLabel) {
+      _candidateLabel = null;
+      _candidateCount = 0;
+    } else if (raw.label == _candidateLabel) {
+      if (++_candidateCount >= _labelHoldFrames) {
+        _stableLabel = raw.label;
+        _candidateLabel = null;
+        _candidateCount = 0;
+      }
+    } else {
+      _candidateLabel = raw.label;
+      _candidateCount = 1;
+    }
+
+    final stabilized = RemotePosture(
+      label: _stableLabel!,
+      confidence: raw.confidence,
+      receivedAt: raw.receivedAt,
+    );
+
+    // On ne notifie l'UI que si le label change (pas à chaque frame).
+    if (_currentPosture?.label != stabilized.label) {
+      _currentPosture = stabilized;
+      notifyListeners();
+    } else {
+      _currentPosture = stabilized;
+    }
+    return stabilized;
   }
 
   RemotePosture? classifyPosture(Pose pose) {
     PoseLandmark? landmark(LandmarkType type) => pose.getLandmark(type);
+
     double averageLikelihood(List<PoseLandmark?> landmarks) {
       final values = landmarks
           .whereType<PoseLandmark>()
@@ -162,19 +480,20 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
     final torsoDx = shoulderMid.dx - hipMid.dx;
     final torsoDy = hipMid.dy - shoulderMid.dy;
-    final torsoAngleDeg =
-        math.atan2(
-          torsoDx.abs(),
-          torsoDy.abs().clamp(1e-6, double.infinity).toDouble(),
-        ) *
+    final torsoAngleDeg = math.atan2(
+      torsoDx.abs(),
+      torsoDy.abs().clamp(1e-6, double.infinity).toDouble(),
+    ) *
         180 /
         math.pi;
 
-    final torsoLength = math.max((hipMid.dy - shoulderMid.dy).abs(), 1.0);
+    // Plancher minuscule (et non 1.0) : valable que les coordonnées soient
+    // en pixels ou normalisées 0..1.
+    final torsoLength = math.max((hipMid.dy - shoulderMid.dy).abs(), 1e-6);
     final kneeDrop =
-        kneeMid == null ? 0.0 : (kneeMid.dy - hipMid.dy) / torsoLength;
+    kneeMid == null ? 0.0 : (kneeMid.dy - hipMid.dy) / torsoLength;
     final ankleDrop =
-        ankleMid == null ? 0.0 : (ankleMid.dy - hipMid.dy) / torsoLength;
+    ankleMid == null ? 0.0 : (ankleMid.dy - hipMid.dy) / torsoLength;
 
     final confidence = averageLikelihood([
       landmark(LandmarkType.leftShoulder),
@@ -194,39 +513,11 @@ class PoseDetectionViewModel extends ChangeNotifier {
     );
   }
 
-  static Map<String, dynamic> buildPosturePayload(RemotePosture posture) {
-    return {
-      'type': 'posture',
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'payload': {
-        'posture': posture.label,
-        'label': posture.label,
-        if (posture.confidence != null) 'confidence': posture.confidence,
-        'source': 'mlkit',
-      },
-    };
-  }
-
-  Future<void> publishPosture(
-    LocalParticipant participant,
-    RemotePosture posture,
-  ) async {
-    final payload = buildPosturePayload(posture);
-    try {
-      await participant.publishData(
-        utf8.encode(jsonEncode(payload)),
-        reliable: true,
-        topic: 'posture',
-      );
-    } catch (error) {
-      debugPrint('⚠️ Failed to publish posture: $error');
-    }
-  }
-
   @override
-  Future<void> dispose() async {
+  void dispose() {
     stop();
     _poseDetector.dispose();
     super.dispose();
   }
 }
+

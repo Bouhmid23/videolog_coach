@@ -9,9 +9,13 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
+import '../core/call_foreground_service.dart';
 import '../data/remote_posture.dart';
 import '../data/remote_telemetry.dart';
+import '../data/telemetry_codec.dart';
+import '../data/user_role.dart';
 import '../presentation/widgets/participant_info.dart';
+import '../utils.dart';
 import 'controls_viewmodel.dart';
 import 'pose_detection_viewmodel.dart';
 
@@ -28,6 +32,9 @@ class RoomViewModel extends ChangeNotifier {
   // ── Room references ──
   Room? _room;
   EventsListener<RoomEvent>? _listener;
+
+  // ── Role ──
+  UserRole _role = UserRole.trainee;
 
   // ── Telemetry ──
   Timer? _telemetryTimer;
@@ -56,22 +63,58 @@ class RoomViewModel extends ChangeNotifier {
   final Map<String, RemotePosture> _remotePostures = {};
   final Map<String, RemoteTelemetry> _remoteTelemetry = {};
 
-  // ── Posture PIP ──
+  // ── Posture visibility per remote participant ──
+  final Set<String> _hiddenPostures = {};
+
+  // ── Posture PIP & SideSheet ──
   bool _showPosePip = true;
+  String? _selectedParticipantIdentity;
+  bool _showSideSheet = false;
 
   // ── Getters ──
   Room? get room => _room;
   EventsListener<RoomEvent>? get listener => _listener;
+  UserRole get role => _role;
   List<ParticipantTrack> get participantTracks => _participantTracks;
   int? get sensorHeartRate => _sensorHeartRate;
   int? get sensorCadence => _sensorCadence;
   SportMetrics? get bleMetrics => _bleMetrics;
   double get totalDistanceMiles => _totalDistanceMiles;
   bool get showPosePip => _showPosePip;
+  String? get selectedParticipantIdentity => _selectedParticipantIdentity;
+  bool get showSideSheet => _showSideSheet;
 
   void togglePosePip() {
     _showPosePip = !_showPosePip;
     notifyListeners();
+  }
+
+  void selectParticipant(String? identity) {
+    if (_selectedParticipantIdentity == identity) {
+      _showSideSheet = !_showSideSheet;
+    } else {
+      _selectedParticipantIdentity = identity;
+      _showSideSheet = identity != null;
+    }
+    notifyListeners();
+  }
+
+  void closeSideSheet() {
+    _showSideSheet = false;
+    notifyListeners();
+  }
+
+  void togglePostureVisibility(String participantIdentity) {
+    if (_hiddenPostures.contains(participantIdentity)) {
+      _hiddenPostures.remove(participantIdentity);
+    } else {
+      _hiddenPostures.add(participantIdentity);
+    }
+    _sortParticipants();
+  }
+
+  bool isPostureVisible(String participantIdentity) {
+    return !_hiddenPostures.contains(participantIdentity);
   }
 
   RemotePosture? posturesForParticipant(Participant participant) {
@@ -90,11 +133,30 @@ class RoomViewModel extends ChangeNotifier {
         : null,
     lat: _lastPosition?.latitude,
     lng: _lastPosition?.longitude,
-    role: 'trainee',
+    altitude: _lastPosition?.altitude,
+    bearing: _lastPosition?.heading,
+    role: _role.wire,
     receivedAt: DateTime.now(),
   );
 
   ParticipantTrack? get primaryTrack {
+    // Le flux principal est celui du dernier participant distant arrivé.
+    // S'il n'y a personne d'autre, on affiche le participant local.
+    ParticipantTrack? latestRemote;
+    for (final track in _participantTracks) {
+      if (track.type != ParticipantTrackType.kUserMedia ||
+          track.participant is! RemoteParticipant) {
+        continue;
+      }
+      if (latestRemote == null ||
+          track.participant.joinedAt.isAfter(
+            latestRemote.participant.joinedAt,
+          )) {
+        latestRemote = track;
+      }
+    }
+    if (latestRemote != null) return latestRemote;
+
     for (final track in _participantTracks) {
       if (track.participant is LocalParticipant &&
           track.type == ParticipantTrackType.kUserMedia) {
@@ -111,13 +173,25 @@ class RoomViewModel extends ChangeNotifier {
   }
 
   // ── Init ──
-  Future<void> init(Room room, EventsListener<RoomEvent> listener, {VoidCallback? onDisconnected}) async {
+  Future<void> init(Room room, EventsListener<RoomEvent> listener,
+      {UserRole role = UserRole.trainee, VoidCallback? onDisconnected}) async {
     _room = room;
     _listener = listener;
+    _role = role;
     _onDisconnected = onDisconnected;
 
     // Keep screen on during call
     unawaited(WakelockPlus.enable());
+
+    CallForegroundService.setOnEndCall(() {
+      unawaited(room.disconnect());
+    });
+    unawaited(CallForegroundService.start(
+      roomName: room.name ?? '',
+      username: displayNameForIdentity(
+        room.localParticipant?.identity ?? '',
+      ),
+    ));
 
     controlsViewModel = ControlsViewModel();
     controlsViewModel.init(
@@ -136,7 +210,11 @@ class RoomViewModel extends ChangeNotifier {
     await poseViewModel.init();
 
     _startTelemetry();
-    poseViewModel.start(room);
+    // Le coach est observateur : il ne publie pas de posture.
+    if (_role.isTrainee) {
+      poseViewModel.start(room);
+      _updatePoseDestinations();
+    }
     _startGps();
     _startSensorListeners();
   }
@@ -148,6 +226,7 @@ class RoomViewModel extends ChangeNotifier {
 
     listener
       ..on<RoomDisconnectedEvent>((event) {
+        debugPrint('🔌 Room disconnected: reason=${event.reason}');
         _stopTelemetry();
         poseViewModel.stop();
         _onDisconnected?.call();
@@ -161,12 +240,35 @@ class RoomViewModel extends ChangeNotifier {
       ..on<ParticipantDisconnectedEvent>((event) {
         _remotePostures.remove(event.participant.identity);
         _remoteTelemetry.remove(event.participant.identity);
+        _updatePoseDestinations();
         _sortParticipants();
       })
       ..on<DataReceivedEvent>((event) {
+        final participant = event.participant;
+        if (participant == null) return;
+
+        // Chemin rapide temps réel : paquet binaire compact sur le topic posture.
+        /*if (event.topic == 'posture') {
+          final posture = RemotePosture.tryParseBinary(event.data);
+          if (posture != null) {
+            _remotePostures[participant.identity] = posture;
+            _sortParticipants();
+            return;
+          }
+        }*/
+
+        // Chemin rapide temps réel : paquet binaire compact sur le topic telemetry.
+        if (event.topic == 'telemetry') {
+          final telemetry = TelemetryCodec.decode(event.data, receivedAt: DateTime.now());
+          if (telemetry != null) {
+            _updateRemoteTelemetry(participant.identity, telemetry);
+            return;
+          }
+        }
+
         try {
           final decoded = utf8.decode(event.data);
-          _handleIncomingData(event.participant, decoded, event.topic);
+          _handleIncomingData(participant, decoded, event.topic);
         } catch (err) {
           debugPrint('Failed to decode data: $err');
         }
@@ -204,41 +306,50 @@ class RoomViewModel extends ChangeNotifier {
     double? speed;
     double? lat;
     double? lng;
+    double? altitude;
+    double? bearing;
     
     if (position != null) {
       speed = double.parse((position.speed * 3.6).toStringAsFixed(1));
-      lat = double.parse(position.latitude.toStringAsFixed(6));
-      lng = double.parse(position.longitude.toStringAsFixed(6));
+      lat = position.latitude;
+      lng = position.longitude;
+      altitude = position.altitude;
+      bearing = position.heading;
     }
 
-    final payload = {
-      "type": "telemetry",
-      "ts": DateTime.now().millisecondsSinceEpoch,
-      "payload": {
-        "role": "trainee",
-        "speed": speed,
-        "heart_rate": heartRate,
-        "cadence": cadence,
-        "gps": lat != null && lng != null ? {"lat": lat, "lng": lng} : null,
-      },
-    };
+    // Encodage binaire compact via TelemetryCodec
+    final bytes = TelemetryCodec.encode(
+      role: _role.wire,
+      speed: speed,
+      heartRate: heartRate,
+      cadence: cadence,
+      lat: lat,
+      lng: lng,
+      altitude: altitude,
+      bearing: bearing,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+    );
 
     try {
       room.localParticipant?.publishData(
-        utf8.encode(jsonEncode(payload)),
-        reliable: true,
+        bytes,
+        reliable: false, // Mode lossy pour le temps réel
         topic: 'telemetry',
       );
     } catch (e) {
       debugPrint('⚠️ Telemetry publish error: $e');
     }
 
-    if (heartRate != null) {
-      _pushGlassesDisplay(heartRate);
+    final localIdentity = room.localParticipant?.identity;
+    if (localIdentity != null) {
+      _refreshTrackTelemetry(localIdentity, localTelemetry);
     }
+    notifyListeners();
+
+    _pushGlassesDisplay(heartRate);
   }
 
-  void _pushGlassesDisplay(double heartRate) {
+  void _pushGlassesDisplay(double? heartRate) {
     final deviceId = bleService.connectedDeviceId;
     if (deviceId == null || !bleService.isDisplaySessionActive) return;
 
@@ -249,15 +360,17 @@ class RoomViewModel extends ChangeNotifier {
     }
     _lastGlassesDisplayTime = now;
 
-    // Use actual distance and calories based on HRM
+    // Use actual distance; calories only when a heart-rate sensor is present
     final dist = _totalDistanceMiles;
-    final kcal = (heartRate * 0.05 * _simT / 60).round().clamp(0, 9999);
+    final kcal = heartRate != null
+        ? (heartRate * 0.05 * _simT / 60).round().clamp(0, 9999)
+        : 0;
 
     unawaited(
       bleService.displayMetrics(
         deviceId,
         distanceMiles: dist,
-        bpm: heartRate.round().clamp(30, 220),
+        bpm: heartRate?.round().clamp(30, 220),
         kcal: kcal,
         cadence: _sensorCadence,
       ),
@@ -373,19 +486,48 @@ class RoomViewModel extends ChangeNotifier {
       if (topic == 'telemetry' || map['type'] == 'telemetry') {
         final telemetry = RemoteTelemetry.tryParse(map);
         if (telemetry != null) {
-          _remoteTelemetry[participant.identity] = telemetry;
-          notifyListeners();
+          _updateRemoteTelemetry(participant.identity, telemetry);
         }
         return;
       }
 
-      final posture = RemotePosture.tryParse(map);
-      if (posture != null) {
-        _remotePostures[participant.identity] = posture;
-        _sortParticipants();
-      }
+      /*if (topic == 'posture' || map['type'] == 'posture') {
+        final posture = RemotePosture.tryParse(map);
+        if (posture != null) {
+          _remotePostures[participant.identity] = posture;
+          _sortParticipants();
+        }
+        return;
+      }*/
     } catch (error) {
       debugPrint('⚠️ Invalid incoming data: $error');
+    }
+  }
+
+  void _updateRemoteTelemetry(String identity, RemoteTelemetry telemetry) {
+    _remoteTelemetry[identity] = telemetry;
+    _refreshTrackTelemetry(identity, telemetry);
+    _updatePoseDestinations();
+    notifyListeners();
+  }
+
+  /// Le squelette ne part qu'aux viewers (rôle coach) déjà identifiés.
+  /// Tant qu'aucun coach n'est connu, on laisse LiveKit broadcaster par défaut.
+  void _updatePoseDestinations() {
+    if (!_role.isTrainee) return;
+    final coaches = <String>[
+      for (final entry in _remoteTelemetry.entries)
+        if (UserRole.fromWire(entry.value.role).isCoach) entry.key,
+    ];
+    poseViewModel.setDestinationIdentities(coaches);
+  }
+
+  void _refreshTrackTelemetry(String identity, RemoteTelemetry telemetry) {
+    for (final track in _participantTracks) {
+      if (track.type == ParticipantTrackType.kUserMedia &&
+          track.participant.identity == identity) {
+        track.telemetry = telemetry;
+      }
     }
   }
 
@@ -414,8 +556,10 @@ class RoomViewModel extends ChangeNotifier {
         } else {
           userMediaTracks.add(ParticipantTrack(
             participant: participant,
-            posture: _remotePostures[participant.identity],
+            //posture: _remotePostures[participant.identity],
             telemetry: _remoteTelemetry[participant.identity],
+            //showPosture: _showPosePip && isPostureVisible(participant.identity),
+            //onTogglePosture: () => togglePostureVisibility(participant.identity),
           ));
         }
       }
@@ -443,12 +587,12 @@ class RoomViewModel extends ChangeNotifier {
         } else {
           userMediaTracks.add(ParticipantTrack(
             participant: room.localParticipant!,
-            posture: _remotePostures[room.localParticipant!.identity],
+            //posture: poseViewModel.currentPosture,
             telemetry: localTelemetry,
-            pose: poseViewModel.currentPose,
+            /*pose: poseViewModel.currentPose,
             poseFrameSize: poseViewModel.currentFrameSize,
             avatarOnly: true,
-            showPosePip: _showPosePip,
+            showPosePip: _showPosePip,*/
           ));
         }
       }
@@ -462,6 +606,8 @@ class RoomViewModel extends ChangeNotifier {
   @override
   void dispose() {
     unawaited(WakelockPlus.disable());
+    CallForegroundService.setOnEndCall(null);
+    unawaited(CallForegroundService.stop());
     _stopTelemetry();
     _stopGps();
     unawaited(_bleMetricsSub?.cancel());
@@ -471,7 +617,7 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(_cscStatusSub?.cancel());
     unawaited(bleService.dispose());
     unawaited(sensorService.dispose());
-    unawaited(poseViewModel.dispose());
+    //unawaited(poseViewModel.dispose());
     controlsViewModel.dispose();
     _room?.removeListener(_onRoomDidUpdate);
     unawaited(_listener?.dispose());

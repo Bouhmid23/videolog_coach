@@ -1,45 +1,59 @@
-import 'dart:ui' as ui;
-
-import 'package:collection/collection.dart';
+﻿import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'dart:ui' as ui;
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
+import 'package:videolog_coach/presentation/widgets/participant_info.dart';
 import 'dart:async';
+
 import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
+import '../../utils.dart';
+import '../utils/ui_utils.dart';
 import 'no_video.dart';
-import 'participant_info.dart';
-import 'pose_animation.dart';
 
+/// Classe reprÃ©sentant une piste de participant avec ses donnÃ©es associÃ©es
 abstract class ParticipantWidget extends StatefulWidget {
   static ParticipantWidget widgetFor(
     ParticipantTrack participantTrack, {
     bool showStatsLayer = false,
+    bool poseAside = false,
+    bool showDataHud = true,
+    bool infoAtTop = false,
   }) {
     if (participantTrack.participant is LocalParticipant) {
       return LocalParticipantWidget(
         participantTrack.participant as LocalParticipant,
         participantTrack.type,
         showStatsLayer,
-        posture: participantTrack.posture,
+        //posture: participantTrack.posture,
         telemetry: participantTrack.telemetry,
-        pose: participantTrack.pose,
-        poseFrameSize: participantTrack.poseFrameSize,
-        avatarOnly: participantTrack.avatarOnly,
-        showPosePip: participantTrack.showPosePip,
+        //pose: participantTrack.pose,
+        //poseFrameSize: participantTrack.poseFrameSize,
+        //avatarOnly: participantTrack.avatarOnly,
+        //showPosePip: participantTrack.showPosePip,
+        //showPosture: participantTrack.showPosture,
+        poseAside: poseAside,
+        showDataHud: showDataHud,
+        infoAtTop: infoAtTop,
       );
     } else if (participantTrack.participant is RemoteParticipant) {
       return RemoteParticipantWidget(
         participantTrack.participant as RemoteParticipant,
         participantTrack.type,
         showStatsLayer,
-        posture: participantTrack.posture,
+        //posture: participantTrack.posture,
         telemetry: participantTrack.telemetry,
-        pose: participantTrack.pose,
-        poseFrameSize: participantTrack.poseFrameSize,
-        avatarOnly: participantTrack.avatarOnly,
-        showPosePip: participantTrack.showPosePip,
+        //pose: participantTrack.pose,
+        //poseFrameSize: participantTrack.poseFrameSize,
+        //avatarOnly: participantTrack.avatarOnly,
+        //showPosePip: participantTrack.showPosePip,
+        //showPosture: participantTrack.showPosture,
+        //onTogglePosture: participantTrack.onTogglePosture,
+        poseAside: poseAside,
+        showDataHud: showDataHud,
+        infoAtTop: infoAtTop,
       );
     }
     throw UnimplementedError('Unknown participant type');
@@ -54,6 +68,11 @@ abstract class ParticipantWidget extends StatefulWidget {
   final Size? poseFrameSize;
   final bool avatarOnly;
   final bool showPosePip;
+  final bool showPosture;
+  final bool poseAside;
+  final bool showDataHud;
+  final bool infoAtTop;
+  final VoidCallback? onTogglePosture;
   final VideoQuality quality;
 
   const ParticipantWidget({
@@ -63,11 +82,17 @@ abstract class ParticipantWidget extends StatefulWidget {
     this.poseFrameSize,
     this.avatarOnly = false,
     this.showPosePip = true,
+    this.showPosture = true,
+    this.poseAside = false,
+    this.showDataHud = true,
+    this.infoAtTop = false,
+    this.onTogglePosture,
     this.quality = VideoQuality.HIGH,
     super.key,
   });
 }
 
+/// Widget pour le participant local
 class LocalParticipantWidget extends ParticipantWidget {
   @override
   final LocalParticipant participant;
@@ -86,6 +111,10 @@ class LocalParticipantWidget extends ParticipantWidget {
     super.poseFrameSize,
     super.avatarOnly,
     super.showPosePip,
+    super.showPosture,
+    super.poseAside,
+    super.showDataHud,
+    super.infoAtTop,
     super.key,
   });
 
@@ -93,6 +122,7 @@ class LocalParticipantWidget extends ParticipantWidget {
   State<StatefulWidget> createState() => _LocalParticipantWidgetState();
 }
 
+/// Widget pour un participant distant
 class RemoteParticipantWidget extends ParticipantWidget {
   @override
   final RemoteParticipant participant;
@@ -111,6 +141,11 @@ class RemoteParticipantWidget extends ParticipantWidget {
     super.poseFrameSize,
     super.avatarOnly,
     super.showPosePip,
+    super.showPosture,
+    super.onTogglePosture,
+    super.poseAside,
+    super.showDataHud,
+    super.infoAtTop,
     super.key,
   });
 
@@ -118,8 +153,9 @@ class RemoteParticipantWidget extends ParticipantWidget {
   State<StatefulWidget> createState() => _RemoteParticipantWidgetState();
 }
 
+/// Ã‰tat partagÃ© pour tous les widgets de participant
 abstract class _ParticipantWidgetState<T extends ParticipantWidget>
-    extends State<T> {
+    extends State<T> with SingleTickerProviderStateMixin {
   bool _visible = true;
   VideoTrack? get activeVideoTrack;
   AudioTrack? get activeAudioTrack;
@@ -127,21 +163,44 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   TrackPublication? get audioPublication;
   bool get isScreenShare => widget.type == ParticipantTrackType.kScreenShare;
   EventsListener<ParticipantEvent>? _listener;
-
-  // Support 3D : On exclut le web pour o3d (ou on d�tecte le support mat�riel)
-  //bool get _is3DSupported => !kIsWeb && (lkPlatformIs(PlatformType.android) || lkPlatformIs(PlatformType.iOS));
+  
+  // Animation pour l'apparition
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _opacityAnimation;
 
   @override
   void initState() {
     super.initState();
     _listener = widget.participant.createListener();
     widget.participant.addListener(_onParticipantChanged);
+    
+    // Initialiser les animations
+    _animationController = AnimationController(
+      vsync: this,
+      duration: UIUtils.animationDuration,
+    );
+    
+    _scaleAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: UIUtils.animationCurveBounce,
+    );
+    
+    _opacityAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeIn,
+    );
+    
+    // DÃ©marrer l'animation
+    _animationController.forward();
+    
     _onParticipantChanged();
   }
 
   @override
   void dispose() {
     widget.participant.removeListener(_onParticipantChanged);
+    _animationController.dispose();
     unawaited(_listener?.dispose());
     super.dispose();
   }
@@ -159,433 +218,360 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   List<Widget> extraWidgets(bool isScreenShare) => [];
 
   @override
-  Widget build(BuildContext ctx) => Container(
-    foregroundDecoration: BoxDecoration(
-      border: widget.participant.isSpeaking && !isScreenShare
-          ? Border.all(width: 3, color: LKColors.lkBlue)
-          : null,
-      borderRadius: BorderRadius.circular(12),
-    ),
-    decoration: BoxDecoration(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
-    ),
-    clipBehavior: Clip.antiAlias,
-    child: Stack(
+  Widget build(BuildContext ctx) {
+    return ScaleTransition(
+      scale: _scaleAnimation,
+      child: FadeTransition(
+        opacity: _opacityAnimation,
+        child: Container(
+          foregroundDecoration: BoxDecoration(
+            border: widget.participant.isSpeaking && !isScreenShare
+                ? Border.all(width: 3, color: LKColors.primary)
+                : null,
+            borderRadius: BorderRadius.circular(UIUtils.borderRadiusLG),
+          ),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(UIUtils.borderRadiusLG),
+            boxShadow: widget.participant.isSpeaking && !isScreenShare
+                ? [
+                    BoxShadow(
+                      color: LKColors.primary.withValues(alpha: 0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 0),
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : null,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Expanded(child: _buildBody()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    return _buildVideoStack();
+  }
+
+  Widget _buildVideoStack() {
+    return Stack(
       children: [
-        // 1. FLUX VIDEO PRINCIPAL (Toujours en fond)
+        // 1. FLUX VIDEO PRINCIPAL
         InkWell(
           onTap: () => setState(() => _visible = !_visible),
+          borderRadius: UIUtils.borderRadiusAllLG,
+          hoverColor: Colors.transparent,
+          highlightColor: Colors.transparent,
           child: activeVideoTrack != null && !activeVideoTrack!.muted
               ? VideoTrackRenderer(
                   renderMode: VideoRenderMode.auto,
                   activeVideoTrack!,
                   fit: VideoViewFit.cover,
                 )
-              : const NoVideoWidget(),
+              : NoVideoWidget(
+                  state: isScreenShare 
+                      ? NoVideoState.screenShare 
+                      : (activeVideoTrack?.muted == true 
+                          ? NoVideoState.videoMuted 
+                          : NoVideoState.noVideo),
+                  participantName: widget.participant.name.isNotEmpty 
+                      ? displayNameForIdentity(widget.participant.name)
+                      : null,
+                ),
         ),
 
-        // 2. PIP AVATAR (Bas � Droite, au-dessus de la barre d'infos)
-        if (widget.pose != null &&
-            widget.poseFrameSize != null &&
-            widget.showPosePip &&
-            !isScreenShare)
+        // 3. HUD de donnees (telemetrie)
+        if (widget.showDataHud &&
+            !isScreenShare &&
+            (widget.telemetry != null || widget.posture != null))
           Positioned(
-            bottom: 45,
-            right: 15,
-            child: Container(
-              width: 120,
-              height: 160,
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white24, width: 1.5),
-                boxShadow: [
-                  BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: /*_is3DSupported
-                  ? ThreeDAvatarWidget(
-                      modelUrl: 'https://modelviewer.dev/shared-assets/models/Astronaut.glb',
-                      pose: widget.pose,
-                      label: widget.posture?.label,
-                    )
-                  : */CustomPaint(
-                      painter: _PoseAvatarPainter(
-                        pose: widget.pose!,
-                        frameSize: widget.poseFrameSize!,
-                        mirrorX: widget.participant is LocalParticipant,
-                        isMiniature: true,
-                      ),
-                    ),
+            top: widget.infoAtTop ? UIUtils.md + 25 : UIUtils.md,
+            left: UIUtils.xs,
+            right: UIUtils.md,
+            child: SafeArea(
+              bottom: false,
+              left: false,
+              right: false,
+              child: DataHud(
+                telemetry: widget.telemetry,
+                //posture: widget.posture,
+                //showPosture: widget.showPosture,
               ),
             ),
           ),
 
-        /*// 3. Posture d�tect�e (Badge en haut � gauche)
-        if (widget.posture != null && !isScreenShare)
-          Positioned(
-            top: 10,
-            left: 10,
-            child: _RemotePostureBadge(posture: widget.posture!),
-          ),
-
-        // 4. Barre d'infos (Bas)*/
-        // Badge t�l�m�trie (haut gauche) : toutes les infos non null
-        if ((widget.telemetry != null || widget.posture != null) && !isScreenShare)
-          Positioned(
-            top: 30,
-            left: 10,
-            child: TelemetryBadge(
-              telemetry: widget.telemetry,
-              posture: widget.posture,
-            ),
-          ),
+        // 4. Info du participant (en haut pour le flux principal, en bas sinon)
         Align(
-          alignment: Alignment.bottomCenter,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              //...extraWidgets(isScreenShare),
-              ParticipantInfoWidget(
-                title: widget.participant.name.isNotEmpty
-                    ? widget.participant.name
-                    : widget.participant.identity,
-                audioAvailable: audioPublication?.muted == false && audioPublication?.subscribed == true,
-                connectionQuality: widget.participant.connectionQuality,
-                isScreenShare: isScreenShare,
-                enabledE2EE: widget.participant.isEncrypted,
-              ),
-            ],
-          ),
+          alignment:
+              widget.infoAtTop ? Alignment.topCenter : Alignment.bottomCenter,
+          child: _buildParticipantInfo(isScreenShare),
+        ),
+
+        // 5. Widgets supplÃ©mentaires (pour les participants distants)
+        ...extraWidgets(isScreenShare),
+      ],
+    );
+  }
+
+  Widget _buildParticipantInfo(bool isScreenShare) {
+    final info = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ParticipantInfoWidget(
+          title: widget.participant.name.isNotEmpty
+              ? displayNameForIdentity(widget.participant.name)
+              : displayNameForIdentity(widget.participant.identity),
+          audioAvailable: audioPublication?.muted == false &&
+              audioPublication?.subscribed == true,
+          connectionQuality: widget.participant.connectionQuality,
+          isScreenShare: isScreenShare,
+          enabledE2EE: widget.participant.isEncrypted,
+          isLocal: widget.participant is LocalParticipant,
+          isTop: widget.infoAtTop,
         ),
       ],
-    ),
-  );
+    );
+
+    if (!widget.infoAtTop) return info;
+    return SafeArea(bottom: false, child: info);
+  }
+
 }
 
-class _PoseAvatarPainter extends CustomPainter {
-  final Pose pose;
-  final Size frameSize;
-  final bool mirrorX;
-  final bool isMiniature;
-  final bool enableSmoothing;
-  final bool enableColorByConfidence;
-  final bool enableBoneThickness;
+class DataHud extends StatefulWidget {
+  final RemoteTelemetry? telemetry;
+  //final RemotePosture? posture;
+  //final bool showPosture;
 
-  _PoseAvatarPainter({
-    required this.pose,
-    required this.frameSize,
-    required this.mirrorX,
-    this.isMiniature = false,
-  }) : enableBoneThickness = true, enableColorByConfidence = true, enableSmoothing = true;
+  const DataHud({
+    this.telemetry,
+    //this.posture,
+    //required this.showPosture,
+    super.key,
+  });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final interpolated = InterpolatedPose.fromPose(pose, frameSize, size, mirrorX: mirrorX);
-    final points = interpolated.points;
-    final confidence = interpolated.confidence;
+  State<DataHud> createState() => _DataHudState();
+}
 
-    _drawTorso(canvas, points, confidence);   // 1. fond d'abord
-    for (final bone in HumanSkeletonBones.standardBones) {
-      _drawBone(canvas, points, confidence, bone.from, bone.to);
-    }
-    _drawHead(canvas, points, confidence);    // 2. par-dessus les os
-    _drawJoints(canvas, points, confidence);  // 3. joints au premier plan
-    if (!isMiniature) {
-      _drawConfidenceIndicators(canvas, points, confidence);
-    }
-  }
+class _DataHudState extends State<DataHud> {
+  bool _expanded = true;
 
-  void _drawHead(Canvas canvas, Map<LandmarkType, Offset> points,
-      Map<LandmarkType, double> confidence) {
-    final nose = points[LandmarkType.nose];
-    final leftEar = points[LandmarkType.leftEar];
-    final rightEar = points[LandmarkType.rightEar];
-    if (nose == null) return;
+  /// Largeur sous laquelle le HUD bascule en mode compact (padding et police
+  /// réduits) sur les tuiles de galerie.
+  static const double _compactWidth = 320;
 
-    final conf = confidence[LandmarkType.nose] ?? 0.5;
-    final radius = isMiniature ? 10.0 : 20.0;
+  List<(IconData, Color, String)> _buildItems() {
+    final items = <(IconData, Color, String)>[];
 
-    // Cercle de tête basé sur le nez + largeur des oreilles
-    double headRadius = radius;
-    if (leftEar != null && rightEar != null) {
-      headRadius = (leftEar - rightEar).distance / 2.0;
-      headRadius = headRadius.clamp(radius * 0.7, radius * 1.5);
-    }
-    final headCenter = Offset(nose.dx, nose.dy - headRadius * 0.6);
-
-    canvas.drawCircle(headCenter, headRadius,
-        Paint()
-          ..color = ConfidenceColorPalette.getColor(conf).withValues(alpha: 0.25)
-          ..style = PaintingStyle.fill);
-    canvas.drawCircle(headCenter, headRadius,
-        Paint()
-          ..color = ConfidenceColorPalette.getColor(conf)
-          ..strokeWidth = isMiniature ? 1.5 : 2.5
-          ..style = PaintingStyle.stroke);
-  }
-
-  void _drawTorso(Canvas canvas, Map<LandmarkType, Offset> points,
-      Map<LandmarkType, double> confidence) {
-    final ls = points[LandmarkType.leftShoulder];
-    final rs = points[LandmarkType.rightShoulder];
-    final lh = points[LandmarkType.leftHip];
-    final rh = points[LandmarkType.rightHip];
-    if (ls == null || rs == null || lh == null || rh == null) return;
-
-    final avgConf = [ls, rs, lh, rh].map((p) {
-      final type = points.entries.firstWhere((e) => e.value == p).key;
-      return confidence[type] ?? 0.0;
-    }).reduce((a, b) => a + b) / 4;
-
-    final path = Path()
-      ..moveTo(ls.dx, ls.dy)
-      ..lineTo(rs.dx, rs.dy)
-      ..lineTo(rh.dx, rh.dy)
-      ..lineTo(lh.dx, lh.dy)
-      ..close();
-
-    canvas.drawPath(path, Paint()
-      ..color = ConfidenceColorPalette.getColor(avgConf).withValues(alpha: 0.18)
-      ..style = PaintingStyle.fill);
-  }
-
-  // Dans _drawBone, remplacer canvas.drawLine par :
-  void _drawBoneCurved(Canvas canvas, Offset from, Offset to, Paint paint) {
-    // Point de contrôle légèrement décalé perpendiculairement
-    final mid = Offset((from.dx + to.dx) / 2, (from.dy + to.dy) / 2);
-    final perp = Offset(-(to.dy - from.dy), to.dx - from.dx);
-    final perpLen = perp.distance.clamp(1.0, double.infinity);
-    final ctrl = mid + (perp / perpLen) * 8.0; // courbure de 8px
-
-    final path = Path()
-      ..moveTo(from.dx, from.dy)
-      ..quadraticBezierTo(ctrl.dx, ctrl.dy, to.dx, to.dy);
-    canvas.drawPath(path, paint..style = PaintingStyle.stroke);
-  }
-
-  void _drawBone(
-    Canvas canvas,
-    Map<LandmarkType, Offset> points,
-    Map<LandmarkType, double> confidence,
-    LandmarkType from,
-    LandmarkType to,
-  ) {
-    if (!points.containsKey(from) || !points.containsKey(to)) return;
-
-    final fromPoint = points[from]!;
-    final toPoint = points[to]!;
-    final fromConf = confidence[from] ?? 0.0;
-    final toConf = confidence[to] ?? 0.0;
-    final avgConf = (fromConf + toConf) / 2;
-
-    // Couleur basée sur la confiance
-    final color = enableColorByConfidence
-        ? ConfidenceColorPalette.getColor(avgConf)
-        : Colors.cyanAccent;
-
-    // Épaisseur basée sur la confiance
-    double strokeWidth;
-    if (enableBoneThickness) {
-      strokeWidth = isMiniature ? 1 + (avgConf * 1.5) : 2 + (avgConf * 3);
-    } else {
-      strokeWidth = isMiniature ? 2 : 4;
-    }
-
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    // Dessiner le trait principal
-    _drawBoneCurved(canvas,fromPoint, toPoint, paint);
-
-    // Ajouter un effet de lueur pour les high-confidence bones
-    if (!isMiniature && avgConf > 0.5) {
-      paint.shader = ui.Gradient.linear(
-        fromPoint, toPoint,
-        [ConfidenceColorPalette.getColor(fromConf),
-          ConfidenceColorPalette.getColor(toConf)],
-      );
-    }
-  }
-
-  void _drawJoints(
-      Canvas canvas,
-      Map<LandmarkType, Offset> points,
-      Map<LandmarkType, double> confidence,
-      ) {
-    for (final entry in points.entries) {
-      final point = entry.value;
-      final conf = confidence[entry.key] ?? 0.0;
-
-      // Coordonnée Z pour simuler la profondeur (négatif = vers caméra)
-      final z = pose.getLandmark(entry.key).z;
-      final depthFactor = (1.0 - (z.clamp(-0.5, 0.5) + 0.5)).clamp(0.5, 1.0);
-
-      // Taille modulée par confiance ET profondeur Z
-      final baseRadius = isMiniature ? 2.0 : 4.0;
-      final radius = (baseRadius + (conf * baseRadius)) * depthFactor;
-
-      // Opacité modulée par la profondeur
-      final alpha = (0.5 + conf * 0.5) * depthFactor;
-
-      final color = enableColorByConfidence
-          ? ConfidenceColorPalette.getJointColor(conf)
-          : Colors.white;
-
-      // Articulation principale
-      canvas.drawCircle(
-        point,
-        radius,
-        Paint()..color = color.withValues(alpha: alpha),
-      );
-
-      // Halo (seulement si confiance suffisante et pas miniature)
-      if (conf > 0.6 && !isMiniature) {
-        canvas.drawCircle(
-          point,
-          radius * 1.4,
-          Paint()
-            ..color = color.withValues(alpha: 0.18 * depthFactor)
-            ..strokeWidth = 0.8
-            ..style = PaintingStyle.stroke,
-        );
+    // Télémétrie
+    final telemetry = widget.telemetry;
+    if (telemetry != null) {
+      if (telemetry.hasHrm) {
+        items.add((Icons.favorite_rounded, LKColors.danger, '${telemetry.heartRate} bpm'));
       }
-
-      // Second halo pour les joints très proches de la caméra (z très négatif)
-      if (z < -0.2 && conf > 0.7 && !isMiniature) {
-        canvas.drawCircle(
-          point,
-          radius * 1.9,
-          Paint()
-            ..color = color.withValues(alpha: 0.08)
-            ..strokeWidth = 0.5
-            ..style = PaintingStyle.stroke,
-        );
+      if (telemetry.speed != null) {
+        items.add((Icons.speed_rounded, LKColors.warning, '${telemetry.speed!.toStringAsFixed(1)} km/h'));
+      }
+      if (telemetry.cadence != null) {
+        items.add((Icons.pedal_bike_rounded, LKColors.success, '${telemetry.cadence!.toStringAsFixed(0)} rpm'));
+      }
+      if (telemetry.altitude != null) {
+        items.add((Icons.height_rounded, LKColors.secondary, '${telemetry.altitude!.toStringAsFixed(0)} m'));
+      }
+      if (telemetry.bearing != null) {
+        items.add((Icons.explore_rounded, LKColors.warning, '${telemetry.bearing!.toStringAsFixed(0)}°'));
       }
     }
-  }
 
-  void _drawConfidenceIndicators(
-    Canvas canvas,
-    Map<LandmarkType, Offset> points,
-    Map<LandmarkType, double> confidence,
-  ) {
-    for (final bone in HumanSkeletonBones.standardBones) {
-      if (!points.containsKey(bone.from) || !points.containsKey(bone.to)) continue;
-
-      final fromConf = confidence[bone.from] ?? 0.0;
-      final toConf = confidence[bone.to] ?? 0.0;
-      final avgConf = (fromConf + toConf) / 2;
-
-      // Pour les basses confiances, utiliser un style pointillé
-      if (avgConf < 0.5) {
-        _drawDashedLine(
-          canvas,
-          points[bone.from]!,
-          points[bone.to]!,
-          Paint()
-            ..color = Colors.red.withValues(alpha: 0.5)
-            ..strokeWidth = isMiniature ? 1 : 2
-            ..strokeCap = StrokeCap.round,
-        );
-      }
-    }
-  }
-
-  void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
-    const dashWidth = 5.0;
-    const dashSpace = 3.0;
-    final distance = (p2 - p1).distance;
-    final steps = (distance / (dashWidth + dashSpace)).ceil();
-
-    for (int i = 0; i < steps; i++) {
-      final t1 = (i * (dashWidth + dashSpace)) / distance;
-      final t2 = (i * (dashWidth + dashSpace) + dashWidth) / distance;
-
-      if (t2 <= 1.0) {
-        canvas.drawLine(
-          Offset.lerp(p1, p2, t1)!,
-          Offset.lerp(p1, p2, t2.clamp(0, 1))!,
-          paint,
-        );
-      }
-    }
+    return items;
   }
 
   @override
-  bool shouldRepaint(covariant _PoseAvatarPainter oldDelegate) =>
-      oldDelegate.pose != pose ||
-      oldDelegate.frameSize != frameSize ||
-      oldDelegate.mirrorX != mirrorX ||
-      oldDelegate.isMiniature != isMiniature;
+  Widget build(BuildContext context) {
+    final items = _buildItems();
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Sur une tuile étroite, on conserve la taille compacte mais les
+        // valeurs restent visibles (les chips passent sur plusieurs lignes).
+        final compact = constraints.maxWidth < _compactWidth;
+        final showText = _expanded;
+
+        return Align(
+          alignment: Alignment.topLeft,
+          child: ClipRRect(
+            borderRadius: UIUtils.borderRadiusAllMD,
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: UIUtils.sm,
+                  vertical: UIUtils.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: LKColors.surface.withValues(alpha: 0.85),
+                  borderRadius: UIUtils.borderRadiusAllMD,
+                  border: Border.all(color: LKColors.border, width: 0.5),
+                  boxShadow: UIUtils.shadowSM,
+                ),
+                child: Wrap(
+                  spacing: UIUtils.sm,
+                  runSpacing: UIUtils.xs,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    // Chips de données
+                    for (final item in items)
+                      _HudChip(
+                        icon: item.$1,
+                        color: item.$2,
+                        text: item.$3,
+                        showText: showText,
+                        compact: compact,
+                      ),
+                    // Toggle extension / compression (uniquement en mode large)
+                    if (!compact)
+                      _HudChip(
+                        icon: _expanded
+                            ? Icons.unfold_less_rounded
+                            : Icons.unfold_more_rounded,
+                        color: LKColors.textSecondary,
+                        text: _expanded ? 'Réduire' : 'Détails',
+                        showText: _expanded,
+                        onTap: () => setState(() => _expanded = !_expanded),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
+/// Puce pour afficher une information ( chip )
+class _HudChip extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String text;
+  final bool showText;
+  final bool compact;
+  final VoidCallback? onTap;
+
+  const _HudChip({
+    required this.icon,
+    required this.color,
+    required this.text,
+    this.showText = true,
+    this.compact = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final chip = AnimatedContainer(
+      duration: UIUtils.animationDuration,
+      curve: UIUtils.animationCurve,
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? UIUtils.xs + 2 : UIUtils.sm,
+        vertical: compact ? UIUtils.xs - 1 : UIUtils.xs + 1,
+      ),
+      decoration: BoxDecoration(
+        color: LKColors.surfaceElevated,
+        borderRadius: UIUtils.borderRadiusAllSM,
+        border: Border.all(
+          color: onTap != null ? LKColors.border.withValues(alpha: 0.8) : LKColors.border,
+          width: 0.3,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            color: color,
+            size: compact ? 13 : 12,
+          ),
+          AnimatedSize(
+            duration: UIUtils.animationDuration,
+            curve: UIUtils.animationCurve,
+            child: !showText
+                ? SizedBox(width: 0)
+                : Padding(
+                    padding: EdgeInsets.only(left: UIUtils.xs - 2),
+                    child: Text(
+                      text,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+
+    if (onTap == null) return chip;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: UIUtils.borderRadiusAllSM,
+      child: chip,
+    );
+  }
+}
+
+/// Ã‰tat pour le participant local
 class _LocalParticipantWidgetState extends _ParticipantWidgetState<LocalParticipantWidget> {
   @override
-  LocalTrackPublication<LocalVideoTrack>? get videoPublication => widget.participant.videoTrackPublications.where((e) => e.source == widget.type.lkVideoSourceType).firstOrNull;
+  LocalTrackPublication<LocalVideoTrack>? get videoPublication => 
+      widget.participant.videoTrackPublications
+          .where((e) => e.source == widget.type.lkVideoSourceType)
+          .firstOrNull;
+  
   @override
-  LocalTrackPublication<LocalAudioTrack>? get audioPublication => widget.participant.audioTrackPublications.where((e) => e.source == widget.type.lkAudioSourceType).firstOrNull;
+  LocalTrackPublication<LocalAudioTrack>? get audioPublication => 
+      widget.participant.audioTrackPublications
+          .where((e) => e.source == widget.type.lkAudioSourceType)
+          .firstOrNull;
+  
   @override
   VideoTrack? get activeVideoTrack => videoPublication?.track;
+  
   @override
   AudioTrack? get activeAudioTrack => audioPublication?.track;
 }
 
+/// Ã‰tat pour un participant distant
 class _RemoteParticipantWidgetState extends _ParticipantWidgetState<RemoteParticipantWidget> {
   @override
-  RemoteTrackPublication<RemoteVideoTrack>? get videoPublication => widget.participant.videoTrackPublications.where((e) => e.source == widget.type.lkVideoSourceType).firstOrNull;
+  RemoteTrackPublication<RemoteVideoTrack>? get videoPublication => 
+      widget.participant.videoTrackPublications
+          .where((e) => e.source == widget.type.lkVideoSourceType)
+          .firstOrNull;
+  
   @override
-  RemoteTrackPublication<RemoteAudioTrack>? get audioPublication => widget.participant.audioTrackPublications.where((e) => e.source == widget.type.lkAudioSourceType).firstOrNull;
+  RemoteTrackPublication<RemoteAudioTrack>? get audioPublication => 
+      widget.participant.audioTrackPublications
+          .where((e) => e.source == widget.type.lkAudioSourceType)
+          .firstOrNull;
+  
   @override
   VideoTrack? get activeVideoTrack => videoPublication?.track;
+  
   @override
   AudioTrack? get activeAudioTrack => audioPublication?.track;
-
-  @override
-  List<Widget> extraWidgets(bool isScreenShare) => [
-    Row(mainAxisSize: MainAxisSize.max, mainAxisAlignment: MainAxisAlignment.end, children: [
-      if (audioPublication != null) RemoteTrackPublicationMenuWidget(pub: audioPublication!, icon: Icons.volume_up),
-      if (videoPublication != null) RemoteTrackPublicationMenuWidget(pub: videoPublication!, icon: isScreenShare ? Icons.monitor : Icons.videocam),
-      if (videoPublication != null) RemoteTrackFPSMenuWidget(pub: videoPublication!, icon: Icons.menu),
-      if (videoPublication != null) RemoteTrackQualityMenuWidget(pub: videoPublication!, icon: Icons.monitor_outlined),
-    ]),
-  ];
-}
-
-class RemoteTrackPublicationMenuWidget extends StatelessWidget {
-  final IconData icon; final RemoteTrackPublication pub;
-  const RemoteTrackPublicationMenuWidget({required this.pub, required this.icon, super.key});
-  @override
-  Widget build(BuildContext context) => Material(color: Colors.black.withValues(alpha: 0.3), child: PopupMenuButton<Function>(icon: Icon(icon, color: Colors.white), onSelected: (value) => value(), itemBuilder: (ctx) => [
-    if (pub.subscribed == false) PopupMenuItem(child: const Text('Subscribe'), value: () => pub.subscribe()) else if (pub.subscribed == true) PopupMenuItem(child: const Text('Un-subscribe'), value: () => pub.unsubscribe()),
-  ]));
-}
-
-class RemoteTrackFPSMenuWidget extends StatelessWidget {
-  final IconData icon; final RemoteTrackPublication pub;
-  const RemoteTrackFPSMenuWidget({required this.pub, required this.icon, super.key});
-  @override
-  Widget build(BuildContext context) => Material(color: Colors.black.withValues(alpha: 0.3), child: PopupMenuButton<Function>(icon: Icon(icon, color: Colors.white), onSelected: (value) => value(), itemBuilder: (ctx) => [
-    PopupMenuItem(child: const Text('30'), value: () => pub.setVideoFPS(30)),
-    PopupMenuItem(child: const Text('15'), value: () => pub.setVideoFPS(15)),
-    PopupMenuItem(child: const Text('8'), value: () => pub.setVideoFPS(8)),
-  ]));
-}
-
-class RemoteTrackQualityMenuWidget extends StatelessWidget {
-  final IconData icon; final RemoteTrackPublication pub;
-  const RemoteTrackQualityMenuWidget({required this.pub, required this.icon, super.key});
-  @override
-  Widget build(BuildContext context) => Material(color: Colors.black.withValues(alpha: 0.3), child: PopupMenuButton<Function>(icon: Icon(icon, color: Colors.white), onSelected: (value) => value(), itemBuilder: (ctx) => [
-    PopupMenuItem(child: const Text('HIGH'), value: () => pub.setVideoQuality(VideoQuality.HIGH)),
-    PopupMenuItem(child: const Text('MEDIUM'), value: () => pub.setVideoQuality(VideoQuality.MEDIUM)),
-    PopupMenuItem(child: const Text('LOW'), value: () => pub.setVideoQuality(VideoQuality.LOW)),
-  ]));
 }

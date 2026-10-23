@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
 import '../../theme.dart';
+import '../utils/ui_utils.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -13,6 +15,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _rememberMe = true;
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -27,7 +30,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Veuillez remplir email et mot de passe.')),
+        SnackBar(
+          content: Text('Veuillez remplir email et mot de passe.', style: UIUtils.bodySmall(context)),
+          backgroundColor: LKColors.danger,
+          behavior: SnackBarBehavior.floating,
+          margin: UIUtils.paddingLG,
+          elevation: 4,
+        ),
       );
       return;
     }
@@ -39,98 +48,208 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: LKColors.background,
       body: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [LKColors.background, Color(0xFF0F1C37), LKColors.surface],
+            colors: [
+              LKColors.background,
+              LKColors.surfaceElevated,
+              LKColors.surfaceElevated,
+            ],
           ),
         ),
         child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              padding: UIUtils.paddingLG,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 460),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(20),
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 460),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                    // Logo Section
+                    AnimatedContainer(
+                      duration: UIUtils.animationDuration,
+                      padding: UIUtils.paddingXXL,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: LKColors.border),
-                        color: Colors.white.withValues(alpha: 0.04),
+                        borderRadius: UIUtils.borderRadiusAllXL,
+                        border: Border.all(color: LKColors.border, width: 0.5),
+                        color: Colors.white.withValues(alpha: 0.03),
                       ),
                       child: Row(
                         children: [
                           Container(
-                            width: 56,
-                            height: 56,
+                            width: 64,
+                            height: 64,
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(14),
+                              borderRadius: UIUtils.borderRadiusAllLG,
                               color: LKColors.primary.withValues(alpha: 0.15),
                             ),
-                            padding: const EdgeInsets.all(10),
-                            child: Image.asset('images/v.png'),
+                            padding: UIUtils.paddingMD,
+                            child: Image.asset(
+                              'images/v.png',
+                              fit: BoxFit.contain,
+                            ),
                           ),
-                          const SizedBox(width: 14),
-                          const Expanded(
+                          SizedBox(width: UIUtils.md),
+                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text('Videolog Sport', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                                SizedBox(height: 4),
-                                Text('Performance · Coaching · Live', style: TextStyle(color: LKColors.textSecondary)),
+                                Text(
+                                  'Videolog Sport',
+                                  style: UIUtils.titleLarge(context).copyWith(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                                SizedBox(height: UIUtils.xs),
+                                Text(
+                                  'Performance · Coaching · Live',
+                                  style: UIUtils.bodySmall(context).copyWith(
+                                        color: LKColors.textSecondary,
+                                      ),
+                                ),
                               ],
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    SizedBox(height: UIUtils.xxl),
+                    
+                    // Login Card
                     Card(
+                      color: LKColors.surfaceElevated,
+                      surfaceTintColor: Colors.transparent,
+                      elevation: 0,
+                      margin: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: UIUtils.borderRadiusAllXL,
+                        side: BorderSide(color: LKColors.border, width: 0.5),
+                      ),
                       child: Padding(
-                        padding: const EdgeInsets.all(20),
+                        padding: UIUtils.paddingXXL,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text('Connexion', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
-                            const SizedBox(height: 8),
-                            const Text('Accès fictif en attendant l\'API auth.', style: TextStyle(color: LKColors.textSecondary)),
-                            const SizedBox(height: 18),
+                            Text(
+                              'Connexion',
+                              style: UIUtils.titleLarge(context).copyWith(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                              textAlign: TextAlign.center,
+                            ),
+                            SizedBox(height: UIUtils.xs),
+                            Text(
+                              'Accès fictif en attendant l\'API auth.',
+                              style: UIUtils.bodySmall(context).copyWith(
+                                    color: LKColors.textHint,
+                                  ),
+                              textAlign: TextAlign.center,
+                            ),
+                            SizedBox(height: UIUtils.xxl),
+                            
+                            // Email Field
                             TextField(
                               controller: _emailCtrl,
                               keyboardType: TextInputType.emailAddress,
-                              decoration: const InputDecoration(
+                              decoration: UIUtils.inputDecoration(
                                 labelText: 'Email',
                                 hintText: 'athlete@videolog.app',
-                                prefixIcon: Icon(Icons.mail_outline),
+                                prefixIcon: Icons.mail_outline_rounded,
                               ),
+                              style: UIUtils.bodyLarge(context),
+                              cursorColor: LKColors.primary,
                             ),
-                            const SizedBox(height: 12),
+                            SizedBox(height: UIUtils.md),
+                            
+                            // Password Field
                             TextField(
                               controller: _passwordCtrl,
-                              obscureText: true,
-                              decoration: const InputDecoration(
+                              obscureText: _obscurePassword,
+                              decoration: UIUtils.inputDecoration(
                                 labelText: 'Mot de passe',
-                                prefixIcon: Icon(Icons.lock_outline),
+                                hintText: 'Entrez votre mot de passe',
+                                prefixIcon: Icons.lock_outline_rounded,
+                                suffixIcon: _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                                suffix: IconButton(
+                                  icon: Icon(
+                                    _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                                    color: LKColors.textSecondary,
+                                    size: 20,
+                                  ),
+                                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                                  padding: EdgeInsets.zero,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ),
+                              style: UIUtils.bodyLarge(context),
+                              cursorColor: LKColors.primary,
+                            ),
+                            SizedBox(height: UIUtils.sm),
+                            
+                            // Remember Me Checkbox
+                            AnimatedContainer(
+                              duration: UIUtils.animationDuration,
+                              decoration: BoxDecoration(
+                                borderRadius: UIUtils.borderRadiusAllSM,
+                                border: Border.all(color: LKColors.border, width: 0.3),
+                              ),
+                              child: CheckboxListTile(
+                                value: _rememberMe,
+                                contentPadding: UIUtils.paddingHorizontalMD.add(UIUtils.paddingVerticalSM),
+                                title: Text(
+                                  'Se souvenir de moi',
+                                  style: UIUtils.bodySmall(context),
+                                ),
+                                controlAffinity: ListTileControlAffinity.leading,
+                                activeColor: LKColors.primary,
+                                checkboxShape: RoundedRectangleBorder(
+                                  borderRadius: UIUtils.borderRadiusAllSM,
+                                ),
+                                side: BorderSide(color: LKColors.border, width: 0.5),
+                                onChanged: (value) => setState(() => _rememberMe = value ?? true),
                               ),
                             ),
-                            const SizedBox(height: 10),
-                            CheckboxListTile(
-                              value: _rememberMe,
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Se souvenir de moi', style: TextStyle(fontSize: 14)),
-                              controlAffinity: ListTileControlAffinity.leading,
-                              onChanged: (value) => setState(() => _rememberMe = value ?? true),
-                            ),
-                            const SizedBox(height: 8),
-                            ElevatedButton.icon(
+                            SizedBox(height: UIUtils.xxl),
+                            
+                            // Login Button
+                            FilledButton.icon(
                               onPressed: _login,
-                              icon: const Icon(Icons.login),
-                              label: const Text('Se connecter'),
+                              icon: Icon(Icons.login_rounded, size: 20),
+                              label: Text(
+                                'Se connecter',
+                                style: UIUtils.labelLarge(context).copyWith(color: Colors.white),
+                              ),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: LKColors.primary,
+                                foregroundColor: Colors.white,
+                                padding: UIUtils.paddingVerticalLG.add(UIUtils.paddingHorizontalXXL),
+                                shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
+                                elevation: 0,
+                                shadowColor: Colors.transparent,
+                              ),
+                            ),
+                            SizedBox(height: UIUtils.md),
+                            
+                            // Footer Text
+                            Text(
+                              'Videolog © 2026 · Tous droits réservés',
+                              style: UIUtils.bodySmall(context).copyWith(
+                                    color: LKColors.textHint,
+                                  ),
+                              textAlign: TextAlign.center,
                             ),
                           ],
                         ),
@@ -143,6 +262,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
+    ))
     );
   }
 }
