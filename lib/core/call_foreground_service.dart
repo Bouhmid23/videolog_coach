@@ -140,6 +140,10 @@ class CallForegroundService {
         await FlutterForegroundTask.checkNotificationPermission();
     if (permission != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();
+      if (await FlutterForegroundTask.checkNotificationPermission() != NotificationPermission.granted) {
+        debugPrint('Foreground service: Notification permission denied by user');
+        return;
+      }
     }
 
     await FlutterForegroundTask.saveData(key: _roomKey, value: roomName);

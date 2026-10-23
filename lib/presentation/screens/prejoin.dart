@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/call_foreground_service.dart';
 import '../../exts.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
@@ -178,6 +180,14 @@ class _PreJoinPageState extends State<PreJoinPage> {
 
   Future<void> _changeLocalVideoTrack() async {
     if (!_enableVideo) return;
+    
+    if (Platform.isAndroid) {
+      await CallForegroundService.start(
+        roomName: 'preview',
+        username: 'preview',
+      );
+    }
+    
     if (_videoTrack != null) {
       await _videoTrack!.stop();
       _videoTrack = null;
@@ -193,6 +203,9 @@ class _PreJoinPageState extends State<PreJoinPage> {
   @override
   void dispose() {
     unawaited(_subscription?.cancel());
+    if (Platform.isAndroid) {
+      unawaited(CallForegroundService.stop());
+    }
     super.dispose();
   }
 
