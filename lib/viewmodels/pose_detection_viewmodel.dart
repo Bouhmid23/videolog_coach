@@ -31,7 +31,13 @@ class _CapturedFrame {
 ///  - paquet « pose perdue » pour que le web efface le squelette.
 class PoseDetectionViewModel extends ChangeNotifier {
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
-    config: PoseDetectorConfig.realtime(),
+    // Force the plugin's TFLite/QNN path. Its default MediaPipe path requires
+    // libmediapipe_tasks_vision_jni.so, which is missing for x86_64 and can
+    // fail to load on some device builds. TFLite falls back to CPU when QNN
+    // is unavailable, including on Google Tensor and non-Snapdragon devices.
+    config: PoseDetectorConfig.realtime().copyWith(
+      preferredAcceleration: AccelerationMode.npu,
+    ),
   );
 
   /// Nombre de frames consécutives requises pour changer de label.

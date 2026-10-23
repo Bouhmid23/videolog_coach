@@ -12,11 +12,12 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "videolog/pip"
+        val DEFAULT_RATIO = Rational(9, 16)
     }
 
     private var pipChannel: MethodChannel? = null
     private var pipEnabled = false
-    private var pipAspectRatio = Rational(9, 16)
+    private var pipAspectRatio = DEFAULT_RATIO
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -28,7 +29,7 @@ class MainActivity : FlutterActivity() {
                 "enableAutoEnter" -> {
                     val width = call.argument<Int>("width") ?: 9
                     val height = call.argument<Int>("height") ?: 16
-                    pipAspectRatio = Rational(width, height)
+                    pipAspectRatio = safeRatio(width, height)
                     pipEnabled = true
                     updatePipParams()
                     result.success(true)
@@ -39,8 +40,7 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "enter" -> {
-                    pipEnabled = true
-                    updatePipParams()
+                    // Entrée manuelle : ne modifie pas pipEnabled (auto-enter).
                     result.success(enterPip())
                 }
                 "isInPip" -> result.success(isInPipMode())
@@ -64,9 +64,20 @@ class MainActivity : FlutterActivity() {
         pipChannel?.invokeMethod("pipModeChanged", isInPictureInPictureMode)
     }
 
+    // Android impose un ratio entre 1:2.39 et 2.39:1.
+    private fun safeRatio(w: Int, h: Int): Rational {
+        if (w <= 0 || h <= 0) return DEFAULT_RATIO
+        val r = w.toFloat() / h
+        return when {
+            r > 2.39f -> Rational(239, 100)
+            r < 1f / 2.39f -> Rational(100, 239)
+            else -> Rational(w, h)
+        }
+    }
+
     private fun supportsPip(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+                packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
     }
 
     private fun isInPipMode(): Boolean {
@@ -78,7 +89,9 @@ class MainActivity : FlutterActivity() {
         try {
             setPictureInPictureParams(buildPipParams())
         } catch (e: IllegalStateException) {
-            // Activity is not in a valid state to receive PiP params.
+            // Activity not in a valid state to receive PiP params.
+        } catch (e: IllegalArgumentException) {
+            // Invalid params (e.g. aspect ratio out of range).
         }
     }
 
@@ -97,6 +110,8 @@ class MainActivity : FlutterActivity() {
         return try {
             enterPictureInPictureMode(buildPipParams())
         } catch (e: IllegalStateException) {
+            false
+        } catch (e: IllegalArgumentException) {
             false
         }
     }
