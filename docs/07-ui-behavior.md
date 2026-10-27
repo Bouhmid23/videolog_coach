@@ -160,6 +160,28 @@ L'animation de l'inset dure 300 ms (courbe `easeOut`).
 | Déconnexion | retour à l'écran précédent |
 | Libération | désactivation wakelock, arrêt de tous les flux, libération de la session |
 
+### 6.4 Contrôle d'enregistrement Egress
+
+Le contrôle est intégré à la barre d'infos de la tuile locale, à la place des indicateurs
+Wi‑Fi et E2EE. Il n'y a plus d'overlay flottant en haut à droite de la session.
+
+| État | Affichage local | Action |
+|---|---|---|
+| `canControlRecording` + arrêt | bouton compact « Enregistrer » | ouvre le choix du layout |
+| `canControlRecording` + actif | pastille rouge + bouton stop | arrête l'Egress |
+| Démarrage / arrêt en cours | spinner + état désactivé | aucune |
+| Erreur | icône d'alerte | ouvre un dialogue expliquant l'erreur |
+| Sans droit de contrôle | Wi‑Fi et E2EE restent affichés, sauf enregistrement actif signalé par une pastille | aucun contrôle Egress |
+
+Layouts proposés : `grid`, `speaker`, `single`. Le contrôle n'est présent que sur la tuile
+du participant local ; les tuiles distantes conservent leurs indicateurs de connexion.
+
+Chaque action affiche un retour explicite : SnackBar « Démarrage… » / « Arrêt… », puis
+confirmation ou erreur. Pendant une transition, une pastille de statut et un spinner
+remplacent l'icône d'action ; en enregistrement actif, la pastille rouge `REC` et le bouton
+stop restent visibles. En cas d'erreur, un bouton d'alerte ouvre un dialogue avec l'option
+« Réessayer ».
+
 ## 7. Barre de contrôles
 
 ### 7.1 Boutons

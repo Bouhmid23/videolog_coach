@@ -51,6 +51,8 @@ class ParticipantInfoWidget extends StatelessWidget {
   final bool enabledE2EE;
   final bool isLocal;
   final bool isTop;
+  final Widget? trailing;
+  final bool showConnectionStatus;
 
   const ParticipantInfoWidget({
     this.title,
@@ -60,6 +62,8 @@ class ParticipantInfoWidget extends StatelessWidget {
     this.enabledE2EE = false,
     this.isLocal = false,
     this.isTop = false,
+    this.trailing,
+    this.showConnectionStatus = true,
     super.key,
   });
 
@@ -96,10 +100,7 @@ class ParticipantInfoWidget extends StatelessWidget {
         ),
       ],
     ),
-    padding: EdgeInsets.symmetric(
-      vertical: UIUtils.sm,
-      horizontal: UIUtils.md,
-    ),
+    padding: EdgeInsets.symmetric(vertical: UIUtils.sm, horizontal: UIUtils.md),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -120,7 +121,7 @@ class ParticipantInfoWidget extends StatelessWidget {
               ),
             ),
           ),
-        
+
         // Icônes d'état
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -133,27 +134,31 @@ class ParticipantInfoWidget extends StatelessWidget {
               !isScreenShare,
               audioAvailable ? 'Audio activé' : 'Audio désactivé',
             ),
-            
-            // Icône qualité de connexion
-            if (connectionQuality != ConnectionQuality.unknown) ...[
+
+            // Qualité de connexion / E2EE, remplacées par l'action locale.
+            if (showConnectionStatus) ...[
+              if (connectionQuality != ConnectionQuality.unknown)
+                _buildStatusIcon(
+                  context,
+                  _getConnectionIcon(connectionQuality),
+                  _getConnectionColor(connectionQuality),
+                  true,
+                  _getConnectionTooltip(connectionQuality),
+                ),
               _buildStatusIcon(
                 context,
-                _getConnectionIcon(connectionQuality),
-                _getConnectionColor(connectionQuality),
+                enabledE2EE ? Icons.lock : Icons.lock_open,
+                enabledE2EE ? Colors.green : Colors.red,
                 true,
-                _getConnectionTooltip(connectionQuality),
+                enabledE2EE ? 'Chiffré (E2EE)' : 'Non chiffré',
               ),
             ],
-            
-            // Icône E2EE
-            _buildStatusIcon(
-              context,
-              enabledE2EE ? Icons.lock : Icons.lock_open,
-              enabledE2EE ? Colors.green : Colors.red,
-              true,
-              enabledE2EE ? 'Chiffré (E2EE)' : 'Non chiffré',
-            ),
-            
+            if (trailing != null)
+              Padding(
+                padding: EdgeInsets.only(left: UIUtils.sm),
+                child: trailing,
+              ),
+
             // Icône participant local
             if (isLocal) ...[
               _buildStatusIcon(
@@ -179,7 +184,7 @@ class ParticipantInfoWidget extends StatelessWidget {
     String tooltip,
   ) {
     if (!show) return const SizedBox.shrink();
-    
+
     return Tooltip(
       message: tooltip,
       decoration: BoxDecoration(
@@ -187,19 +192,12 @@ class ParticipantInfoWidget extends StatelessWidget {
         borderRadius: UIUtils.borderRadiusAllSM,
         border: Border.all(color: LKColors.border, width: 0.5),
       ),
-      textStyle: const TextStyle(
-        color: LKColors.textPrimary,
-        fontSize: 10,
-      ),
+      textStyle: const TextStyle(color: LKColors.textPrimary, fontSize: 10),
       preferBelow: false,
       margin: EdgeInsets.all(UIUtils.xs),
       child: Padding(
         padding: EdgeInsets.only(left: UIUtils.sm),
-        child: Icon(
-          icon,
-          color: color ?? Colors.white,
-          size: 16,
-        ),
+        child: Icon(icon, color: color ?? Colors.white, size: 16),
       ),
     );
   }

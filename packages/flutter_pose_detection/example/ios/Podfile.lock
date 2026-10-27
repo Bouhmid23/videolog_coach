@@ -1,0 +1,64 @@
+PODS:
+  - camera_avfoundation (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - flutter_pose_detection (0.1.0):
+    - Flutter
+    - TensorFlowLiteSwift/CoreML (~> 2.14.0)
+    - TensorFlowLiteSwift/Metal (~> 2.14.0)
+  - image_picker_ios (0.0.1):
+    - Flutter
+  - integration_test (0.0.1):
+    - Flutter
+  - TensorFlowLiteC (2.14.0):
+    - TensorFlowLiteC/Core (= 2.14.0)
+  - TensorFlowLiteC/Core (2.14.0)
+  - TensorFlowLiteC/CoreML (2.14.0):
+    - TensorFlowLiteC/Core
+  - TensorFlowLiteC/Metal (2.14.0):
+    - TensorFlowLiteC/Core
+  - TensorFlowLiteSwift/Core (2.14.0):
+    - TensorFlowLiteC (= 2.14.0)
+  - TensorFlowLiteSwift/CoreML (2.14.0):
+    - TensorFlowLiteC/CoreML (= 2.14.0)
+    - TensorFlowLiteSwift/Core (= 2.14.0)
+  - TensorFlowLiteSwift/Metal (2.14.0):
+    - TensorFlowLiteC/Metal (= 2.14.0)
+    - TensorFlowLiteSwift/Core (= 2.14.0)
+
+DEPENDENCIES:
+  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
+  - Flutter (from `Flutter`)
+  - flutter_pose_detection (from `.symlinks/plugins/flutter_pose_detection/ios`)
+  - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+
+SPEC REPOS:
+  trunk:
+    - TensorFlowLiteC
+    - TensorFlowLiteSwift
+
+EXTERNAL SOURCES:
+  camera_avfoundation:
+    :path: ".symlinks/plugins/camera_avfoundation/ios"
+  Flutter:
+    :path: Flutter
+  flutter_pose_detection:
+    :path: ".symlinks/plugins/flutter_pose_detection/ios"
+  image_picker_ios:
+    :path: ".symlinks/plugins/image_picker_ios/ios"
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+
+SPEC CHECKSUMS:
+  camera_avfoundation: 5675ca25298b6f81fa0a325188e7df62cc217741
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_pose_detection: 1f78741be33f5af2256eb3f75c2d05dc89579438
+  image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
+  integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
+  TensorFlowLiteC: a836de9b6e6018665ccc349538bdd2c3b80dd7a5
+  TensorFlowLiteSwift: f706b143b69d7bf433aba7b08049bdd11c321a10
+
+PODFILE CHECKSUM: 94e7bf5ffb01548dfc0edd9639f7359ea94d3a21
+
+COCOAPODS: 1.16.2

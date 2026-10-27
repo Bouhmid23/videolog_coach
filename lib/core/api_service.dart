@@ -121,6 +121,11 @@ class ApiService {
       'Accept': 'application/json',
       if (body != null) 'Content-Type': 'application/json',
     };
+    final isRecordingRequest = path.contains('/recording');
+
+    if (kDebugMode) {
+      debugPrint('[API] -> $method $uri');
+    }
 
     late final http.Response response;
     try {
@@ -136,20 +141,27 @@ class ApiService {
             .timeout(_timeout);
       }
     } on TimeoutException {
+      if (kDebugMode) debugPrint('[API] TIMEOUT $method $path');
       throw const ApiException(0, 'Délai dépassé. Vérifiez votre connexion.');
     } on SocketException {
+      if (kDebugMode) debugPrint('[API] SOCKET $method $path');
       throw const ApiException(
         0,
         'Réseau indisponible. Vérifiez votre connexion.',
       );
     } on http.ClientException {
+      if (kDebugMode) debugPrint('[API] CLIENT $method $path');
       throw const ApiException(0, 'Connexion au serveur impossible.');
     }
 
     if (kDebugMode) {
       debugPrint('[API] $method $path -> HTTP ${response.statusCode}');
-      if (path == '/mobile/rooms') {
-        debugPrint('[API] GET /mobile/rooms body: ${response.body}');
+      if (path == '/mobile/rooms' || isRecordingRequest) {
+        final raw = response.body;
+        final preview = raw.length > 2000
+            ? '${raw.substring(0, 2000)}… (${raw.length} caractères)'
+            : raw;
+        debugPrint('[API] $method $path body: $preview');
       }
     }
 

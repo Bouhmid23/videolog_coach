@@ -169,7 +169,7 @@ dispose()
 | Domaine | Constantes critiques | Doc |
 |---|---|---|
 | Réseau | `https://api.videolog.app/token`, `wss://livekit.videolog.app`, room `poc-room` | 01 |
-| Fréquences | télémétrie 500 ms (2 Hz) ; posture **continue** (débit NPU, repli 100 ms) ; HUD lunettes throttle 2 s | 02, 06, 04 |
+| Fréquences | télémétrie 500 ms (2 Hz) ; posture **continue** (débit GPU, repli 100 ms) ; HUD lunettes throttle 2 s | 02, 06, 04 |
 | ActiveLook | service `…CB7`, RX `…CBA`, cmdIds `00/01/05/10/22/37/39`, rotation `0x04`, fonts 1/2/3, couleurs `0x0F`/`0x09`, y = 25/85/145/205, MTU 512, chunk 128 | 04 |
 | Capteurs | HR `180D/2A37`, CSC `1816/2A5B`, Battery `180F/2A19` | 05 |
 | Posture | α = 0.35, seuils 48° / 0.35 / 0.7, confiance = moyenne épaules+hanches, visibilité filtre 0.2 | 06 |

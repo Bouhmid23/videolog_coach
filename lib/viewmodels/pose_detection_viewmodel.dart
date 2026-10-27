@@ -1,25 +1,32 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart'
-    show ChangeNotifier, ValueNotifier, kIsWeb, debugPrint, kDebugMode;
+    show ChangeNotifier, ValueNotifier, kDebugMode, kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../core/posture_detection_service.dart';
 import '../data/posture_codec.dart';
 import '../data/remote_posture.dart';
 
-/// Octets d'une frame et instant où elle a été capturée. Le timestamp reste
-/// attaché à l'image : la capture N+1 tourne pendant la détection N.
+/// Chemin du JPEG capturé et instant où l'image a été prise. Le timestamp
+/// reste attaché à l'image : la capture N+1 tourne pendant la détection N.
 class _CapturedFrame {
-  const _CapturedFrame(this.bytes, this.capturedAt);
+  const _CapturedFrame(
+    this.bytes,
+    this.capturedAt,
+    this.videoTimestampMs,
+    this.captureMicros,
+  );
 
   final Uint8List bytes;
   final DateTime capturedAt;
+  final int videoTimestampMs;
+  final int captureMicros;
 }
 
 /// Dernière pose détectée, prête à être dessinée par l'UI.
@@ -35,30 +42,31 @@ class PoseFrame {
   final DateTime capturedAt;
 }
 
-/// Capture la caméra locale, détecte la pose (NPU) et publie le squelette
+/// Capture la caméra locale, détecte la pose (MediaPipe lite en mode VIDEO) et publie le squelette
 /// en binaire sur le topic `posture`. La dernière pose est aussi exposée via
 /// [frameNotifier] pour le rendu local du squelette.
 ///
 /// Choix pour le temps réel :
 ///  - pipeline à 2 étages : la capture N+1 démarre pendant la détection N ;
-///  - aucune limitation de cadence ni delta encoding (≈3 Ko/s à 30 fps) ;
+///  - aucune limitation de cadence ni delta encoding (≈8.25 Ko/s à 30 poses/s) ;
 ///  - canal lossy, `publishData` non attendu ;
-///  - taille de frame lue dans l'en-tête PNG (pas de décodage d'image) ;
+///  - capture JPEG gardée en mémoire et dimensions lues depuis le résultat ;
 ///  - paquet « pose perdue » pour que le web efface le squelette.
 class PoseDetectionViewModel extends ChangeNotifier {
   final PostureSmoothing _smoothing = PostureSmoothing();
 
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
-    // Force the plugin's TFLite/QNN path. Its default MediaPipe path requires
-    // libmediapipe_tasks_vision_jni.so, which is missing for x86_64 and can
-    // fail to load on some device builds. TFLite falls back to CPU when QNN
-    // is unavailable, including on Google Tensor and non-Snapdragon devices.
-    config: PoseDetectorConfig(
-      //maxPoses: ,
-      //preferredAcceleration: AccelerationMode.cpu,
+    // Le backend GPU MediaPipe est le plus rapide pour un flux caméra continu.
+    // Le mode NPU/QNN vise l'autonomie mais est plus lent et nécessite des
+    // bibliothèques QNN supplémentaires non embarquées dans l'application.
+    config: PoseDetectorConfig.realtime().copyWith(
+      maxPoses: 1,
+      minConfidence: 0.5,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
       enableZEstimation: true,
-      minConfidence: 0.6,
-      mode: DetectionMode.fast,
+      preferredAcceleration: AccelerationMode.gpu,
     ),
   );
 
@@ -71,7 +79,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
   List<String>? _destinationIdentities;
   int _seq = 0;
 
-  Size? _lastSize;
   bool _hadPose = false;
   DateTime _lastLostSent = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -80,11 +87,18 @@ class PoseDetectionViewModel extends ChangeNotifier {
   int _captureSamples = 0;
   int _detectMicros = 0;
   int _detectSamples = 0;
+  int _inferMicros = 0;
+  int _inferSamples = 0;
   int _publishMicros = 0;
   int _publishSamples = 0;
   int _publishedSinceStats = 0;
   int _seqAtLastStats = 0;
   DateTime _statsWindowStart = DateTime.now();
+  DateTime _lastRuntimeLandmarkLog = DateTime.fromMillisecondsSinceEpoch(0);
+  Size? _lastFrameSize;
+
+  final Stopwatch _videoClock = Stopwatch()..start();
+
 
   // Stabilisation du label (hystérésis)
   String? _stableLabel;
@@ -94,7 +108,9 @@ class PoseDetectionViewModel extends ChangeNotifier {
   RemotePosture? _currentPosture;
 
   /// Dernière pose (coordonnées source + taille de frame) pour l'overlay local.
-  final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(null);
+  final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(
+    null,
+  );
 
   RemotePosture? get currentPosture => _currentPosture;
   bool get isBusy => _running;
@@ -102,9 +118,15 @@ class PoseDetectionViewModel extends ChangeNotifier {
   Future<void> init() async {
     final acceleration = await _poseDetector.initialize();
     final config = _poseDetector.config;
-    debugPrint('🧠 Pose detector ready: acceleration=${acceleration.name} '
-        'mode=${config.mode.name} maxPoses=${config.maxPoses} '
-        'zEstimation=${config.enableZEstimation}');
+    debugPrint(
+      '🧠 Pose detector ready: acceleration=${acceleration.name} '
+      'mode=${config.mode.name} maxPoses=${config.maxPoses} '
+      'minConfidence=${config.minConfidence} '
+      'detection=${config.effectivePoseDetectionConfidence} '
+      'presence=${config.effectivePosePresenceConfidence} '
+      'tracking=${config.effectiveTrackingConfidence} '
+      'zEstimation=${config.enableZEstimation} runningMode=VIDEO',
+    );
   }
 
   /// [destinationIdentities] : si seul le viewer web consomme le squelette,
@@ -133,7 +155,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
     if (_running && _hadPose) _publishLost(DateTime.now());
     _running = false;
     _hadPose = false;
-    _lastSize = null;
     _stableLabel = null;
     _candidateLabel = null;
     _candidateCount = 0;
@@ -172,19 +193,30 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
       final detectWatch = Stopwatch()..start();
       try {
-        final result = await _poseDetector.detectPose(frame.bytes);
+        final result = await _poseDetector.detectPoseVideo(
+          frame.bytes,
+          frame.videoTimestampMs,
+        );
         if (!_running) break;
         detectWatch.stop();
-        _detectMicros += detectWatch.elapsedMicroseconds;
+        final detectMicros = detectWatch.elapsedMicroseconds;
+        _detectMicros += detectMicros;
         _detectSamples++;
+        _inferMicros += result.processingTimeMs * 1000;
+        _inferSamples++;
 
         if (!result.hasPoses) {
           _onLost(frame.capturedAt);
         } else {
-          final size = await _frameSize(frame.bytes);
-          if (kDebugMode) _debugLog(frame.bytes, result.firstPose!, size);
-          _lastSize = size;
+          final size = result.imageWidth > 0 && result.imageHeight > 0
+              ? Size(
+                  result.imageWidth.toDouble(),
+                  result.imageHeight.toDouble(),
+                )
+              : _fallbackSize;
+          _lastFrameSize = size;
           final pose = _smoothing.smooth(result.firstPose!);
+          _logRuntimeLandmarks(pose);
           frameNotifier.value = PoseFrame(
             pose: pose,
             frameSize: size,
@@ -192,7 +224,15 @@ class PoseDetectionViewModel extends ChangeNotifier {
           );
           final posture = _stabilizedPosture(classifyPosture(pose));
           _hadPose = true;
-          _publish(pose, posture, size, capturedAt: frame.capturedAt);
+          _publish(
+            pose,
+            posture,
+            size,
+            capturedAt: frame.capturedAt,
+            captureMicros: frame.captureMicros,
+            detectMicros: detectMicros,
+            inferMicros: result.processingTimeMs * 1000,
+          );
         }
       } catch (error) {
         if (detectWatch.isRunning) {
@@ -210,6 +250,33 @@ class PoseDetectionViewModel extends ChangeNotifier {
     }
   }
 
+  /// Runtime evidence: prints detector image-z and MediaPipe metric world-z
+  /// ranges so the on-device configuration/output can be checked in logcat.
+  void _logRuntimeLandmarks(Pose pose) {
+    final now = DateTime.now();
+    if (now.difference(_lastRuntimeLandmarkLog) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastRuntimeLandmarkLog = now;
+    final imageZ = pose.landmarks
+        .where((point) => point.visibility >= 0.5)
+        .map((point) => point.z)
+        .toList();
+    final world = pose.worldLandmarks
+        .where((point) => point.visibility >= 0.5)
+        .toList();
+    double minOf(List<double> values) =>
+        values.isEmpty ? 0 : values.reduce(math.min);
+    double maxOf(List<double> values) =>
+        values.isEmpty ? 0 : values.reduce(math.max);
+    debugPrint(
+      '📐 pose-runtime imageZ=${minOf(imageZ).toStringAsFixed(3)}..'
+      '${maxOf(imageZ).toStringAsFixed(3)} worldCount=${world.length}/33 '
+      'worldZ=${minOf(world.map((point) => point.z).toList()).toStringAsFixed(3)}..'
+      '${maxOf(world.map((point) => point.z).toList()).toStringAsFixed(3)}m',
+    );
+  }
+
   /// Moyennes capture/détection/publication et débits sur la dernière seconde.
   /// `publishData/s` doit être égal au débit de `seq`.
   void _logStats() {
@@ -220,11 +287,17 @@ class PoseDetectionViewModel extends ChangeNotifier {
     final seconds = elapsed.inMicroseconds / 1000000.0;
     double averageMs(int micros, int samples) =>
         samples == 0 ? 0 : micros / samples / 1000.0;
+    final size = _lastFrameSize;
+    final resolution = size == null
+        ? 'unknown'
+        : '${size.width.toInt()}x${size.height.toInt()}';
 
     debugPrint(
       '📊 pose ${seconds.toStringAsFixed(2)}s '
+      'model=lite resolution=$resolution '
       'capture=${averageMs(_captureMicros, _captureSamples).toStringAsFixed(1)}ms '
       'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
+      'infer=${averageMs(_inferMicros, _inferSamples).toStringAsFixed(1)}ms '
       'publish=${averageMs(_publishMicros, _publishSamples).toStringAsFixed(1)}ms '
       'capture=${(_captureSamples / seconds).toStringAsFixed(1)}fps '
       'publishData=${(_publishedSinceStats / seconds).toStringAsFixed(1)}/s '
@@ -235,6 +308,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _captureSamples = 0;
     _detectMicros = 0;
     _detectSamples = 0;
+    _inferMicros = 0;
+    _inferSamples = 0;
     _publishMicros = 0;
     _publishSamples = 0;
     _publishedSinceStats = 0;
@@ -257,9 +332,16 @@ class PoseDetectionViewModel extends ChangeNotifier {
     // Horodatage AVANT la capture : c'est l'instant où l'image est prise, pas
     // celui où l'inférence se termine ni celui de la publication.
     final capturedAt = DateTime.now();
+    final videoTimestampMs = _videoClock.elapsedMilliseconds;
     try {
       final buffer = await track.mediaStreamTrack.captureFrame();
-      return _CapturedFrame(Uint8List.view(buffer), capturedAt);
+      final captureMicros = watch.elapsedMicroseconds;
+      return _CapturedFrame(
+        Uint8List.view(buffer),
+        capturedAt,
+        videoTimestampMs,
+        captureMicros,
+      );
     } catch (error) {
       debugPrint('⚠️ Pose capture failed: $error');
       return null;
@@ -268,100 +350,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
       _captureMicros += watch.elapsedMicroseconds;
       _captureSamples++;
     }
-  }
-
-  DateTime _sizeCheckedAt = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _lastDebug = DateTime.fromMillisecondsSinceEpoch(0);
-
-  /// Taille de la frame capturée : en-tête PNG/JPEG (gratuit) ; sinon décodage
-  /// de l'image, mis en cache et revérifié toutes les 3 s (rotation).
-  /// Une taille fausse fausse toute la normalisation des landmarks.
-  Future<Size> _frameSize(Uint8List bytes) async {
-    final header = _pngSize(bytes) ?? _jpegSize(bytes);
-    if (header != null) {
-      _lastSize = header;
-      return header;
-    }
-    final now = DateTime.now();
-    if (_lastSize == null ||
-        now.difference(_sizeCheckedAt) > const Duration(seconds: 3)) {
-      _sizeCheckedAt = now;
-      try {
-        final codec = await ui.instantiateImageCodec(bytes);
-        try {
-          final frame = await codec.getNextFrame();
-          _lastSize = Size(
-            frame.image.width.toDouble(),
-            frame.image.height.toDouble(),
-          );
-          frame.image.dispose();
-        } finally {
-          codec.dispose();
-        }
-      } catch (error) {
-        debugPrint('⚠️ Frame size decode failed: $error');
-      }
-    }
-    return _lastSize ?? _fallbackSize;
-  }
-
-  /// Taille d'un JPEG lue dans le marqueur SOF. Renvoie null si [b] n'est pas un JPEG.
-  Size? _jpegSize(Uint8List b) {
-    if (b.length < 4 || b[0] != 0xFF || b[1] != 0xD8) return null;
-    var i = 2;
-    while (i + 9 < b.length) {
-      if (b[i] != 0xFF) {
-        i++;
-        continue;
-      }
-      final marker = b[i + 1];
-      if (marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
-        i += 2;
-        continue;
-      }
-      final len = (b[i + 2] << 8) | b[i + 3];
-      final isSof = marker >= 0xC0 &&
-          marker <= 0xCF &&
-          marker != 0xC4 &&
-          marker != 0xC8 &&
-          marker != 0xCC;
-      if (isSof) {
-        final h = (b[i + 5] << 8) | b[i + 6];
-        final w = (b[i + 7] << 8) | b[i + 8];
-        return Size(w.toDouble(), h.toDouble());
-      }
-      i += 2 + len;
-    }
-    return null;
-  }
-
-  /// Une ligne toutes les 2 s (debug uniquement) : sert à vérifier la taille de
-  /// frame et l'espace des coordonnées (pixels ou 0..1) renvoyés par le détecteur.
-  void _debugLog(Uint8List bytes, Pose pose, Size size) {
-    final now = DateTime.now();
-    if (now.difference(_lastDebug) < const Duration(seconds: 2)) return;
-    _lastDebug = now;
-    final shoulder = pose.getLandmark(LandmarkType.leftShoulder);
-    final hip = pose.getLandmark(LandmarkType.leftHip);
-    final zs = pose.landmarks
-        .where((l) => l.visibility > 0.5)
-        .map((l) => l.z)
-        .toList();
-    final zMin = zs.isEmpty ? 0.0 : zs.reduce(math.min);
-    final zMax = zs.isEmpty ? 0.0 : zs.reduce(math.max);
-    debugPrint('📐 frame=${size.width.toInt()}x${size.height.toInt()} '
-        'magic=${bytes[0].toRadixString(16)}${bytes[1].toRadixString(16)} '
-        'shoulder=(${shoulder.x}, ${shoulder.y}) '
-        'hip=(${hip.x}, ${hip.y}, vis=${hip.visibility}) '
-        'z[min..max]=${zMin.toStringAsFixed(3)}..${zMax.toStringAsFixed(3)}');
-  }
-
-  /// Taille d'un PNG lue dans l'en-tête IHDR (largeur 16-19, hauteur 20-23).
-  /// Renvoie null si [b] n'est pas un PNG.
-  Size? _pngSize(Uint8List b) {
-    if (b.length < 24 || b[0] != 0x89 || b[1] != 0x50) return null;
-    final bd = ByteData.sublistView(b);
-    return Size(bd.getUint32(16).toDouble(), bd.getUint32(20).toDouble());
   }
 
   // ---------------------------------------------------------------------------
@@ -373,18 +361,31 @@ class PoseDetectionViewModel extends ChangeNotifier {
     RemotePosture? posture,
     Size frameSize, {
     required DateTime capturedAt,
+    required int captureMicros,
+    required int detectMicros,
+    required int inferMicros,
   }) {
     if (_room?.localParticipant == null) return;
 
+    final seq = ++_seq;
     final bytes = PostureCodec.encode(
       label: posture?.label ?? 'inconnu',
       confidence: posture?.confidence,
       landmarks: pose.landmarks,
+      worldLandmarks: pose.worldLandmarks,
       frameSize: frameSize,
-      seq: ++_seq,
+      seq: seq,
       timestampMs: capturedAt.millisecondsSinceEpoch,
     );
-    _send(bytes, 'posture');
+    _send(
+      bytes,
+      'posture',
+      frameSeq: seq,
+      frameSize: frameSize,
+      captureMicros: captureMicros,
+      detectMicros: detectMicros,
+      inferMicros: inferMicros,
+    );
   }
 
   void _publishLost(DateTime capturedAt) {
@@ -399,7 +400,15 @@ class PoseDetectionViewModel extends ChangeNotifier {
   }
 
   /// Envoi lossy non attendu, avec mesure de la durée jusqu'au retour du futur.
-  void _send(Uint8List bytes, String kind) {
+  void _send(
+    Uint8List bytes,
+    String kind, {
+    int? frameSeq,
+    Size? frameSize,
+    int? captureMicros,
+    int? detectMicros,
+    int? inferMicros,
+  }) {
     final participant = _room?.localParticipant;
     if (participant == null) return;
 
@@ -408,22 +417,32 @@ class PoseDetectionViewModel extends ChangeNotifier {
     unawaited(
       participant
           .publishData(
-        bytes,
-        reliable: false,
-        topic: 'posture',
-        destinationIdentities: _destinationIdentities,
-      )
+            bytes,
+            reliable: false,
+            topic: 'posture',
+            destinationIdentities: _destinationIdentities,
+          )
           .then((_) {
-        watch.stop();
-        _publishMicros += watch.elapsedMicroseconds;
-        _publishSamples++;
-      })
+            watch.stop();
+            _publishMicros += watch.elapsedMicroseconds;
+            _publishSamples++;
+            if (kDebugMode && frameSeq != null && frameSize != null) {
+              debugPrint(
+                '📊 pose-frame seq=$frameSeq model=lite '
+                'resolution=${frameSize.width.toInt()}x${frameSize.height.toInt()} '
+                'capture=${(captureMicros ?? 0) / 1000.0}ms '
+                'detect=${(detectMicros ?? 0) / 1000.0}ms '
+                'infer=${(inferMicros ?? 0) / 1000.0}ms '
+                'publish=${watch.elapsedMicroseconds / 1000.0}ms',
+              );
+            }
+          })
           .catchError((Object e) {
-        watch.stop();
-        _publishMicros += watch.elapsedMicroseconds;
-        _publishSamples++;
-        debugPrint('⚠️ Failed to publish $kind: $e');
-      }),
+            watch.stop();
+            _publishMicros += watch.elapsedMicroseconds;
+            _publishSamples++;
+            debugPrint('⚠️ Failed to publish $kind: $e');
+          }),
     );
   }
 
@@ -431,12 +450,14 @@ class PoseDetectionViewModel extends ChangeNotifier {
   /// toutes les 500 ms tant que la pose reste absente.
   void _onLost(DateTime capturedAt) {
     final now = DateTime.now();
-    if (_hadPose || now.difference(_lastLostSent) > const Duration(milliseconds: 500)) {
+    if (_hadPose ||
+        now.difference(_lastLostSent) > const Duration(milliseconds: 500)) {
       _hadPose = false;
       _lastLostSent = now;
       _publishLost(capturedAt);
     }
-    _stableLabel = null;
+    // Keep the last stable label through transient detector dropouts; otherwise
+    // the next first frame bypasses the three-frame hysteresis.
     _candidateLabel = null;
     _candidateCount = 0;
     _smoothing.reset();
@@ -455,6 +476,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
   /// consécutives identiques. N'affecte pas le squelette, seulement le label.
   RemotePosture? _stabilizedPosture(RemotePosture? raw) {
     if (raw == null) {
+      _candidateLabel = null;
+      _candidateCount = 0;
+      if (_currentPosture != null) {
+        _currentPosture = null;
+        notifyListeners();
+      }
       return null;
     }
 
@@ -492,6 +519,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   RemotePosture? classifyPosture(Pose pose) {
     PoseLandmark? landmark(LandmarkType type) => pose.getLandmark(type);
+    bool visible(LandmarkType type) =>
+        (landmark(type)?.visibility ?? 0) >= 0.5;
 
     double averageLikelihood(List<PoseLandmark?> landmarks) {
       final values = landmarks
@@ -509,6 +538,14 @@ class PoseDetectionViewModel extends ChangeNotifier {
       return Offset((left.x + right.x) / 2, (left.y + right.y) / 2);
     }
 
+    const torsoPoints = [
+      LandmarkType.leftShoulder,
+      LandmarkType.rightShoulder,
+      LandmarkType.leftHip,
+      LandmarkType.rightHip,
+    ];
+    if (!torsoPoints.every(visible)) return null;
+
     final shoulderMid = midpoint(
       LandmarkType.leftShoulder,
       LandmarkType.rightShoulder,
@@ -521,20 +558,37 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
     final torsoDx = shoulderMid.dx - hipMid.dx;
     final torsoDy = hipMid.dy - shoulderMid.dy;
-    final torsoAngleDeg = math.atan2(
-      torsoDx.abs(),
-      torsoDy.abs().clamp(1e-6, double.infinity).toDouble(),
-    ) *
+    final torsoAngleDeg =
+        math.atan2(
+          torsoDx.abs(),
+          torsoDy.abs().clamp(1e-6, double.infinity).toDouble(),
+        ) *
         180 /
         math.pi;
 
-    // Plancher minuscule (et non 1.0) : valable que les coordonnées soient
-    // en pixels ou normalisées 0..1.
-    final torsoLength = math.max((hipMid.dy - shoulderMid.dy).abs(), 1e-6);
-    final kneeDrop =
-    kneeMid == null ? 0.0 : (kneeMid.dy - hipMid.dy) / torsoLength;
-    final ankleDrop =
-    ankleMid == null ? 0.0 : (ankleMid.dy - hipMid.dy) / torsoLength;
+    // A horizontal torso is enough to identify lying down. For seated/standing,
+    // require visible knees and ankles instead of interpreting missing points
+    // at (0, 0) as a standing posture.
+    late final String label;
+    if (torsoAngleDeg > 48) {
+      label = 'allong\u00e9';
+    } else {
+      const legPoints = [
+        LandmarkType.leftKnee,
+        LandmarkType.rightKnee,
+        LandmarkType.leftAnkle,
+        LandmarkType.rightAnkle,
+      ];
+      if (!legPoints.every(visible)) return null;
+      final legTorsoLength = math.max((hipMid.dy - shoulderMid.dy).abs(), 1e-6);
+      final kneeDrop = kneeMid == null
+          ? 0.0
+          : (kneeMid.dy - hipMid.dy) / legTorsoLength;
+      final ankleDrop = ankleMid == null
+          ? 0.0
+          : (ankleMid.dy - hipMid.dy) / legTorsoLength;
+      label = kneeDrop < 0.35 && ankleDrop < 0.7 ? 'assis' : 'debout';
+    }
 
     final confidence = averageLikelihood([
       landmark(LandmarkType.leftShoulder),
@@ -542,10 +596,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
       landmark(LandmarkType.leftHip),
       landmark(LandmarkType.rightHip),
     ]);
-
-    final label = torsoAngleDeg > 48
-        ? 'allong\u00e9'
-        : (kneeDrop < 0.35 && ankleDrop < 0.7 ? 'assis' : 'debout');
 
     return RemotePosture(
       label: label,
@@ -562,4 +612,3 @@ class PoseDetectionViewModel extends ChangeNotifier {
     super.dispose();
   }
 }
-

@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:go_router/go_router.dart';
@@ -12,7 +12,6 @@ import '../../utils.dart';
 import '../utils/ui_utils.dart';
 import '../widgets/controls.dart';
 import '../widgets/participant.dart';
-import '../widgets/recording_controls.dart';
 import '../../viewmodels/room_viewmodel.dart';
 
 class RoomPage extends StatefulWidget {
@@ -42,7 +41,8 @@ class _RoomPageState extends State<RoomPage> {
   RecordingController? _recordingController;
 
   static const double _galleryHeight = 180;
-  static const double _galleryHudHeight = 84;  // Valeurs visibles sur plusieurs lignes
+  static const double _galleryHudHeight =
+      84; // Valeurs visibles sur plusieurs lignes
 
   @override
   void initState() {
@@ -64,12 +64,16 @@ class _RoomPageState extends State<RoomPage> {
     unawaited(PipService.enableAutoEnter());
 
     WidgetsBindingCompatible.instance?.addPostFrameCallback((_) async {
-      await _vm.init(widget.room, widget.listener,
-          role: widget.role, onDisconnected: () {
-        if (mounted) {
-          context.pop();
-        }
-      });
+      await _vm.init(
+        widget.room,
+        widget.listener,
+        role: widget.role,
+        onDisconnected: () {
+          if (mounted) {
+            context.pop();
+          }
+        },
+      );
       if (mounted) setState(() {});
     });
 
@@ -125,23 +129,11 @@ class _RoomPageState extends State<RoomPage> {
                       primaryTrack,
                       showStatsLayer: !inPip,
                       infoAtTop: !inPip,
+                      recordingController: _recordingController,
                     )
                   : _buildEmptyState('Aucun participant principal'),
             ),
           ),
-
-          // ========================================================================
-          // CONTRÔLE D'ENREGISTREMENT EGRESS
-          // ========================================================================
-          if (!inPip && _recordingController != null)
-            Positioned(
-              top: 0,
-              right: 0,
-              child: SafeArea(
-                minimum: const EdgeInsets.only(top: 8, right: 8),
-                child: RecordingControls(controller: _recordingController!),
-              ),
-            ),
 
           // ========================================================================
           // OVERLAY BAS : autres users -> contr��les
@@ -152,67 +144,68 @@ class _RoomPageState extends State<RoomPage> {
               right: 0,
               bottom: 0,
               child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // ===========================================================
-                // GALERIE DES PARTICIPANTS SECONDAIRES (scrollable horizontalement)
-                // ===========================================================
-                if (secondaryTracks.isNotEmpty)
-                  Padding(
-                    padding: EdgeInsets.only(bottom: UIUtils.sm),
-                    child: SizedBox(
-                      height: _galleryHeight + _galleryHudHeight,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        padding: EdgeInsets.symmetric(horizontal: UIUtils.md),
-                        itemCount: secondaryTracks.length,
-                        separatorBuilder: (_, _) => SizedBox(width: UIUtils.sm),
-                        itemBuilder: (BuildContext context, int index) {
-                          final track = secondaryTracks[index];
-                          final hasHud =
-                              track.telemetry != null ;
-                          return SizedBox(
-                            width: _galleryHeight,
-                            height: _galleryHeight + _galleryHudHeight,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                // HUD de télémétrie au-dessus de la tuile
-                                SizedBox(
-                                  height: _galleryHudHeight,
-                                  child: hasHud
-                                      ? DataHud(
-                                          telemetry: track.telemetry,
-                                          //posture: track.posture,
-                                          //showPosture: track.showPosture,
-                                        )
-                                      : const SizedBox.shrink(),
-                                ),
-                                // Tuile vidéo du participant (HUD interne désactivé)
-                                SizedBox(
-                                  width: _galleryHeight,
-                                  height: _galleryHeight,
-                                  child: ParticipantWidget.widgetFor(
-                                    track,
-                                    showDataHud: false,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ===========================================================
+                  // GALERIE DES PARTICIPANTS SECONDAIRES (scrollable horizontalement)
+                  // ===========================================================
+                  if (secondaryTracks.isNotEmpty)
+                    Padding(
+                      padding: EdgeInsets.only(bottom: UIUtils.sm),
+                      child: SizedBox(
+                        height: _galleryHeight + _galleryHudHeight,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          padding: EdgeInsets.symmetric(horizontal: UIUtils.md),
+                          itemCount: secondaryTracks.length,
+                          separatorBuilder: (_, _) =>
+                              SizedBox(width: UIUtils.sm),
+                          itemBuilder: (BuildContext context, int index) {
+                            final track = secondaryTracks[index];
+                            final hasHud = track.telemetry != null;
+                            return SizedBox(
+                              width: _galleryHeight,
+                              height: _galleryHeight + _galleryHudHeight,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // HUD de télémétrie au-dessus de la tuile
+                                  SizedBox(
+                                    height: _galleryHudHeight,
+                                    child: hasHud
+                                        ? DataHud(
+                                            telemetry: track.telemetry,
+                                            //posture: track.posture,
+                                            //showPosture: track.showPosture,
+                                          )
+                                        : const SizedBox.shrink(),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                                  // Tuile vidéo du participant (HUD interne désactivé)
+                                  SizedBox(
+                                    width: _galleryHeight,
+                                    height: _galleryHeight,
+                                    child: ParticipantWidget.widgetFor(
+                                      track,
+                                      showDataHud: false,
+                                      recordingController: _recordingController,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
-                  ),
 
-                // ===========================================================
-                // CONTROLES = LIMITE BASSE DU WIDGET
-                // ===========================================================
-                if (_vm.room?.localParticipant != null)
-                  SafeArea(
-                    top: false,
-                    child: ControlsWidget(
+                  // ===========================================================
+                  // CONTROLES = LIMITE BASSE DU WIDGET
+                  // ===========================================================
+                  if (_vm.room?.localParticipant != null)
+                    SafeArea(
+                      top: false,
+                      child: ControlsWidget(
                         _vm.room!,
                         _vm.room!.localParticipant!,
                         bleService: _vm.bleService,
@@ -224,9 +217,9 @@ class _RoomPageState extends State<RoomPage> {
                         onTogglePosture: _vm.togglePosture,
                       ),
                     ),
-            ],
+                ],
+              ),
             ),
-          ),
 
           // ========================================================================
           // INDICATEUR DE CHARGEMENT (si necessaire)
@@ -260,19 +253,19 @@ class _RoomPageState extends State<RoomPage> {
               size: 64,
               color: LKColors.textSecondary,
             ),
-             SizedBox(height: UIUtils.md),
+            SizedBox(height: UIUtils.md),
             Text(
               message,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: LKColors.textSecondary,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: LKColors.textSecondary),
             ),
             SizedBox(height: UIUtils.sm),
             Text(
               'En attente des participants...',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: LKColors.textHint,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: LKColors.textHint),
             ),
           ],
         ),

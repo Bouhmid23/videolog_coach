@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="com.example.npu_pose_detection">
+
+  <application>
+    <!-- Required for NPU/DSP access on Qualcomm devices -->
+    <uses-native-library
+        android:name="libcdsprpc.so"
+        android:required="false" />
+    <uses-native-library
+        android:name="libOpenCL.so"
+        android:required="false" />
+  </application>
+</manifest>

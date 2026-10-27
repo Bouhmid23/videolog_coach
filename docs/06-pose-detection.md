@@ -8,10 +8,10 @@ sérialisation et diffusion aux pairs.
 
 ```
 Piste caméra locale
-      │  capture d'image (10 Hz)
+      │  capture JPEG en mémoire
       ▼
-Détecteur de pose NPU (MediaPipe, mode realtime)
-      │  Pose : 33 landmarks (x, y, z, visibility)
+Détecteur MediaPipe lite (RunningMode.VIDEO, accélération demandée GPU)
+      │  Pose : image landmarks + worldLandmarks
       ▼
 Lissage exponentiel (α = 0.35)          ← posture_detection_service
       │  Pose lissée
@@ -30,11 +30,12 @@ Tous les pairs : RemotePosture.tryParseBinary → stockage → rendu interpolé
 
 | Paramètre | Valeur |
 |---|---|
-| Fréquence d'analyse | **continu** (borne haute = débit du NPU), repli 100 ms si pas de frame |
-| Détecteur | `NpuPoseDetector`, configuration `realtime()` |
-| Nombre de landmarks | 33 (standard MediaPipe Pose) — seuls les points `visibility ≥ 0.2` sont transmis |
+| Fréquence d'analyse | Continue, sans plafond explicite; débit réel à mesurer sur appareil |
+| Détecteur | Fork local `flutter_pose_detection` 0.4.1, MediaPipe lite, mode `VIDEO` |
+| Paramètres détecteur | `maxPoses: 1`, seuils détection / présence / suivi à `0.5`, accélération GPU demandée |
+| Nombre de landmarks | 33 points image et 33 world landmarks en mètres |
 | Alpha de lissage | **0.35** |
-| Source image | Capture de la piste caméra locale (source `camera`) |
+| Source image | `captureFrame` de la piste caméra locale, JPEG transmis en mémoire |
 | Concurrency | Boucle séquentielle (flag `_running`), un seul tick à la fois |
 | Transport | DataChannel LiveKit **lossy** (`reliable: false`), payload binaire |
 | Web | Détecteur désactivé (branche ignorée) |
@@ -51,15 +52,27 @@ n'a pu être traitée (caméra non prête).
 si plateforme web ou _running faux → sortir
 localiser la piste caméra locale (source camera)
 si aucune piste → repli 100 ms
-   1. capturer un frame (octets bruts)
-   2. détecter la pose (si aucune pose → reset état, notification, repli 100 ms)
-   3. extraire les dimensions de l'image
+   1. capturer un frame JPEG en mémoire et mémoriser ses timestamps capture/VIDEO
+   2. détecter la pose avec `detectForVideo` (si aucune pose → notification,
+      repli 100 ms)
+   3. lire les dimensions depuis le résultat de détection
    4. lisser la pose          (AVANT la classification, pour des libellés cohérents)
    5. classifier la pose lissée
    6. mettre à jour l'état + notification
    7. sérialiser et publier le squelette (même sans libellé, code « inconnu »)
 yield (Duration.zero)
 ```
+
+Après une perte de pose, le filtre image/world est réinitialisé. Le dernier label stable est conservé afin que la reprise repasse par l'hystérésis de trois frames.
+
+### 2.2 Capture en mémoire
+
+`captureFrame` retourne un buffer JPEG. L'app le transmet au plugin via le canal Flutter,
+sans fichier temporaire. L'horodatage monotone transmis à MediaPipe sert au suivi `VIDEO`;
+le paquet posture conserve l'heure epoch prise avant la capture.
+
+Les logs `📊 pose` détaillent `capture`, `detect`, `infer`, `publish` et les débits
+`capture/s`, `publishData/s` et `seq/s` afin d'isoler le goulot d'étranglement.
 
 ## 3. Lissage (filter exponentiel)
 
@@ -140,55 +153,33 @@ Seuls les landmarks présents sont pris en compte ; si aucun → 0.0.
 
 ## 5. Schéma du message diffusé (topic `posture`)
 
-**Transport** : DataChannel LiveKit **lossy** (`reliable = false`), topic
-**`posture`**, fréquence continue (débit du NPU), **encodage binaire compact**
-(`PostureCodec`, format v2, big-endian). Le mode lossy évite retransmissions et
-blocage en tête de file : on préfère toujours la frame la plus récente.
+Le publisher émet le codec big-endian v7 sur le DataChannel LiveKit lossy.
+Chaque pose fait exactement **275 octets** : en-tête 11 octets et 33 points de 8 octets.
+Le décodeur web doit accepter la version 7 et ce découpage avant d'utiliser ce publisher.
 
-Le rendu étant purement 2D, l'axe **Z n'est pas transmis**. Seuls les landmarks
-`visibility ≥ 0.2` sont inclus : une frame typique fait ~120–220 octets (contre
-~2 000 octets en JSON).
+| Offset | Taille | Champ |
+|---|---:|---|
+| 0 | 1 | Version `7` |
+| 1 | 1 | Label : `0` debout, `1` assis, `2` allongé, `255` inconnu |
+| 2 | 1 | Confiance `0..255` (`0` signifie inconnue) |
+| 3–4 | 2 | Séquence uint16 big-endian, modulo 65536 |
+| 5–6 | 2 | Heure epoch de capture en ms, modulo 65536 |
+| 7–8 | 2 | Largeur de frame uint16 |
+| 9–10 | 2 | Hauteur de frame uint16 |
+| 11…274 | 33 × 8 | Points dans l'ordre MediaPipe défini par `PostureCodec.sent` |
 
-```
-offset  taille  champ
-0       1       version (0x02)
-1       1       code du libellé (0 = debout, 1 = assis, 2 = allongé, 255 = inconnu)
-2       1       confiance × 255 (0..255)
-3       1       nombre de landmarks n (0..33)
-4       4       séquence (uint32)
-8       4       timestamp epoch ms (uint32 tronqué)
-12      2       largeur frame (uint16)
-14      2       hauteur frame (uint16)
-16      n×6     landmarks :
-                 +0  octet   index du type (enum MediaPipe)
-                 +1  uint16  x normalisé (0..65535)
-                 +3  uint16  y normalisé (0..65535)
-                 +5  octet   visibilité × 255
-```
+Chaque point est compacté ainsi :
 
-### 5.1 Champs
-
-| Offset | Type | Description |
+| Octets relatifs | Bits | Valeurs |
 |---|---|---|
-| 0 | byte | Version du format, toujours `2` |
-| 1 | byte | Code du libellé (`0` debout, `1` assis, `2` allongé, `255` inconnu) |
-| 2 | byte | Confiance (`0` = null) |
-| 3 | byte | Nombre de landmarks `n` |
-| 4 | uint32 | Numéro de séquence (monotone) |
-| 8 | uint32 | Timestamp émetteur (epoch ms, tronqué) |
-| 12 | uint16 | Largeur de l'image source |
-| 14 | uint16 | Hauteur de l'image source |
-| 16… | n × 6 octets | Landmarks (type, x, y, visibilité) |
+| 0–2 | 12 + 12 | image x/y, quantifiés sur `[-0.5, 1.5]` |
+| 3–5 | 12 + 12 | world x/y en mètres, chacun sur `[-1.5, 1.5]` |
+| 6–7 | 12 + 4 | world z en mètres sur `[-1.5, 1.5]`, visibilité image `0..15` |
 
-> La séquence permet au récepteur d'ignorer les frames périmées arrivées dans le
-> désordre (transport lossy non ordonné).
-
-### 5.2 Compatibilité JSON (héritage)
-
-Le décodeur accepte toujours l'ancien format JSON UTF-8 (`type: "posture"`,
-`payload.landmarks[]`…) ; il n'est simplement plus émis. Le décodage binaire est
-tenté en premier (validation du byte de version), puis repli JSON.
-
+Les world landmarks viennent de MediaPipe `result.worldLandmarks()` et sont exprimés en
+mètres, autour de l'origine du bassin. Le z image du format v6 est une profondeur relative,
+à l'échelle de x ; il ne représente pas des mètres. Les paquets `lost` contiennent seulement
+l'en-tête de 11 octets, la version 7 et le label `254`.
 ## 6. Réception côté pairs (`RemotePosture`)
 
 ### 6.1 Champs du modèle
@@ -352,7 +343,7 @@ courbe : easeOut
 |---|---|---|
 | Lissage exponentiel | Pur | Fonction/classe avec état + tests |
 | `classifyPosture` | Pur | **Haute priorité** — fonction pure testable (angles, seuils) |
-| Sérialisation du payload | Pur | Data class + codec binaire (`PostureCodec`, format v2) |
+| Sérialisation du payload | Pur | Data class + codec binaire (`PostureCodec`, format v7) |
 | Décodage tolérant `RemotePosture` | Pur | **Haute priorité** — nombreux formats acceptés, à tester |
 | Reconstruction de pose depuis landmarks | Pur | Fonction pure (mapping index → type) |
 | Table des os + palette | Pur | Constantes |

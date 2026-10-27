@@ -183,6 +183,39 @@ final stopResponse = await http.post(
 
 L'arrêt peut être demandé une seule fois ; un démarrage ou un arrêt déjà en cours peut répondre `409`. La durée maximale actuelle est de **180 secondes** : le serveur demande l'arrêt à l'échéance, même si le mobile ne l'a pas demandé.
 
+## 6. Emplacement dans l'interface
+
+Le contrôle Egress est intégré à la barre d'infos du participant local, à la place des
+indicateurs Wi‑Fi/E2EE. Il propose le choix du layout avant le démarrage, puis un bouton
+d'arrêt et un indicateur d'état (`REC`, spinner, libellé de transition). Chaque action
+affiche un SnackBar de progression puis de résultat ; les erreurs d'autorisation ou de
+conflit sont également accessibles dans un dialogue avec « Réessayer ». Les tuiles
+distantes n'exposent jamais ce contrôle.
+
+## 7. Diagnostic des échecs
+
+Les logs de debug utilisent les préfixes `[Recording]`, `[Recording UI]` et `[API]`.
+Ils indiquent la room, `canControl`, le statut brut, le layout demandé, la raison d'un
+démarrage bloqué, ainsi que le code HTTP et le corps de la réponse recording.
+
+```powershell
+flutter logs
+# ou, sur Android, filtrer la sortie :
+adb logcat | Select-String "Recording|API"
+```
+
+Points à vérifier dans l'ordre :
+
+1. `[Recording] load OK ... status=...` : l'état initial a bien été lu.
+2. `[Recording] start BLOQUÉ ... reason=...` : le client refuse avant l'appel HTTP.
+3. `[API] -> POST .../recording/start?layout=...` : la requête part réellement.
+4. `[API] POST ... -> HTTP ... body: ...` : réponse serveur brute.
+5. `[Recording] start FAILED ... HTTP=... detail=...` : erreur API normalisée.
+
+Un message « Impossible de démarrer l'enregistrement » sans erreur API signifie
+généralement que l'état initial est absent ou non démarrable ; la ligne `BLOQUÉ`
+précise lequel des deux cas s'applique.
+
 ## Sécurité
 
 - Ne jamais envoyer le mot de passe à l'API Videolog.

@@ -25,7 +25,7 @@ n'est déclarée, bien qu'une partie du code contienne des branches de compatibi
 | Framework UI | Flutter (SDK Dart `^3.10.3`), Material 3, thème sombre custom |
 | Temps réel audio/vidéo | LiveKit (`livekit_client ^2.6.4`) + WebRTC |
 | Bluetooth basse consommée | `flutter_reactive_ble ^5.4.2` |
-| Détection de pose (IA locale) | MediaPipe via `flutter_pose_detection ^0.4.0` (détecteur NPU) |
+| Détection de pose (IA locale) | MediaPipe via `flutter_pose_detection ^0.4.0` (détecteur GPU) |
 | Positionnement | `geolocator ^13.0.2` |
 | Authentification | Firebase Auth (`firebase_core`, `firebase_auth`) — email / mot de passe |
 | Requêtes HTTP | `http ^1.6.0` (token, rooms, enregistrement) |
@@ -113,7 +113,7 @@ lib/
 | Mini-carte des participants | ✅ Réelle | `03-gps-map.md` |
 | Lunettes ActiveLook (HUD) | ✅ Réelles (protocole complet) | `04-ble-glasses.md` |
 | Capteurs cardio/cadence BLE | ✅ Réels (standards Bluetooth SIG) | `05-ble-sensors.md` |
-| Détection de posture locale | ✅ Réelle (MediaPipe, 10 Hz) | `06-pose-detection.md` |
+| Détection de posture locale | ✅ Réelle (MediaPipe GPU, continu) | `06-pose-detection.md` |
 | Diffusion de posture aux pairs | ✅ Réelle (DataChannel) | `06-pose-detection.md` |
 | Squelette 33 points + HUD métriques | ✅ Réel | `06-pose-detection.md`, `07-ui-behavior.md` |
 | Wakelock (écran maintenu actif) | ✅ Actif pendant la session | `01-video-conferencing.md` |
@@ -150,7 +150,7 @@ Un service *foreground* est déclaré avec `foregroundServiceType="camera|microp
 
 ## 8. État du dépôt et dettes techniques
 
-- **Tests** : 4 tests de modèles (`RecordingState`, `MobileRoom`) ; pas encore de test UI.
+- **Tests** : 5 tests de modèles (`RecordingState`, `MobileRoom`) ; pas encore de test UI.
 - **README** : template Flutter par défaut (non personnalisé).
 - **Code mort** à ne pas porter (détails dans `08-kmp-porting.md`) :
   - `core/livekit_service.dart`

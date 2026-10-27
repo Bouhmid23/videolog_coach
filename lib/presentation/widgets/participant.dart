@@ -7,6 +7,7 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:videolog_coach/presentation/widgets/participant_info.dart';
 import 'dart:async';
 
+import '../../core/recording_controller.dart';
 import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
@@ -15,6 +16,7 @@ import '../../viewmodels/pose_detection_viewmodel.dart';
 import '../utils/ui_utils.dart';
 import 'no_video.dart';
 import 'pose_overlay.dart';
+import 'recording_controls.dart';
 
 /// Classe reprÃ©sentant une piste de participant avec ses donnÃ©es associÃ©es
 abstract class ParticipantWidget extends StatefulWidget {
@@ -24,6 +26,7 @@ abstract class ParticipantWidget extends StatefulWidget {
     bool poseAside = false,
     bool showDataHud = true,
     bool infoAtTop = false,
+    RecordingController? recordingController,
   }) {
     if (participantTrack.participant is LocalParticipant) {
       return LocalParticipantWidget(
@@ -41,6 +44,7 @@ abstract class ParticipantWidget extends StatefulWidget {
         poseAside: poseAside,
         showDataHud: showDataHud,
         infoAtTop: infoAtTop,
+        recordingController: recordingController,
       );
     } else if (participantTrack.participant is RemoteParticipant) {
       return RemoteParticipantWidget(
@@ -80,6 +84,7 @@ abstract class ParticipantWidget extends StatefulWidget {
   final bool infoAtTop;
   final VoidCallback? onTogglePosture;
   final VideoQuality quality;
+  final RecordingController? recordingController;
 
   const ParticipantWidget({
     this.posture,
@@ -95,6 +100,7 @@ abstract class ParticipantWidget extends StatefulWidget {
     this.infoAtTop = false,
     this.onTogglePosture,
     this.quality = VideoQuality.HIGH,
+    this.recordingController,
     super.key,
   });
 }
@@ -123,6 +129,7 @@ class LocalParticipantWidget extends ParticipantWidget {
     super.poseAside,
     super.showDataHud,
     super.infoAtTop,
+    super.recordingController,
     super.key,
   });
 
@@ -355,28 +362,56 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   }
 
   Widget _buildParticipantInfo(bool isScreenShare) {
-    final info = Column(
+    final controller = widget.recordingController;
+    final isLocal = widget.participant is LocalParticipant;
+
+    Widget buildInfo({Widget? trailing, bool showConnectionStatus = true}) {
+      return ParticipantInfoWidget(
+        title: widget.participant.name.isNotEmpty
+            ? displayNameForIdentity(widget.participant.name)
+            : displayNameForIdentity(widget.participant.identity),
+        audioAvailable:
+            audioPublication?.muted == false &&
+            audioPublication?.subscribed == true,
+        connectionQuality: widget.participant.connectionQuality,
+        isScreenShare: isScreenShare,
+        enabledE2EE: widget.participant.isEncrypted,
+        isLocal: isLocal,
+        isTop: widget.infoAtTop,
+        trailing: trailing,
+        showConnectionStatus: showConnectionStatus,
+      );
+    }
+
+    final Widget info;
+    if (isLocal && controller != null) {
+      info = AnimatedBuilder(
+        animation: controller,
+        builder: (context, _) {
+          final showRecording =
+              controller.canControl ||
+              controller.isRecording ||
+              controller.isPending;
+          return buildInfo(
+            trailing: showRecording
+                ? RecordingControls(controller: controller)
+                : null,
+            showConnectionStatus: !showRecording,
+          );
+        },
+      );
+    } else {
+      info = buildInfo();
+    }
+
+    final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
-      children: [
-        ParticipantInfoWidget(
-          title: widget.participant.name.isNotEmpty
-              ? displayNameForIdentity(widget.participant.name)
-              : displayNameForIdentity(widget.participant.identity),
-          audioAvailable:
-              audioPublication?.muted == false &&
-              audioPublication?.subscribed == true,
-          connectionQuality: widget.participant.connectionQuality,
-          isScreenShare: isScreenShare,
-          enabledE2EE: widget.participant.isEncrypted,
-          isLocal: widget.participant is LocalParticipant,
-          isTop: widget.infoAtTop,
-        ),
-      ],
+      children: [info],
     );
 
-    if (!widget.infoAtTop) return info;
-    return SafeArea(bottom: false, child: info);
+    if (!widget.infoAtTop) return content;
+    return SafeArea(bottom: false, child: content);
   }
 }
 

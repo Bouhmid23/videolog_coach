@@ -3,12 +3,12 @@ import 'dart:ui';
 
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 
-/// Codec binaire v6 pour le topic `posture` (émission uniquement).
+/// Codec binaire v7 pour le topic `posture` (émission uniquement).
 ///
-/// Paquet = en-tête de 11 octets + 33 points × 5 octets = 176 octets.
+/// Paquet = en-tête de 11 octets + 33 points × 8 octets = 275 octets.
 ///
 /// En-tête (big-endian) :
-///   0      version (6)
+///   0      version (7)
 ///   1      code du label (0 debout, 1 assis, 2 allongé, 255 inconnu, 254 pose perdue)
 ///   2      confiance (0..255, 0 = inconnue)
 ///   3-4    seq (uint16, modulo 65536)
@@ -16,23 +16,23 @@ import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 ///   7-8    largeur de frame (uint16)
 ///   9-10   hauteur de frame (uint16)
 ///
-/// Point (5 octets = 40 bits, ordre fixe défini par [sent]) :
-///   x 12 bits | y 12 bits | z 12 bits | visibilité 4 bits
-///   x, y : plage normalisée [-0.5, 1.5]  ->  valeur = raw / 4095 * 2 - 0.5
-///   z    : plage [-zRange, zRange]       ->  valeur = (raw / 4095 * 2 - 1) * zRange
+/// Point (8 octets, ordre fixe défini par [sent]) :
+///   x image 12 bits | y image 12 bits | world x/y/z 12 bits chacun | visibilité 4 bits
+///   image x/y : plage normalisée [-0.5, 1.5]
+///   world x/y/z : mètres, plage [-1.5, 1.5], MediaPipe world landmarks centrés au bassin
 ///   visibilité : raw / 15
 class PostureCodec {
   PostureCodec._();
 
-  static const int version = 6;
+  static const int version = 7;
   static const int headerSize = 11;
-  static const int pointSize = 5;
+  static const int pointSize = 8;
   static const int unknownLabelCode = 255;
   static const int lostLabelCode = 254;
 
-  /// Plage de la profondeur z (MediaPipe : relative au plan des hanches,
-  /// négative = vers la caméra). Identique à Z_RANGE côté web.
-  static const double zRange = 1.0;
+  /// Le z image de MediaPipe (format v6) est relatif et à l'échelle de x,
+  /// pas une distance métrique. Le format v7 transmet séparément les world landmarks.
+  static const double worldRange = 1.5;
 
   /// Landmarks transmis : les 33 points MediaPipe / ML Kit, dans l'ordre.
   /// L'ordre est partagé avec le décodeur web : ne pas le modifier seul.
@@ -42,7 +42,7 @@ class PostureCodec {
     23, 24, 25, 26, 27, 28, 29, 30, 31, 32, //          hanches -> pieds
   ];
 
-  static final int packetSize = headerSize + sent.length * pointSize; // 176
+  static final int packetSize = headerSize + sent.length * pointSize; // 275
 
   static const Map<String, int> _labelToCode = {
     'debout': 0,
@@ -62,10 +62,9 @@ class PostureCodec {
     return (((n + 0.5) / 2).clamp(0.0, 1.0) * 4095).round();
   }
 
-  /// Quantifie z sur 12 bits, plage [-zRange, zRange].
-  static int _quantizeZ(double z) {
-    if (!z.isFinite) return 2048;
-    return (((z / zRange + 1) / 2).clamp(0.0, 1.0) * 4095).round();
+  static int _quantizeWorld(double n) {
+    if (!n.isFinite) return 2048;
+    return (((n / worldRange + 1) / 2).clamp(0.0, 1.0) * 4095).round();
   }
 
   static int _clampU16(double value) =>
@@ -76,12 +75,16 @@ class PostureCodec {
     required String label,
     required double? confidence,
     required List<PoseLandmark> landmarks,
+    required List<WorldLandmark> worldLandmarks,
     required Size frameSize,
     required int seq,
     required int timestampMs,
   }) {
     final byType = <int, PoseLandmark>{
       for (final l in landmarks) l.type.value: l,
+    };
+    final worldByType = <int, WorldLandmark>{
+      for (final l in worldLandmarks) l.typeIndex: l,
     };
 
     final bd = ByteData(packetSize);
@@ -99,29 +102,39 @@ class PostureCodec {
     // Espace des coordonnées décidé UNE fois par pose (et non par coordonnée) :
     // normalisé, ou pixels. Une pose en pixels a toujours au moins une
     // coordonnée > 2.
-    final normalized =
-    landmarks.every((l) => l.x.abs() <= 2 && l.y.abs() <= 2);
+    final normalized = landmarks.every(
+      (l) => l.x.abs() <= 2 && l.y.abs() <= 2,
+    );
     final fw = frameSize.width > 0 ? frameSize.width : 1.0;
     final fh = frameSize.height > 0 ? frameSize.height : 1.0;
 
     var o = headerSize;
     for (final type in sent) {
       final lm = byType[type];
-      var x = 0, y = 0, z = 2048, v = 0;
+      var x = 0, y = 0, wx = 2048, wy = 2048, wz = 2048, v = 0;
       if (lm != null) {
         final nx = normalized ? lm.x : lm.x / fw;
         final ny = normalized ? lm.y : lm.y / fh;
-        final nz = normalized ? lm.z : lm.z / fw;
         x = _quantize(nx);
         y = _quantize(ny);
-        z = _quantizeZ(nz);
+      }
+      final world = worldByType[type];
+      if (lm != null) {
         v = (lm.visibility.clamp(0.0, 1.0) * 15).round();
+      }
+      if (world != null) {
+        wx = _quantizeWorld(world.x);
+        wy = _quantizeWorld(world.y);
+        wz = _quantizeWorld(world.z);
       }
       bd.setUint8(o, x >> 4);
       bd.setUint8(o + 1, ((x & 0xF) << 4) | (y >> 8));
       bd.setUint8(o + 2, y & 0xFF);
-      bd.setUint8(o + 3, z >> 4);
-      bd.setUint8(o + 4, ((z & 0xF) << 4) | (v & 0xF));
+      bd.setUint8(o + 3, wx >> 4);
+      bd.setUint8(o + 4, ((wx & 0xF) << 4) | (wy >> 8));
+      bd.setUint8(o + 5, wy & 0xFF);
+      bd.setUint8(o + 6, wz >> 4);
+      bd.setUint8(o + 7, ((wz & 0xF) << 4) | (v & 0xF));
       o += pointSize;
     }
 
