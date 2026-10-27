@@ -177,14 +177,14 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                   textAlign: TextAlign.center,
                                 ),
-                                SizedBox(height: UIUtils.xs),
+                                /*SizedBox(height: UIUtils.xs),
                                 Text(
                                   'Connectez-vous avec votre compte Firebase.',
                                   style: UIUtils.bodySmall(
                                     context,
                                   ).copyWith(color: LKColors.textHint),
                                   textAlign: TextAlign.center,
-                                ),
+                                ),*/
                                 SizedBox(height: UIUtils.xxl),
 
                                 // Email Field
@@ -212,7 +212,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     suffixIcon: _obscurePassword
                                         ? Icons.visibility_outlined
                                         : Icons.visibility_off_outlined,
-                                    suffix: IconButton(
+                                    /*suffix: IconButton(
                                       icon: Icon(
                                         _obscurePassword
                                             ? Icons.visibility_outlined
@@ -226,7 +226,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ),
                                       padding: EdgeInsets.zero,
                                       visualDensity: VisualDensity.compact,
-                                    ),
+                                    ),*/
                                   ),
                                   style: UIUtils.bodyLarge(context),
                                   cursorColor: LKColors.primary,
