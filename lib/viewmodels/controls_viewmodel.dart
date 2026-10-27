@@ -5,6 +5,7 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../core/ble_sensor_service.dart';
+import '../core/gravity_service.dart';
 import '../core/ble_telemetry_service.dart';
 
 class ControlsViewModel extends ChangeNotifier {
@@ -133,6 +134,7 @@ class ControlsViewModel extends ChangeNotifier {
       final newPosition = _cameraPosition.switched();
       await track.setCameraPosition(newPosition);
       _cameraPosition = newPosition;
+      GravityService.instance.frontCamera = newPosition == CameraPosition.front;
       notifyListeners();
     } catch (error) {
       debugPrint('Could not restart track: $error');

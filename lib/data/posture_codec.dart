@@ -16,6 +16,11 @@ import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 ///   7-8    largeur de frame (uint16)
 ///   9-10   hauteur de frame (uint16)
 ///
+/// Extension optionnelle « gravité » (6 octets, après les 33 points, paquet de 281 octets) :
+///   3 × int16 big-endian = direction « haut » dans les axes des worldLandmarks
+///   (x droite, y bas, z s'éloignant de la caméra), vecteur unitaire × 30000.
+///   La version reste 7 : un décodeur qui ignore les octets en trop lit le paquet comme avant.
+///
 /// Point (8 octets, ordre fixe défini par [sent]) :
 ///   x image 12 bits | y image 12 bits | world x/y/z 12 bits chacun | visibilité 4 bits
 ///   image x/y : plage normalisée [-0.5, 1.5]
@@ -43,6 +48,8 @@ class PostureCodec {
   ];
 
   static final int packetSize = headerSize + sent.length * pointSize; // 275
+  static const int gravitySize = 6;
+  static const double gravityScale = 30000;
 
   static const Map<String, int> _labelToCode = {
     'debout': 0,
@@ -79,6 +86,7 @@ class PostureCodec {
     required Size frameSize,
     required int seq,
     required int timestampMs,
+    List<double>? gravity,
   }) {
     final byType = <int, PoseLandmark>{
       for (final l in landmarks) l.type.value: l,
@@ -87,7 +95,11 @@ class PostureCodec {
       for (final l in worldLandmarks) l.typeIndex: l,
     };
 
-    final bd = ByteData(packetSize);
+    final List<double>? up =
+        (gravity != null && gravity.length == 3 && gravity.every((g) => g.isFinite))
+            ? gravity
+            : null;
+    final bd = ByteData(packetSize + (up != null ? gravitySize : 0));
     bd.setUint8(0, version);
     bd.setUint8(1, labelToCode(label));
     bd.setUint8(
@@ -136,6 +148,15 @@ class PostureCodec {
       bd.setUint8(o + 6, wz >> 4);
       bd.setUint8(o + 7, ((wz & 0xF) << 4) | (v & 0xF));
       o += pointSize;
+    }
+
+    if (up != null) {
+      for (var i = 0; i < 3; i++) {
+        bd.setInt16(
+          o + i * 2,
+          (up[i].clamp(-1.0, 1.0) * gravityScale).round(),
+        );
+      }
     }
 
     return bd.buffer.asUint8List();
