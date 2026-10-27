@@ -18,6 +18,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/gravity_service.dart';
 import '../core/posture_detection_service.dart';
 import '../data/posture_codec.dart';
 import '../data/remote_posture.dart';
@@ -167,6 +168,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
     setDestinationIdentities(destinationIdentities);
     if (_running) return;
     _running = true;
+    GravityService.instance.start();
     _statsWindowStart = DateTime.now();
     _seqAtLastStats = _seq;
     unawaited(_poseLoop());
@@ -185,6 +187,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   void stop() {
     if (_running && _hadPose) _publishLost(DateTime.now());
     _running = false;
+    GravityService.instance.stop();
     _hadPose = false;
     _stableLabel = null;
     _candidateLabel = null;
@@ -412,6 +415,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
       frameSize: frameSize,
       seq: seq,
       timestampMs: capturedAt.millisecondsSinceEpoch,
+      gravity: GravityService.instance.upInCameraAxes,
     );
     _send(
       bytes,
