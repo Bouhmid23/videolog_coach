@@ -174,6 +174,7 @@ str     (n octets)              ASCII, sans null-terminator (le footer 0xAA term
 | Filtre de services | aucun (tous les périphériques) |
 | Mode de scan | `lowLatency` |
 | Déduplication | par identifiant ; la liste complète est réémise à chaque découverte |
+| Filtre d'affichage | `isEngoDevice` : nom contenant `engo`/`activelook` ou service `0783B03E-…-5CB7` |
 
 ### 5.2 Connexion (`connectAndListen`)
 

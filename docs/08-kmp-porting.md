@@ -150,20 +150,19 @@ dispose()
 
 | # | Problème | Impact sur le portage |
 |---|---|---|
-| 1 | **Doublon** : `presentation/screens/prejoin.dart` redéfinit `PreJoinPage`/`JoinArgs` mais n'est **jamais importé** | **Ne pas porter** — la source de vérité est `connect.dart` |
-| 2 | `core/livekit_service.dart` non utilisé (remplacé par l'usage direct de la salle) | Référence seulement ; candidate à une `RoomGateway` |
-| 3 | `core/api_service.dart` orphelin (uniquement commenté dans `connect.dart`) | Son contrat (URLs, endpoint) est documenté dans `01` |
-| 4 | Widgets non référencés : `smoothed_pose_avatar.dart`, `sound_waveform.dart`, `text_field.dart` | Non portés (ou portés plus tard si besoin) |
-| 5 | **Bug** : `PoseAnimationController` construit un contrôleur d'animation avec un `vsync` invalide (`AnimatedGridState()`) — inutilisable tel quel | Réécrire proprement en KMP si l'interpolation est souhaitée |
-| 6 | Dépendances déclarées mais inutilisées : `provider`, `flutter_svg`, `flutter_background`, `flutter_foreground_task`, `camera`, `o3d` | Aucune équivalence à porter |
-| 7 | `o3d` (avatar 3D) déclaré mais l'avatar associé est orphelin | Fonctionnalité non intégrée |
-| 8 | Authentification **factice** (split email) | Prévoir une vraie API côté KMP |
-| 9 | Les libellés de posture sont en **français** et encodés dans les payloads | Décider : garder (compatibilité) ou internationaliser (breaking) |
-| 10 | Index `type` des landmarks basé sur l'enum du moteur de pose | **Figer** l'ordre MediaPipe 33 dans une enum partagée |
-| 11 | Distance interne en **miles**, affichage en km | Conserver l'unité interne pour la compatibilité des payloads |
-| 12 | Deux variantes de schéma token dans le code (`/token` actif, `/livekit/token` commenté) | Retenir `POST /token {identity, room}` |
-| 13 | Le test existant (template) est obsolète et échouerait | Le remplacer par les tests de la section 6 |
-| 14 | `usesCleartextTraffic="true"` (Android) | À revoir pour la production |
+| 1 | `core/livekit_service.dart` non utilisé (remplacé par l'usage direct de la salle) | Référence seulement ; candidate à une `RoomGateway` |
+| 2 | `core/api_service.dart` actif (Bearer Firebase, `/token`, `/mobile/rooms`, Egress) | Contrat documenté dans `01` et `MOBILE_RECORDING_WORKFLOW.md` |
+| 3 | Widgets non référencés : `smoothed_pose_avatar.dart`, `sound_waveform.dart`, `text_field.dart` | Non portés (ou portés plus tard si besoin) |
+| 4 | **Bug** : `PoseAnimationController` construit un contrôleur d'animation avec un `vsync` invalide (`AnimatedGridState()`) — inutilisable tel quel | Réécrire proprement en KMP si l'interpolation est souhaitée |
+| 5 | Dépendances déclarées mais inutilisées : `provider`, `flutter_svg`, `flutter_background`, `flutter_foreground_task`, `camera`, `o3d` | Aucune équivalence à porter |
+| 6 | `o3d` (avatar 3D) déclaré mais l'avatar associé est orphelin | Fonctionnalité non intégrée |
+| 7 | Authentification Firebase Auth (email / mot de passe) | Prévoir l'équivalent Firebase Auth côté KMP |
+| 8 | Les libellés de posture sont en **français** et encodés dans les payloads | Décider : garder (compatibilité) ou internationaliser (breaking) |
+| 9 | Index `type` des landmarks basé sur l'enum du moteur de pose | **Figer** l'ordre MediaPipe 33 dans une enum partagée |
+| 10 | Distance interne en **miles**, affichage en km | Conserver l'unité interne pour la compatibilité des payloads |
+| 11 | Schéma token unifié | `POST /token {room}` avec `Authorization: Bearer <Firebase ID token>` |
+| 12 | Le test existant (template) est obsolète et échouerait | Le remplacer par les tests de la section 6 |
+| 13 | `usesCleartextTraffic="true"` (Android) | À revoir pour la production |
 
 ## 8. Constantes à porter telles quelles
 
@@ -186,5 +185,5 @@ dispose()
 - [ ] HUD lunettes : mêmes trames binaires (vérifiable par capture BLE)
 - [ ] Capteurs : FC et cadence correctes sur matériel réel (y compris débordement)
 - [ ] Carte : cadrage identique sur les mêmes positions (golden tests de projection)
-- [ ] Workflow complet : login → salle → token → prejoin → session
+- [ ] Workflow complet : login → salles → token → session (paramètres par défaut)
 - [ ] Permissions et behaviours plateforme conformes à `07-ui-behavior.md`

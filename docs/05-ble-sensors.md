@@ -202,7 +202,7 @@ résultat  = round(rpm) clampé à [0, 200]
 | Utilisation de la cadence | Alimente la télémétrie, le HUD, les lunettes |
 | Condition d'envoi | Les valeurs ne sont émises dans la télémétrie **que si** le capteur correspondant est connecté |
 | Permissions | Sollicitées à l'ouverture de la feuille capteurs : `bluetooth`, `bluetoothConnect`, `bluetoothScan`, `location` |
-| Feuille de sélection | Sections cardio / cadence ; les appareils « inconnus » peuvent être rattachés manuellement à l'une ou l'autre |
+| Feuille de sélection | Sections cardio / cadence uniquement ; les appareils non reconnus ne sont pas affichés |
 
 ## 10. Points d'attention pour le portage KMP
 

@@ -295,9 +295,10 @@ sinon → Pose(landmarks, score = 1.0)
 
 | Élément | Comportement |
 |---|---|
-| Points de tête / articulations | cercles, couleur par côté (gauche / droite), halo |
-| Os | lignes avec épaisseur et alpha proportionnels à la **confiance** |
+| Points de tête / articulations | halo, anneau et cœur clair ; couleur par côté (gauche / droite) |
+| Os | dégradé bleu du logo + cyan, avec halo et trait de lumière |
 | Confiance faible | trait pointillé / opacité réduite |
+| Miroir local | caméra frontale locale : overlay miroir X comme le renderer vidéo |
 | Ligne de sol | droite horizontale basse |
 | Graduations | graduations le long de la ligne de sol |
 | Seuil de visibilité | points avec `visibility < 0.2` ignorés à la projection |
@@ -309,8 +310,8 @@ sinon → Pose(landmarks, score = 1.0)
       si |x| ≤ 1.01 ET |y| ≤ 1.01 → coordonnées normalisées
       → x = x × frameWidth, y = y × frameHeight
 2. Miroir horizontal (si activé) : x = frameWidth − x
-3. Ajustement « contain » de la boîte source (frame) dans la boîte destination (affichage)
-      — centré, en conservant les proportions
+3. Ajustement « cover » de la boîte source (frame) dans la boîte destination (affichage)
+      — centré, en conservant les proportions, comme le renderer vidéo
 4. Normalisation dans la boîte source puis projection dans la boîte destination
 ```
 
@@ -334,14 +335,16 @@ courbe : easeOut
 > reste inutilisable (construction avec un `vsync` invalide) — voir
 > `08-kmp-porting.md`.
 
-### 9.5 Palette de confiance (référence)
+### 9.5 Palette (référence)
 
-| Confiance | Couleur d'os | Couleur d'articulation |
-|---|---|---|
-| > 0.8 | cyan | cyan clair |
-| > 0.6 | vert clair | vert clair |
-| > 0.4 | jaune | jaune |
-| ≤ 0.4 | orange | orange |
+| Élément | Couleur / rendu |
+|---|---|
+| Côté gauche | `logoLight` `#66CCF5` |
+| Côté droit | `logoBlue` `#22B8F0` |
+| Axe / centre | `secondary` `#22D3EE` |
+| Confiance > 0.45 | trait plein, épaisseur et alpha proportionnels à la confiance |
+| Confiance ≤ 0.45 | trait pointillé, halo et alpha réduits |
+| Articulations | halo extérieur, anneau coloré, cœur clair et point blanc |
 
 ## 10. Points d'attention pour le portage KMP
 

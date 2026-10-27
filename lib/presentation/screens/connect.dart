@@ -1,746 +1,101 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
 
-import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 
-import '../../core/call_foreground_service.dart';
+import '../../core/api_service.dart';
+import '../../core/auth_service.dart';
+import '../../data/livekit_token.dart';
+import '../../data/mobile_room.dart';
 import '../../data/user_role.dart';
 import '../../exts.dart';
 import '../../theme.dart';
-import '../../utils.dart';
 import '../utils/ui_utils.dart';
 
-const String kApiBaseUrl = 'https://api.videolog.app';
-
 // Config POC
-const String kLiveKitWsUrl = 'wss://livekit.videolog.app';
 const String kDefaultRoom = 'poc-room';
 
-class JoinArgs {
-  JoinArgs({
-    required this.url,
-    required this.token,
-    required this.username,
-    this.role = UserRole.trainee,
-    this.e2ee = false,
-    this.e2eeKey,
-    this.simulcast = false,
-    this.adaptiveStream = true,
-    this.dynacast = false,
-    this.preferredCodec = 'H264',
-    this.enableBackupVideoCodec = true,
+/// Arguments passés à l'écran de session.
+class RoomRouteArgs {
+  const RoomRouteArgs({
+    required this.room,
+    required this.listener,
+    required this.role,
+    required this.roomName,
+    required this.canControlRecording,
   });
 
-  final String url;
-  final String token;
-  final String username;
+  final Room room;
+  final EventsListener<RoomEvent> listener;
   final UserRole role;
-  final bool e2ee;
-  final String? e2eeKey;
-  final bool simulcast;
-  final bool adaptiveStream;
-  final bool dynacast;
-  final String preferredCodec;
-  final bool enableBackupVideoCodec;
+  final String roomName;
+  final bool canControlRecording;
 }
 
-// ─── PreJoinPage ────────────────────────────────────────────────────────────
+enum _ConnectStage { idle, preparing, connecting, media }
 
-class PreJoinPage extends StatefulWidget {
-  const PreJoinPage({required this.args, super.key});
-  final JoinArgs args;
-  @override
-  State<StatefulWidget> createState() => _PreJoinPageState();
-}
-
-class _PreJoinPageState extends State<PreJoinPage> {
-  static const _prefKeyEnableVideo = 'prejoin-enable-video';
-  static const _prefKeyEnableAudio = 'prejoin-enable-audio';
-  static const _prefKeyCameraPosition = 'prejoin-camera-position';
-  static const _prefKeyVideoResolution = 'prejoin-video-resolution';
-
-  static final List<VideoParameters> _videoResolutionOptions = [
-    VideoParametersPresets.h480_43,
-    VideoParametersPresets.h540_169,
-    VideoParametersPresets.h720_169,
-    VideoParametersPresets.h1080_169,
-  ];
-
-  List<MediaDevice> _audioInputs = [];
-  List<MediaDevice> _videoInputs = [];
-  StreamSubscription? _subscription;
-
-  bool _busy = false;
-  bool _enableVideo = true;
-  bool _enableAudio = true;
-  LocalAudioTrack? _audioTrack;
-  LocalVideoTrack? _videoTrack;
-  CameraPosition _cameraPosition = CameraPosition.front;
-  MediaDevice? _selectedAudioDevice;
-  VideoParameters _videoParameters = VideoParametersPresets.h480_43;
-
-  static String _resolutionKey(VideoParameters parameters) =>
-      '${parameters.dimensions.width}x${parameters.dimensions.height}';
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_initStateAsync());
-  }
-
-  Future<void> _initStateAsync() async {
-    await _readPrefs();
-    _subscription = Hardware.instance.onDeviceChange.stream.listen(_loadDevices);
-    final devices = await Hardware.instance.enumerateDevices();
-    await _loadDevices(devices);
-  }
-
-  @override
-  void deactivate() {
-    unawaited(_subscription?.cancel());
-    super.deactivate();
-  }
-
-  Future<void> _loadDevices(List<MediaDevice> devices) async {
-    _audioInputs = devices.where((d) => d.kind == 'audioinput').toList();
-    _videoInputs = devices.where((d) => d.kind == 'videoinput').toList();
-    if (_selectedAudioDevice != null && !_audioInputs.contains(_selectedAudioDevice)) {
-      _selectedAudioDevice = null;
-    }
-    if (_audioInputs.isEmpty) { await _audioTrack?.stop(); _audioTrack = null; }
-    if (_videoInputs.isEmpty) { await _videoTrack?.stop(); _videoTrack = null; }
-    if (_enableAudio && _audioInputs.isNotEmpty && _selectedAudioDevice == null) {
-      _selectedAudioDevice = _audioInputs.first;
-      Future.delayed(const Duration(milliseconds: 100), () async {
-        if (!mounted) return;
-        await _changeLocalAudioTrack();
-        if (mounted) setState(() {});
-      });
-    }
-    if (_enableVideo && _videoInputs.isNotEmpty && _videoTrack == null) {
-      Future.delayed(const Duration(milliseconds: 100), () async {
-        if (!mounted) return;
-        await _changeLocalVideoTrack();
-        if (mounted) setState(() {});
-      });
-    }
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _setEnableVideo(bool value) async {
-    _enableVideo = value;
-    await _writePrefs();
-    if (!_enableVideo) {
-      await _videoTrack?.stop();
-      _videoTrack = null;
-    } else {
-      await _changeLocalVideoTrack();
-    }
-    setState(() {});
-  }
-
-  Future<void> _setEnableAudio(bool value) async {
-    _enableAudio = value;
-    await _writePrefs();
-    if (!_enableAudio) {
-      await _audioTrack?.stop();
-      _audioTrack = null;
-      _selectedAudioDevice = null;
-    } else {
-      if (_selectedAudioDevice == null && _audioInputs.isNotEmpty) {
-        _selectedAudioDevice = _audioInputs.first;
-      }
-      await _changeLocalAudioTrack();
-    }
-    setState(() {});
-  }
-
-  Future<void> _changeLocalAudioTrack() async {
-    if (!_enableAudio) return;
-    if (_audioTrack != null) { await _audioTrack!.stop(); _audioTrack = null; }
-    if (_selectedAudioDevice != null) {
-      _audioTrack = await LocalAudioTrack.create(
-        AudioCaptureOptions(deviceId: _selectedAudioDevice!.deviceId),
-      );
-      await _audioTrack!.start();
-    }
-  }
-
-  Future<void> _changeLocalVideoTrack() async {
-    if (!_enableVideo) return;
-    
-    if (Platform.isAndroid) {
-      await CallForegroundService.start(
-        roomName: 'preview',
-        username: 'preview',
-      );
-    }
-    
-    if (_videoTrack != null) { await _videoTrack!.stop(); _videoTrack = null; }
-    _videoTrack = await LocalVideoTrack.createCameraTrack(CameraCaptureOptions(
-      cameraPosition: _cameraPosition,
-      params: _videoParameters,
-    ));
-    await _videoTrack!.start();
-  }
-
-  @override
-  void dispose() {
-    unawaited(_subscription?.cancel());
-    if (Platform.isAndroid) {
-      unawaited(CallForegroundService.stop());
-    }
-    super.dispose();
-  }
-
-  Future<void> _join(BuildContext context) async {
-    _busy = true;
-    setState(() {});
-
-    final args = widget.args;
-
-    try {
-      E2EEOptions? e2eeOptions;
-      if (args.e2ee && args.e2eeKey != null) {
-        final keyProvider = await BaseKeyProvider.create();
-        e2eeOptions = E2EEOptions(keyProvider: keyProvider);
-        await keyProvider.setKey(args.e2eeKey!);
-      }
-
-      const cameraEncoding = VideoEncoding(maxBitrate: 2 * 1000 * 1000, maxFramerate: 30);
-      const screenEncoding = VideoEncoding(maxBitrate: 3 * 1000 * 1000, maxFramerate: 15);
-
-      final room = Room(
-        roomOptions: RoomOptions(
-          adaptiveStream: args.adaptiveStream,
-          dynacast: args.dynacast,
-          defaultAudioPublishOptions: const AudioPublishOptions(
-            name: 'custom_audio_track_name',
-          ),
-          defaultCameraCaptureOptions: const CameraCaptureOptions(
-            maxFrameRate: 30,
-            params: VideoParameters(dimensions: VideoDimensions(640, 480)),
-          ),
-          defaultVideoPublishOptions: VideoPublishOptions(
-            simulcast: args.simulcast,
-            videoCodec: args.preferredCodec,
-            backupVideoCodec: BackupVideoCodec(enabled: args.enableBackupVideoCodec),
-            videoEncoding: cameraEncoding,
-            screenShareEncoding: screenEncoding,
-          ),
-          encryption: e2eeOptions,
-        ),
-      );
-
-      final listener = room.createListener();
-      await room.prepareConnection(args.url, args.token);
-
-      await room.connect(
-        args.url,
-        args.token,
-        fastConnectOptions: FastConnectOptions(
-          microphone: TrackOption(track: _audioTrack),
-          camera: TrackOption(track: _videoTrack),
-        ),
-      );
-
-      if (!context.mounted) return;
-      await context.push<void>(
-        '/room',
-        extra: (room, listener, args.role),
-      );
-    } catch (error) {
-      debugPrint('Could not connect $error');
-      if (!context.mounted) return;
-      await context.showErrorDialog(error);
-    } finally {
-      setState(() { _busy = false; });
-      if (context.mounted) context.go('/home/${widget.args.username}');
-    }
-  }
-
-  void _actionBack(BuildContext context) async {
-    await _setEnableVideo(false);
-    await _setEnableAudio(false);
-    if (!context.mounted) return;
-    context.pop();
-  }
-
-  Future<void> _readPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _enableVideo = prefs.getBool(_prefKeyEnableVideo) ?? true;
-      _enableAudio = prefs.getBool(_prefKeyEnableAudio) ?? true;
-      final positionName = prefs.getString(_prefKeyCameraPosition);
-      _cameraPosition = CameraPosition.values.firstWhere(
-        (position) => position.name == positionName,
-        orElse: () => CameraPosition.front,
-      );
-      final resolutionKey = prefs.getString(_prefKeyVideoResolution);
-      _videoParameters = _videoResolutionOptions.firstWhere(
-        (parameters) => _resolutionKey(parameters) == resolutionKey,
-        orElse: () => VideoParametersPresets.h480_43,
-      );
-    });
-  }
-
-  Future<void> _writePrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_prefKeyEnableVideo, _enableVideo);
-    await prefs.setBool(_prefKeyEnableAudio, _enableAudio);
-    await prefs.setString(_prefKeyCameraPosition, _cameraPosition.name);
-    await prefs.setString(
-      _prefKeyVideoResolution,
-      _resolutionKey(_videoParameters),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: LKColors.background,
-      appBar: AppBar(
-        backgroundColor: LKColors.surfaceElevated,
-        surfaceTintColor: Colors.transparent,
-        foregroundColor: LKColors.textPrimary,
-        title: Text('Configurer les appareils', style: UIUtils.titleMedium(context)),
-        leading: IconButton(
-          icon: UIUtils.textPrimaryIcon(Icons.arrow_back_rounded),
-          onPressed: () => _actionBack(context),
-        ),
-        elevation: 0,
-        shadowColor: Colors.transparent,
-        centerTitle: true,
-      ),
-      body: SingleChildScrollView(
-        padding: UIUtils.paddingLG,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Video Preview
-                Card(
-                  color: LKColors.surface,
-                  surfaceTintColor: Colors.transparent,
-                  elevation: 0,
-                  margin: EdgeInsets.zero,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: UIUtils.borderRadiusAllLG,
-                    side: BorderSide(color: LKColors.border, width: 0.5),
-                  ),
-                  child: Container(
-                    height: 240,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: LKColors.background,
-                      borderRadius: UIUtils.borderRadiusAllLG,
-                    ),
-                    child: _videoTrack != null
-                        ? ClipRRect(
-                            borderRadius: UIUtils.borderRadiusAllLG,
-                            child: VideoTrackRenderer(
-                              renderMode: VideoRenderMode.auto,
-                              _videoTrack!,
-                            ),
-                          )
-                        : AnimatedOpacity(
-                            opacity: _enableVideo ? 1.0 : 0.5,
-                            duration: UIUtils.animationDuration,
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.videocam_off_rounded,
-                                  color: LKColors.textHint,
-                                  size: 60,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Caméra désactivée',
-                                  style: UIUtils.bodySmall(context).copyWith(
-                                        color: LKColors.textHint,
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                  ),
-                ),
-                SizedBox(height: UIUtils.lg),
-                
-                // Camera Section
-                _buildToggleSection(
-                  icon: Icons.videocam_rounded,
-                  title: 'Caméra',
-                  value: _enableVideo,
-                  onChanged: _setEnableVideo,
-                  disabled: _videoInputs.isEmpty,
-                ),
-                SizedBox(height: UIUtils.sm),
-                
-                if (_enableVideo && _videoInputs.isNotEmpty) ...[
-                  _buildCameraPositionSelector(context),
-                  SizedBox(height: UIUtils.sm),
-                  _buildVideoResolutionSelector(context),
-                ],
-                SizedBox(height: UIUtils.lg),
-                
-                // Microphone Section
-                _buildToggleSection(
-                  icon: Icons.mic_rounded,
-                  title: 'Microphone',
-                  value: _enableAudio,
-                  onChanged: _setEnableAudio,
-                  disabled: _audioInputs.isEmpty,
-                ),
-                SizedBox(height: UIUtils.sm),
-                
-                if (_enableAudio && _audioInputs.isNotEmpty)
-                  _buildDropdown<MediaDevice>(
-                    label: 'Sélectionner le microphone',
-                    items: _audioInputs,
-                    value: _selectedAudioDevice,
-                    onChanged: (MediaDevice? value) async {
-                      if (value != null) {
-                        _selectedAudioDevice = value;
-                        await _changeLocalAudioTrack();
-                        setState(() {});
-                      }
-                    },
-                    itemBuilder: (d) => Text(d.label, style: UIUtils.bodySmall(context)),
-                  ),
-                SizedBox(height: UIUtils.xxl),
-                
-                // Join Button
-                FilledButton(
-                  onPressed: _busy ? null : () async => await _join(context),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: LKColors.primary,
-                    foregroundColor: Colors.white,
-                    padding: UIUtils.paddingVerticalLG.add(UIUtils.paddingHorizontalXXL),
-                    shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
-                    elevation: 0,
-                    shadowColor: Colors.transparent,
-                  ),
-                  child: _busy
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            ),
-                            SizedBox(width: UIUtils.sm),
-                            Text('REJOINDRE', style: UIUtils.labelLarge(context).copyWith(color: Colors.white)),
-                          ],
-                        )
-                      : Text('REJOINDRE', style: UIUtils.labelLarge(context).copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCameraPositionSelector(BuildContext context) {
-    return Container(
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.cameraswitch_rounded,
-                color: LKColors.textPrimary,
-                size: 20,
-              ),
-              SizedBox(width: UIUtils.sm),
-              Text(
-                'Orientation de la caméra',
-                style: UIUtils.labelMedium(context).copyWith(
-                  color: LKColors.textPrimary,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: UIUtils.sm),
-          SegmentedButton<CameraPosition>(
-            segments: [
-              ButtonSegment<CameraPosition>(
-                value: CameraPosition.front,
-                label: Text('Frontale', style: UIUtils.bodySmall(context)),
-                icon: const Icon(Icons.camera_front_rounded, size: 18),
-              ),
-              ButtonSegment<CameraPosition>(
-                value: CameraPosition.back,
-                label: Text('Dorsale', style: UIUtils.bodySmall(context)),
-                icon: const Icon(Icons.camera_rear_rounded, size: 18),
-              ),
-            ],
-            selected: {_cameraPosition},
-            showSelectedIcon: false,
-            onSelectionChanged: (selection) async {
-              _cameraPosition = selection.first;
-              await _writePrefs();
-              await _changeLocalVideoTrack();
-              if (mounted) setState(() {});
-            },
-            style: SegmentedButton.styleFrom(
-              backgroundColor: LKColors.surface,
-              foregroundColor: LKColors.textPrimary,
-              selectedBackgroundColor: LKColors.primary,
-              selectedForegroundColor: Colors.white,
-              padding: UIUtils.paddingVerticalSM.add(
-                UIUtils.paddingHorizontalSM,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: UIUtils.borderRadiusAllSM,
-              ),
-              side: BorderSide(color: LKColors.border, width: 0.5),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVideoResolutionSelector(BuildContext context) {
-    return Container(
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.high_quality_rounded,
-                color: LKColors.textPrimary,
-                size: 20,
-              ),
-              SizedBox(width: UIUtils.sm),
-              Text(
-                'Résolution vidéo',
-                style: UIUtils.labelMedium(context).copyWith(
-                  color: LKColors.textPrimary,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: UIUtils.sm),
-          DropdownButtonHideUnderline(
-            child: DropdownButton2<VideoParameters>(
-              isExpanded: true,
-              value: _videoParameters,
-              items: _videoResolutionOptions
-                  .map(
-                    (parameters) => DropdownMenuItem<VideoParameters>(
-                      value: parameters,
-                      child: Text(
-                        '${parameters.dimensions.width} x ${parameters.dimensions.height}',
-                        style: UIUtils.bodySmall(context),
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) async {
-                if (value == null || value == _videoParameters) return;
-                _videoParameters = value;
-                await _writePrefs();
-                await _changeLocalVideoTrack();
-                if (mounted) setState(() {});
-              },
-              buttonStyleData: ButtonStyleData(
-                padding: UIUtils.paddingHorizontalMD,
-                height: 44,
-                decoration: BoxDecoration(
-                  borderRadius: UIUtils.borderRadiusAllSM,
-                ),
-              ),
-              menuItemStyleData: MenuItemStyleData(
-                height: 44,
-                padding: UIUtils.paddingHorizontalMD,
-              ),
-              dropdownStyleData: DropdownStyleData(
-                maxHeight: 200,
-                decoration: BoxDecoration(
-                  color: LKColors.surfaceElevated,
-                  borderRadius: UIUtils.borderRadiusAllMD,
-                  border: Border.all(color: LKColors.border, width: 0.5),
-                ),
-                elevation: 8,
-                offset: const Offset(0, 4),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildToggleSection({
-    required IconData icon,
-    required String title,
-    required bool value,
-    required Future<void> Function(bool) onChanged,
-    bool disabled = false,
-  }) {
-    return Container(
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: disabled ? LKColors.textHint : LKColors.textPrimary, size: 20),
-          SizedBox(width: UIUtils.sm),
-          Expanded(
-            child: Text(
-              title,
-              style: UIUtils.labelMedium(context).copyWith(
-                    color: disabled ? LKColors.textHint : LKColors.textPrimary,
-                  ),
-            ),
-          ),
-          Switch(
-            value: value,
-            onChanged: disabled ? null : onChanged,
-            activeThumbColor: LKColors.primary,
-            inactiveThumbColor: LKColors.textHint,
-            inactiveTrackColor: LKColors.border,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDropdown<T>({
-    required String label,
-    required List<T> items,
-    required T? value,
-    required void Function(T?) onChanged,
-    required Widget Function(T) itemBuilder,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton2<T>(
-          isExpanded: true,
-          hint: Padding(
-            padding: UIUtils.paddingHorizontalMD,
-            child: Text(
-              label,
-              style: UIUtils.bodySmall(context).copyWith(color: LKColors.textHint),
-            ),
-          ),
-          items: items.map((item) => DropdownMenuItem<T>(
-            value: item,
-            child: Padding(
-              padding: UIUtils.paddingHorizontalMD,
-              child: itemBuilder(item),
-            ),
-          )).toList(),
-          value: value,
-          onChanged: onChanged,
-          buttonStyleData: ButtonStyleData(
-            padding: UIUtils.paddingHorizontalMD,
-            height: 44,
-            decoration: BoxDecoration(
-              borderRadius: UIUtils.borderRadiusAllSM,
-            ),
-          ),
-          menuItemStyleData: MenuItemStyleData(
-            height: 44,
-            padding: UIUtils.paddingHorizontalMD,
-          ),
-          dropdownStyleData: DropdownStyleData(
-            maxHeight: 200,
-            decoration: BoxDecoration(
-              color: LKColors.surfaceElevated,
-              borderRadius: UIUtils.borderRadiusAllMD,
-              border: Border.all(color: LKColors.border, width: 0.5),
-            ),
-            elevation: 8,
-            offset: const Offset(0, 4),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── ConnectPage ────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// ConnectPage
+// -----------------------------------------------------------------------------
 
 class ConnectPage extends StatefulWidget {
   const ConnectPage({
     super.key,
-    this.initialUsername,
     this.roomName = kDefaultRoom,
+    this.canControlRecording = false,
+    this.room,
   });
 
-  final String? initialUsername;
   final String roomName;
+  final bool canControlRecording;
+  final MobileRoom? room;
+
   @override
   State<StatefulWidget> createState() => _ConnectPageState();
 }
 
 class _ConnectPageState extends State<ConnectPage> {
-  final _usernameCtrl = TextEditingController();
   bool _busy = false;
+  _ConnectStage _stage = _ConnectStage.idle;
   final UserRole _role = UserRole.trainee;
-  final bool _simulcast = false;
-  final bool _adaptiveStream = true;
-  final bool _dynacast = true;
-  final bool _e2ee = false;
-  final String _preferredCodec = 'H264';
 
-  @override
-  void initState() {
-    super.initState();
-    _usernameCtrl.text = widget.initialUsername ?? '';
-    if (lkPlatformIs(PlatformType.android)) {
-      unawaited(_checkPermissions());
+  String get _accountEmail =>
+      AuthService.instance.email ?? AuthService.instance.displayName;
+
+  String get _initials {
+    final source = _accountEmail.trim();
+    if (source.isEmpty) return '?';
+    final parts = source
+        .split(RegExp(r'[\s@._-]+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return source.substring(0, 1).toUpperCase();
+  }
+
+  String get _stageLabel {
+    switch (_stage) {
+      case _ConnectStage.preparing:
+        return 'PRÉPARATION...';
+      case _ConnectStage.connecting:
+        return 'CONNEXION...';
+      case _ConnectStage.media:
+        return 'ACTIVATION MÉDIA...';
+      case _ConnectStage.idle:
+        return 'REJOINDRE MAINTENANT';
     }
   }
 
   @override
-  void dispose() {
-    _usernameCtrl.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    if (lkPlatformIs(PlatformType.android)) {
+      unawaited(_checkPermissions());
+    }
   }
 
   Future<void> _checkPermissions() async {
@@ -757,65 +112,124 @@ class _ConnectPageState extends State<ConnectPage> {
     }
   }
 
-  Future<String> _fetchToken({
-    required String identity,
-    required String room,
-  }) async {
-    final response = await http.post(
-      Uri.parse('$kApiBaseUrl/token'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'identity': identity, 'room': room}),
-    ).timeout(const Duration(seconds: 10));
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return data['token'] as String;
-    } else {
-      throw Exception('Token fetch failed (${response.statusCode}): ${response.body}');
-    }
+  Future<LiveKitToken> _fetchToken() {
+    return ApiService.getLiveKitToken(widget.roomName);
   }
 
   Future<void> _connect(BuildContext ctx) async {
-    if (_usernameCtrl.text.trim().isEmpty) {
-      await ctx.showErrorDialog('Veuillez entrer un nom d\'utilisateur');
-      return;
-    }
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _stage = _ConnectStage.preparing;
+    });
 
-    setState(() { _busy = true; });
+    Room? room;
+    EventsListener<RoomEvent>? listener;
 
     try {
-      final username = _usernameCtrl.text.trim();
-      // LiveKit identifie un participant par son identité : deux personnes avec
-      // le même nom se déconnectent mutuellement. On ajoute un suffixe unique
-      // à l'identité et on ne l'affiche pas (voir displayNameForIdentity).
-      final suffix = Random().nextInt(0xFFFFFF).toRadixString(36);
-      final identity = '$username$kIdentitySuffixSeparator$suffix';
-      debugPrint('Connexion → room=${widget.roomName} user=$username identity=$identity');
+      // L'identité LiveKit est dérivée du UID Firebase par le serveur.
+      final tokenResult = await _fetchToken();
 
-      final token = await _fetchToken(identity: identity, room: widget.roomName);
+      if (mounted) setState(() => _stage = _ConnectStage.connecting);
 
-      if (!ctx.mounted) return;
-      await ctx.push<void>(
-        '/prejoin',
-        extra: JoinArgs(
-          url: kLiveKitWsUrl,
-          username: username,
-          token: token,
+      room = _createRoom();
+      listener = room.createListener();
+
+      try {
+        await room.prepareConnection(tokenResult.url, tokenResult.token);
+        await room.connect(tokenResult.url, tokenResult.token);
+      } catch (_) {
+        // Une tentative de connexion peut consommer ou expirer le JWT.
+        // Redemander un token avant l'unique nouvelle tentative.
+        await room.disconnect();
+        final refreshed = await _fetchToken();
+        await room.prepareConnection(refreshed.url, refreshed.token);
+        await room.connect(refreshed.url, refreshed.token);
+      }
+
+      if (mounted) setState(() => _stage = _ConnectStage.media);
+
+      // Paramètres par défaut : micro et caméra avant publiés immédiatement.
+      await _publishDefaultDevices(room);
+
+      if (!ctx.mounted) {
+        await room.disconnect();
+        await listener.dispose();
+        return;
+      }
+
+      ctx.pushReplacement(
+        '/room',
+        extra: RoomRouteArgs(
+          room: room,
+          listener: listener,
           role: _role,
-          e2ee: _e2ee,
-          simulcast: _simulcast,
-          adaptiveStream: _adaptiveStream,
-          dynacast: _dynacast,
-          preferredCodec: _preferredCodec,
-          enableBackupVideoCodec: _preferredCodec != 'VP8',
+          roomName: widget.roomName,
+          canControlRecording: widget.canControlRecording,
         ),
       );
     } catch (error) {
       debugPrint('Erreur connexion: $error');
+      await room?.disconnect();
+      await listener?.dispose();
       if (!ctx.mounted) return;
       await ctx.showErrorDialog(error);
     } finally {
-      setState(() { _busy = false; });
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _stage = _ConnectStage.idle;
+        });
+      }
+    }
+  }
+
+  Room _createRoom() {
+    const cameraEncoding = VideoEncoding(
+      maxBitrate: 2 * 1000 * 1000,
+      maxFramerate: 30,
+    );
+    const screenEncoding = VideoEncoding(
+      maxBitrate: 3 * 1000 * 1000,
+      maxFramerate: 15,
+    );
+
+    return Room(
+      roomOptions: const RoomOptions(
+        adaptiveStream: true,
+        dynacast: true,
+        defaultCameraCaptureOptions: CameraCaptureOptions(
+          maxFrameRate: 30,
+          params: VideoParameters(dimensions: VideoDimensions(640, 480)),
+        ),
+        defaultAudioPublishOptions: AudioPublishOptions(
+          name: 'custom_audio_track_name',
+        ),
+        defaultVideoPublishOptions: VideoPublishOptions(
+          simulcast: false,
+          videoCodec: 'H264',
+          backupVideoCodec: BackupVideoCodec(enabled: true),
+          videoEncoding: cameraEncoding,
+          screenShareEncoding: screenEncoding,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _publishDefaultDevices(Room room) async {
+    final local = room.localParticipant;
+    if (local == null) return;
+
+    try {
+      await local.setMicrophoneEnabled(true);
+    } catch (error) {
+      debugPrint('Microphone indisponible: $error');
+    }
+
+    try {
+      await local.setCameraEnabled(true);
+    } catch (error) {
+      debugPrint('Caméra indisponible: $error');
     }
   }
 
@@ -823,143 +237,518 @@ class _ConnectPageState extends State<ConnectPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: LKColors.background,
-      appBar: AppBar(),
+      appBar: AppBar(
+        backgroundColor: LKColors.background,
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: LKColors.textPrimary,
+        elevation: 0,
+        title: Text(
+          'Rejoindre la session',
+          style: UIUtils.titleMedium(context),
+        ),
+      ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Center(
-              child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Logo
-                    AnimatedContainer(
-                      duration: UIUtils.animationDuration,
-                      padding: UIUtils.paddingXXL,
-                      child: Image.asset(
-                        'images/v.png',
-                        height: 80,
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-
-
-                    SizedBox(height: UIUtils.xxl),
-
-                    // Username Field
-                    TextField(
-                      controller: _usernameCtrl,
-                      decoration: UIUtils.inputDecoration(
-                        labelText: 'Nom du participant',
-                        hintText: 'ex: driver-01',
-                        prefixIcon: Icons.person_rounded,
-                      ),
-                      style: UIUtils.bodyLarge(context),
-                      cursorColor: LKColors.primary,
-                    ),
-                    SizedBox(height: UIUtils.lg),
-
-                    // Role Selection
-                    /*Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  UIUtils.lg,
+                  UIUtils.sm,
+                  UIUtils.lg,
+                  UIUtils.xl,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 560),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        *//*Text(
-                          'Votre rôle',
-                          style: UIUtils.labelMedium(context),
-                        ),
-                        SizedBox(height: UIUtils.sm),
-                        Card(
-                          color: LKColors.surface,
-                          surfaceTintColor: Colors.transparent,
-                          elevation: 0,
-                          margin: EdgeInsets.zero,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: UIUtils.borderRadiusAllMD,
-                            side: BorderSide(color: LKColors.border, width: 0.5),
-                          ),
-                          child: Padding(
-                            padding: UIUtils.paddingSM,
-                            child: SegmentedButton<UserRole>(
-                              segments: [
-                                ButtonSegment<UserRole>(
-                                  value: UserRole.trainee,
-                                  label: Text('Trainee', style: UIUtils.bodySmall(context)),
-                                  icon: Icon(Icons.directions_run_rounded, size: 18),
-                                ),
-                                ButtonSegment<UserRole>(
-                                  value: UserRole.coach,
-                                  label: Text('Coach', style: UIUtils.bodySmall(context)),
-                                  icon: Icon(Icons.sports_rounded, size: 18),
-                                ),
-                              ],
-                              selected: {_role},
-                              onSelectionChanged: (selection) =>
-                                  setState(() => _role = selection.first),
-                              style: SegmentedButton.styleFrom(
-                                backgroundColor: LKColors.surface,
-                                foregroundColor: LKColors.textPrimary,
-                                selectedBackgroundColor: LKColors.primary,
-                                selectedForegroundColor: Colors.white,
-                                padding: UIUtils.paddingVerticalSM.add(UIUtils.paddingHorizontalLG),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: UIUtils.borderRadiusAllSM,
-                                ),
-                                side: BorderSide(color: LKColors.border, width: 0.5),
-                              ),
-                            ),
-                          ),
-                        ),*//*
+                        _buildHeroCard(context),
+                        SizedBox(height: UIUtils.lg),
+                        _buildAccountCard(context),
+                        SizedBox(height: UIUtils.md),
+                        _buildConfigCard(context),
+                        SizedBox(height: UIUtils.md),
+                        _buildInfoBanner(context),
                       ],
-                    ),*/
-                    SizedBox(height: UIUtils.xxl),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            _buildBottomBar(context),
+          ],
+        ),
+      ),
+    );
+  }
 
-                    // Connect Button
-                    AnimatedContainer(
-                      duration: UIUtils.animationDuration,
-                      width: _busy ? 200 : double.infinity,
-                      child: FilledButton(
-                        onPressed: _busy ? null : () => _connect(context),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: LKColors.primary,
-                          foregroundColor: Colors.white,
-                          padding: UIUtils.paddingVerticalLG.add(UIUtils.paddingHorizontalXXL),
-                          shape: RoundedRectangleBorder(borderRadius: UIUtils.borderRadiusAllMD),
-                          elevation: 0,
-                          shadowColor: Colors.transparent,
-                        ),
-                        child: _busy
-                            ? Row(
-                                mainAxisSize: MainAxisSize.min,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                  SizedBox(width: UIUtils.sm),
-                                  Text('CONNEXION...', style: UIUtils.labelLarge(context).copyWith(color: Colors.white)),
-                                ],
-                              )
-                            : Row(
-                                mainAxisSize: MainAxisSize.min,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.login_rounded, size: 20, color: Colors.white),
-                                  SizedBox(width: UIUtils.sm),
-                                  Text('CONNECTER', style: UIUtils.labelLarge(context).copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
-                                ],
-                              ),
+  Widget _buildHeroCard(BuildContext context) {
+    final selectedRoom = widget.room;
+    final isRecording = selectedRoom?.isRecording ?? false;
+    final isLive = (selectedRoom?.participantCount ?? 0) > 0;
+    final statusLabel = isRecording
+        ? 'Enregistrement en cours'
+        : isLive
+        ? '${selectedRoom!.participantCount} participant${selectedRoom.participantCount > 1 ? 's' : ''} connecté${selectedRoom.participantCount > 1 ? 's' : ''}'
+        : 'Session prête';
+    final statusColor = isRecording
+        ? LKColors.danger
+        : isLive
+        ? LKColors.success
+        : LKColors.secondary;
+
+    return Container(
+      padding: UIUtils.paddingXL,
+      decoration: BoxDecoration(
+        borderRadius: UIUtils.borderRadiusAllXL,
+        border: Border.all(
+          color: LKColors.primary.withValues(alpha: 0.28),
+          width: 0.5,
+        ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            LKColors.primary.withValues(alpha: 0.2),
+            LKColors.secondary.withValues(alpha: 0.07),
+            LKColors.surface,
+          ],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: LKColors.primary.withValues(alpha: 0.16),
+                  borderRadius: UIUtils.borderRadiusAllLG,
+                ),
+                child: const Icon(
+                  Icons.videocam_rounded,
+                  color: LKColors.primary,
+                  size: 25,
+                ),
+              ),
+              SizedBox(width: UIUtils.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'SESSION SÉLECTIONNÉE',
+                      style: UIUtils.bodySmall(context).copyWith(
+                        color: LKColors.textHint,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.2,
                       ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      widget.roomName,
+                      style: UIUtils.titleLarge(
+                        context,
+                      ).copyWith(fontSize: 22, fontWeight: FontWeight.w700),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
-        ),
+            ],
           ),
+          SizedBox(height: UIUtils.lg),
+          Wrap(
+            spacing: UIUtils.sm,
+            runSpacing: UIUtils.sm,
+            children: [
+              _buildPill(
+                context,
+                icon: isRecording
+                    ? Icons.fiber_manual_record_rounded
+                    : isLive
+                    ? Icons.sensors_rounded
+                    : Icons.check_circle_rounded,
+                label: statusLabel,
+                color: statusColor,
+              ),
+              if (widget.canControlRecording)
+                _buildPill(
+                  context,
+                  icon: Icons.settings_remote_rounded,
+                  label: 'Contrôle Egress',
+                  color: LKColors.success,
+                ),
+              _buildPill(
+                context,
+                icon: Icons.lock_rounded,
+                label: 'Connexion sécurisée',
+                color: LKColors.textSecondary,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPill(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: UIUtils.sm, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: UIUtils.borderRadiusAllFull,
+        border: Border.all(color: color.withValues(alpha: 0.22), width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          SizedBox(width: 5),
+          Text(
+            label,
+            style: UIUtils.bodySmall(
+              context,
+            ).copyWith(color: color, fontSize: 10, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccountCard(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingLG,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllLG,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: LKColors.primary.withValues(alpha: 0.14),
+              borderRadius: UIUtils.borderRadiusAllFull,
+            ),
+            child: Text(
+              _initials,
+              style: UIUtils.labelLarge(
+                context,
+              ).copyWith(color: LKColors.primary, fontWeight: FontWeight.w700),
+            ),
+          ),
+          SizedBox(width: UIUtils.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _accountEmail,
+                  style: UIUtils.bodyMedium(
+                    context,
+                  ).copyWith(fontWeight: FontWeight.w600),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: 2),
+                Row(
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: LKColors.success,
+                        borderRadius: UIUtils.borderRadiusAllFull,
+                      ),
+                    ),
+                    SizedBox(width: 5),
+                    Text(
+                      'Compte authentifié',
+                      style: UIUtils.bodySmall(
+                        context,
+                      ).copyWith(color: LKColors.textHint, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.verified_user_rounded,
+            size: 20,
+            color: LKColors.success.withValues(alpha: 0.8),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfigCard(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingLG,
+      decoration: BoxDecoration(
+        color: LKColors.surface,
+        borderRadius: UIUtils.borderRadiusAllLG,
+        border: Border.all(color: LKColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Configuration automatique',
+            style: UIUtils.labelLarge(
+              context,
+            ).copyWith(fontWeight: FontWeight.w700),
+          ),
+          SizedBox(height: UIUtils.md),
+          _buildConfigRow(
+            context,
+            icon: Icons.videocam_rounded,
+            title: 'Caméra avant',
+            subtitle: '640 × 480 · 30 fps',
+          ),
+          _buildConfigDivider(),
+          _buildConfigRow(
+            context,
+            icon: Icons.mic_rounded,
+            title: 'Microphone',
+            subtitle: 'Activé à l\'entrée',
+          ),
+          _buildConfigDivider(),
+          _buildConfigRow(
+            context,
+            icon: Icons.tune_rounded,
+            title: 'Réglages',
+            subtitle: 'Modifiables pendant la session',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfigRow(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: LKColors.background.withValues(alpha: 0.55),
+            borderRadius: UIUtils.borderRadiusAllSM,
+          ),
+          child: Icon(icon, size: 18, color: LKColors.primary),
+        ),
+        SizedBox(width: UIUtils.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: UIUtils.bodyMedium(
+                  context,
+                ).copyWith(fontWeight: FontWeight.w600),
+              ),
+              Text(
+                subtitle,
+                style: UIUtils.bodySmall(
+                  context,
+                ).copyWith(color: LKColors.textHint, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+        Icon(
+          Icons.check_rounded,
+          size: 17,
+          color: LKColors.success.withValues(alpha: 0.8),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConfigDivider() {
+    return Container(
+      height: 0.5,
+      margin: EdgeInsets.symmetric(vertical: UIUtils.sm),
+      color: LKColors.border.withValues(alpha: 0.7),
+    );
+  }
+
+  Widget _buildInfoBanner(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.secondary.withValues(alpha: 0.07),
+        borderRadius: UIUtils.borderRadiusAllMD,
+        border: Border.all(
+          color: LKColors.secondary.withValues(alpha: 0.16),
+          width: 0.5,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded, size: 18, color: LKColors.secondary),
+          SizedBox(width: UIUtils.sm),
+          Expanded(
+            child: Text(
+              'Vous entrerez directement dans la session. Aucun écran de prévisualisation.',
+              style: UIUtils.bodySmall(context).copyWith(
+                color: LKColors.textSecondary,
+                fontSize: 11,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomBar(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        UIUtils.lg,
+        UIUtils.md,
+        UIUtils.lg,
+        UIUtils.lg,
+      ),
+      decoration: BoxDecoration(
+        color: LKColors.surfaceElevated,
+        border: Border(
+          top: BorderSide(
+            color: LKColors.border.withValues(alpha: 0.7),
+            width: 0.5,
+          ),
+        ),
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AnimatedSwitcher(
+                duration: UIUtils.animationDuration,
+                child: _busy
+                    ? ClipRRect(
+                        key: const ValueKey('progress'),
+                        borderRadius: UIUtils.borderRadiusAllFull,
+                        child: const LinearProgressIndicator(
+                          minHeight: 3,
+                          backgroundColor: LKColors.border,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            LKColors.primary,
+                          ),
+                        ),
+                      )
+                    : const SizedBox(
+                        key: ValueKey('progress-placeholder'),
+                        height: 3,
+                      ),
+              ),
+              SizedBox(height: UIUtils.md),
+              SizedBox(
+                height: 52,
+                child: FilledButton(
+                  onPressed: _busy ? null : () => _connect(context),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: LKColors.primary,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: LKColors.primary.withValues(
+                      alpha: 0.4,
+                    ),
+                    disabledForegroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: UIUtils.borderRadiusAllMD,
+                    ),
+                    elevation: 0,
+                  ),
+                  child: AnimatedSwitcher(
+                    duration: UIUtils.animationDuration,
+                    child: _busy
+                        ? Row(
+                            key: const ValueKey('connecting'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: UIUtils.md),
+                              Text(
+                                _stageLabel,
+                                style: UIUtils.labelLarge(context).copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Row(
+                            key: const ValueKey('idle'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.login_rounded,
+                                size: 20,
+                                color: Colors.white,
+                              ),
+                              SizedBox(width: UIUtils.sm),
+                              Text(
+                                _stageLabel,
+                                style: UIUtils.labelLarge(context).copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+              SizedBox(height: UIUtils.sm),
+              Text(
+                _busy
+                    ? 'Merci de patienter pendant la connexion.'
+                    : 'La caméra et le microphone seront activés automatiquement.',
+                textAlign: TextAlign.center,
+                style: UIUtils.bodySmall(
+                  context,
+                ).copyWith(color: LKColors.textHint, fontSize: 10),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

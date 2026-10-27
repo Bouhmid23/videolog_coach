@@ -13,6 +13,11 @@ extension LKColors on Colors {
   static const primaryDark = Color(0xFF3D6EE0);
   static const secondary = Color(0xFF22D3EE);
 
+  // Logo Videolog (dégradé de bleus du « V »)
+  static const logoLight = Color(0xFF66CCF5);
+  static const logoBlue = Color(0xFF22B8F0);
+  static const logoDeep = Color(0xFF009FE3);
+
   // Surfaces
   static const background = Color(0xFF0B1120);
   static const surface = Color(0xFF111827);
@@ -38,13 +43,12 @@ class LiveKitTheme {
   const LiveKitTheme();
 
   ThemeData buildThemeData(BuildContext ctx) {
-    final baseTextTheme = GoogleFonts.montserratTextTheme(Theme
-        .of(ctx)
-        .textTheme).apply(
-      displayColor: LKColors.textPrimary,
-      bodyColor: LKColors.textPrimary,
-      decorationColor: LKColors.textPrimary,
-    );
+    final baseTextTheme =
+        GoogleFonts.montserratTextTheme(Theme.of(ctx).textTheme).apply(
+          displayColor: LKColors.textPrimary,
+          bodyColor: LKColors.textPrimary,
+          decorationColor: LKColors.textPrimary,
+        );
 
     return ThemeData(
       useMaterial3: true,
@@ -141,7 +145,9 @@ class LiveKitTheme {
         prefixIconColor: LKColors.textSecondary,
         suffixIconColor: LKColors.textSecondary,
         contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14, vertical: 14),
+          horizontal: 14,
+          vertical: 14,
+        ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: LKColors.border),

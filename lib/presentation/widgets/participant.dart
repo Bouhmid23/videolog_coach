@@ -1,4 +1,5 @@
-﻿import 'package:collection/collection.dart';
+import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui' as ui;
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
@@ -10,8 +11,10 @@ import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
 import '../../utils.dart';
+import '../../viewmodels/pose_detection_viewmodel.dart';
 import '../utils/ui_utils.dart';
 import 'no_video.dart';
+import 'pose_overlay.dart';
 
 /// Classe reprÃ©sentant une piste de participant avec ses donnÃ©es associÃ©es
 abstract class ParticipantWidget extends StatefulWidget {
@@ -33,7 +36,8 @@ abstract class ParticipantWidget extends StatefulWidget {
         //poseFrameSize: participantTrack.poseFrameSize,
         //avatarOnly: participantTrack.avatarOnly,
         //showPosePip: participantTrack.showPosePip,
-        //showPosture: participantTrack.showPosture,
+        poseListenable: participantTrack.poseListenable,
+        showPosture: participantTrack.showPosture,
         poseAside: poseAside,
         showDataHud: showDataHud,
         infoAtTop: infoAtTop,
@@ -49,7 +53,8 @@ abstract class ParticipantWidget extends StatefulWidget {
         //poseFrameSize: participantTrack.poseFrameSize,
         //avatarOnly: participantTrack.avatarOnly,
         //showPosePip: participantTrack.showPosePip,
-        //showPosture: participantTrack.showPosture,
+        poseListenable: participantTrack.poseListenable,
+        showPosture: participantTrack.showPosture,
         //onTogglePosture: participantTrack.onTogglePosture,
         poseAside: poseAside,
         showDataHud: showDataHud,
@@ -64,6 +69,7 @@ abstract class ParticipantWidget extends StatefulWidget {
   abstract final bool showStatsLayer;
   final RemotePosture? posture;
   final RemoteTelemetry? telemetry;
+  final ValueListenable<PoseFrame?>? poseListenable;
   final Pose? pose;
   final Size? poseFrameSize;
   final bool avatarOnly;
@@ -78,6 +84,7 @@ abstract class ParticipantWidget extends StatefulWidget {
   const ParticipantWidget({
     this.posture,
     this.telemetry,
+    this.poseListenable,
     this.pose,
     this.poseFrameSize,
     this.avatarOnly = false,
@@ -107,6 +114,7 @@ class LocalParticipantWidget extends ParticipantWidget {
     this.showStatsLayer, {
     super.posture,
     super.telemetry,
+    super.poseListenable,
     super.pose,
     super.poseFrameSize,
     super.avatarOnly,
@@ -137,6 +145,7 @@ class RemoteParticipantWidget extends ParticipantWidget {
     this.showStatsLayer, {
     super.posture,
     super.telemetry,
+    super.poseListenable,
     super.pose,
     super.poseFrameSize,
     super.avatarOnly,
@@ -155,15 +164,30 @@ class RemoteParticipantWidget extends ParticipantWidget {
 
 /// Ã‰tat partagÃ© pour tous les widgets de participant
 abstract class _ParticipantWidgetState<T extends ParticipantWidget>
-    extends State<T> with SingleTickerProviderStateMixin {
+    extends State<T>
+    with SingleTickerProviderStateMixin {
   bool _visible = true;
   VideoTrack? get activeVideoTrack;
   AudioTrack? get activeAudioTrack;
   TrackPublication? get videoPublication;
   TrackPublication? get audioPublication;
   bool get isScreenShare => widget.type == ParticipantTrackType.kScreenShare;
+
+  /// Le renderer LiveKit miroite la caméra frontale locale. Le squelette doit
+  /// suivre exactement le même miroir pour rester aligné sur l'image affichée.
+  bool get _mirrorVideo {
+    final track = activeVideoTrack;
+    if (track is! LocalVideoTrack) return false;
+    final options = track.currentOptions;
+    if (options is CameraCaptureOptions) {
+      return options.cameraPosition == CameraPosition.front;
+    }
+    final facingMode = track.mediaStreamTrack.getSettings()['facingMode'];
+    return facingMode == 'user' || facingMode == 'front';
+  }
+
   EventsListener<ParticipantEvent>? _listener;
-  
+
   // Animation pour l'apparition
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
@@ -174,26 +198,26 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     super.initState();
     _listener = widget.participant.createListener();
     widget.participant.addListener(_onParticipantChanged);
-    
+
     // Initialiser les animations
     _animationController = AnimationController(
       vsync: this,
       duration: UIUtils.animationDuration,
     );
-    
+
     _scaleAnimation = CurvedAnimation(
       parent: _animationController,
       curve: UIUtils.animationCurveBounce,
     );
-    
+
     _opacityAnimation = CurvedAnimation(
       parent: _animationController,
       curve: Curves.easeIn,
     );
-    
+
     // DÃ©marrer l'animation
     _animationController.forward();
-    
+
     _onParticipantChanged();
   }
 
@@ -248,9 +272,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
-            children: [
-              Expanded(child: _buildBody()),
-            ],
+            children: [Expanded(child: _buildBody())],
           ),
         ),
       ),
@@ -277,16 +299,26 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
                   fit: VideoViewFit.cover,
                 )
               : NoVideoWidget(
-                  state: isScreenShare 
-                      ? NoVideoState.screenShare 
-                      : (activeVideoTrack?.muted == true 
-                          ? NoVideoState.videoMuted 
-                          : NoVideoState.noVideo),
-                  participantName: widget.participant.name.isNotEmpty 
+                  state: isScreenShare
+                      ? NoVideoState.screenShare
+                      : (activeVideoTrack?.muted == true
+                            ? NoVideoState.videoMuted
+                            : NoVideoState.noVideo),
+                  participantName: widget.participant.name.isNotEmpty
                       ? displayNameForIdentity(widget.participant.name)
                       : null,
                 ),
         ),
+
+        // 2. Squelette de posture (pose locale)
+        if (widget.showPosture && widget.poseListenable != null)
+          Positioned.fill(
+            child: ValueListenableBuilder<PoseFrame?>(
+              valueListenable: widget.poseListenable!,
+              builder: (context, frame, _) =>
+                  PoseOverlay(frame: frame, mirrorX: _mirrorVideo),
+            ),
+          ),
 
         // 3. HUD de donnees (telemetrie)
         if (widget.showDataHud &&
@@ -310,8 +342,9 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
 
         // 4. Info du participant (en haut pour le flux principal, en bas sinon)
         Align(
-          alignment:
-              widget.infoAtTop ? Alignment.topCenter : Alignment.bottomCenter,
+          alignment: widget.infoAtTop
+              ? Alignment.topCenter
+              : Alignment.bottomCenter,
           child: _buildParticipantInfo(isScreenShare),
         ),
 
@@ -330,7 +363,8 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
           title: widget.participant.name.isNotEmpty
               ? displayNameForIdentity(widget.participant.name)
               : displayNameForIdentity(widget.participant.identity),
-          audioAvailable: audioPublication?.muted == false &&
+          audioAvailable:
+              audioPublication?.muted == false &&
               audioPublication?.subscribed == true,
           connectionQuality: widget.participant.connectionQuality,
           isScreenShare: isScreenShare,
@@ -344,7 +378,6 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     if (!widget.infoAtTop) return info;
     return SafeArea(bottom: false, child: info);
   }
-
 }
 
 class DataHud extends StatefulWidget {
@@ -377,19 +410,39 @@ class _DataHudState extends State<DataHud> {
     final telemetry = widget.telemetry;
     if (telemetry != null) {
       if (telemetry.hasHrm) {
-        items.add((Icons.favorite_rounded, LKColors.danger, '${telemetry.heartRate} bpm'));
+        items.add((
+          Icons.favorite_rounded,
+          LKColors.danger,
+          '${telemetry.heartRate} bpm',
+        ));
       }
       if (telemetry.speed != null) {
-        items.add((Icons.speed_rounded, LKColors.warning, '${telemetry.speed!.toStringAsFixed(1)} km/h'));
+        items.add((
+          Icons.speed_rounded,
+          LKColors.warning,
+          '${telemetry.speed!.toStringAsFixed(1)} km/h',
+        ));
       }
       if (telemetry.cadence != null) {
-        items.add((Icons.pedal_bike_rounded, LKColors.success, '${telemetry.cadence!.toStringAsFixed(0)} rpm'));
+        items.add((
+          Icons.pedal_bike_rounded,
+          LKColors.success,
+          '${telemetry.cadence!.toStringAsFixed(0)} rpm',
+        ));
       }
       if (telemetry.altitude != null) {
-        items.add((Icons.height_rounded, LKColors.secondary, '${telemetry.altitude!.toStringAsFixed(0)} m'));
+        items.add((
+          Icons.height_rounded,
+          LKColors.secondary,
+          '${telemetry.altitude!.toStringAsFixed(0)} m',
+        ));
       }
       if (telemetry.bearing != null) {
-        items.add((Icons.explore_rounded, LKColors.warning, '${telemetry.bearing!.toStringAsFixed(0)}°'));
+        items.add((
+          Icons.explore_rounded,
+          LKColors.warning,
+          '${telemetry.bearing!.toStringAsFixed(0)}°',
+        ));
       }
     }
 
@@ -492,18 +545,16 @@ class _HudChip extends StatelessWidget {
         color: LKColors.surfaceElevated,
         borderRadius: UIUtils.borderRadiusAllSM,
         border: Border.all(
-          color: onTap != null ? LKColors.border.withValues(alpha: 0.8) : LKColors.border,
+          color: onTap != null
+              ? LKColors.border.withValues(alpha: 0.8)
+              : LKColors.border,
           width: 0.3,
         ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            icon,
-            color: color,
-            size: compact ? 13 : 12,
-          ),
+          Icon(icon, color: color, size: compact ? 13 : 12),
           AnimatedSize(
             duration: UIUtils.animationDuration,
             curve: UIUtils.animationCurve,
@@ -535,43 +586,49 @@ class _HudChip extends StatelessWidget {
 }
 
 /// Ã‰tat pour le participant local
-class _LocalParticipantWidgetState extends _ParticipantWidgetState<LocalParticipantWidget> {
+class _LocalParticipantWidgetState
+    extends _ParticipantWidgetState<LocalParticipantWidget> {
   @override
-  LocalTrackPublication<LocalVideoTrack>? get videoPublication => 
-      widget.participant.videoTrackPublications
-          .where((e) => e.source == widget.type.lkVideoSourceType)
-          .firstOrNull;
-  
+  LocalTrackPublication<LocalVideoTrack>? get videoPublication => widget
+      .participant
+      .videoTrackPublications
+      .where((e) => e.source == widget.type.lkVideoSourceType)
+      .firstOrNull;
+
   @override
-  LocalTrackPublication<LocalAudioTrack>? get audioPublication => 
-      widget.participant.audioTrackPublications
-          .where((e) => e.source == widget.type.lkAudioSourceType)
-          .firstOrNull;
-  
+  LocalTrackPublication<LocalAudioTrack>? get audioPublication => widget
+      .participant
+      .audioTrackPublications
+      .where((e) => e.source == widget.type.lkAudioSourceType)
+      .firstOrNull;
+
   @override
   VideoTrack? get activeVideoTrack => videoPublication?.track;
-  
+
   @override
   AudioTrack? get activeAudioTrack => audioPublication?.track;
 }
 
 /// Ã‰tat pour un participant distant
-class _RemoteParticipantWidgetState extends _ParticipantWidgetState<RemoteParticipantWidget> {
+class _RemoteParticipantWidgetState
+    extends _ParticipantWidgetState<RemoteParticipantWidget> {
   @override
-  RemoteTrackPublication<RemoteVideoTrack>? get videoPublication => 
-      widget.participant.videoTrackPublications
-          .where((e) => e.source == widget.type.lkVideoSourceType)
-          .firstOrNull;
-  
+  RemoteTrackPublication<RemoteVideoTrack>? get videoPublication => widget
+      .participant
+      .videoTrackPublications
+      .where((e) => e.source == widget.type.lkVideoSourceType)
+      .firstOrNull;
+
   @override
-  RemoteTrackPublication<RemoteAudioTrack>? get audioPublication => 
-      widget.participant.audioTrackPublications
-          .where((e) => e.source == widget.type.lkAudioSourceType)
-          .firstOrNull;
-  
+  RemoteTrackPublication<RemoteAudioTrack>? get audioPublication => widget
+      .participant
+      .audioTrackPublications
+      .where((e) => e.source == widget.type.lkAudioSourceType)
+      .firstOrNull;
+
   @override
   VideoTrack? get activeVideoTrack => videoPublication?.track;
-  
+
   @override
   AudioTrack? get activeAudioTrack => audioPublication?.track;
 }

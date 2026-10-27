@@ -8,135 +8,106 @@ framework UI**. Il sert de spécification fonctionnelle pour la réimplémentati
 
 | Écran | Route | Rôle |
 |---|---|---|
-| Connexion | `/login` | Saisie d'identifiant |
-| Accueil | `/home/:username` | Tableau de bord |
-| Salles | `/rooms/:username` | Liste des salles |
-| Connexion salle | `/connect/:roomName` | Saisie participant + token |
-| Pré-connexion | `/prejoin` (pile principale) | Périphériques et options |
-| Session | `/room` (pile principale) | Session de coaching |
+| Connexion | `/login` | Saisie email / mot de passe Firebase |
+| Salles | `/rooms` | Liste réelle des sessions autorisées |
+| Connexion salle | `/connect/:roomName` | Compte Firebase + token LiveKit |
+| Session | `/room` (pile principale) | Session de coaching + contrôle Egress |
 
 | Transition | Mécanisme |
 |---|---|
-| Login → Home | navigation avec identifiant dans le chemin |
-| Home → Rooms | navigation avec identifiant |
-| Rooms → Connect | navigation avec nom de salle + identifiant en paramètre |
-| Connect → PreJoin | navigation avec arguments complets (pile racine) |
-| PreJoin → Room | navigation avec salle + écouteur (pile racine) |
-| Room → précédent | retour (pop) à la déconnexion |
-| PreJoin → arrière | retour + désactivation micro/caméra |
-| Erreur de connexion → Home | retour forcé |
+| Route protégée sans session | redirection vers `/login` |
+| Login → Rooms | redirection automatique après connexion Firebase |
+| Rooms → Connect | navigation avec la room sélectionnée (nom, participants, enregistrement, `can_control_recording`) |
+| Connect → Room | connexion avec les paramètres par défaut, puis remplacement de l'écran |
+| Room → précédent | retour (pop) vers `/rooms` à la déconnexion |
+| Erreur de connexion → Connect | dialogue d'erreur, l'écran reste affiché |
+| Déconnexion | `signOut()` Firebase → redirection vers `/login` |
 
 ## 2. Écran de connexion
 
 | Aspect | Comportement |
 |---|---|
 | Champs | email, mot de passe, case « Se souvenir de moi » |
-| Validation | les deux champs doivent être non vides ; sinon message éphémère (« Veuillez remplir tous les champs ») |
-| Identifiant dérivé | `displayName = partie avant "@" de l'email` |
-| Authentification | **aucune vérification réseau** (accès fictif en attendant une API) |
-| Suite | navigation vers l'accueil avec l'identifiant |
+| Validation | les deux champs doivent être non vides ; sinon message éphémère |
+| Authentification | **Firebase Auth** (`signInWithEmailAndPassword`) ; le mot de passe n'est jamais envoyé à l'API Videolog |
+| Token | l'ID token Firebase est demandé à chaque appel API (`getIdToken`) |
+| Erreurs | messages traduits (identifiants invalides, réseau, trop de tentatives, compte désactivé) |
+| Déconnexion | `signOut()` ; si « Se souvenir de moi » est décoché, la session est effacée au prochain démarrage |
+| Suite | navigation vers `/rooms` |
 
-## 3. Écran d'accueil
-
-| Aspect | Comportement |
-|---|---|
-| Contenu | **statique** : indicateurs codés en dur (charge 78 %, 12 séances, cardio moyen 162 bpm, score 91), carte « Prochaine séance » |
-| Action principale | bouton → écran des salles |
-| Aucune donnée réelle | aucun appel réseau, aucune persistance |
-
-## 4. Écran des salles
+## 3. Écran des salles
 
 | Aspect | Comportement |
 |---|---|
-| Contenu | une seule salle : `poc-room` (statique) |
-| Action | « Rejoindre » → écran de connexion salle, identifiant propagé |
+| En-tête | salutation, nombre de sessions, sessions en direct, enregistrements en cours |
+| Contenu | cartes issues de `GET /mobile/rooms` : nom, statut (disponible / en direct / enregistrement), nombre de participants, droit de contrôle Egress, dernière activité |
+| Action carte | toute la carte ou le bouton « Rejoindre la session » ouvre l'écran de connexion salle |
+| États | chargement, erreur avec « Réessayer », liste vide avec « Actualiser », rafraîchissement par glissement |
+| Actualisation | bouton dans l'en-tête et glissement vers le bas ; la room sélectionnée est transmise à l'écran suivant |
 
-## 5. Écran de connexion salle
+## 4. Écran de connexion salle
 
-### 5.1 Affichage
+### 4.1 Affichage
 
 | Bloc | Contenu |
 |---|---|
-| Logo | image de marque |
-| Informations | `Room: <nom>`, `Server: <url WebSocket>`, `API: <url API>` |
-| Saisie | « Nom du participant » (indice : `ex: driver-01`) |
-| Rôle | sélecteur segmenté « Trainee » / « Coach » (défaut : Trainee) |
-| Action | bouton « CONNECTER » (indicateur de chargement pendant le traitement) |
+| Session | nom de la session, statut (prête / participants / enregistrement), contrôle Egress, connexion sécurisée |
+| Compte | initiales, email Firebase, état d'authentification |
+| Configuration | caméra avant 640×480 · 30 fps, microphone activé, réglages modifiables en session |
+| Information | entrée directe, sans écran de prévisualisation |
+| Action | bouton « REJOINDRE MAINTENANT » fixé en bas, avec étapes de progression (préparation, connexion, activation média) |
 
-### 5.2 Comportement de connexion
+### 4.2 Progression
+
+| Étape | Libellé |
+|---|---|
+| Préparation | `PRÉPARATION...` |
+| Connexion LiveKit | `CONNEXION...` |
+| Publication micro / caméra | `ACTIVATION MÉDIA...` |
+| Repos | `REJOINDRE MAINTENANT` |
+
+### 4.3 Comportement de connexion
 
 ```
-si nom vide → dialogue d'erreur « Entrer un nom d'utilisateur »
-sinon :
-    état occupé = true
-    POST /token (timeout 10 s)
-    succès  → navigation vers la pré-connexion avec les arguments de jonction
-    échec   → dialogue d'erreur avec le détail (code + corps)
-    toujours → état occupé = false
+état occupé = true
+Authorization: Bearer <Firebase ID token>
+POST /token { "room": "<room>" } (timeout 15 s)
+créer la Room LiveKit et l'écouteur d'événements
+préparer puis connecter (nouvelle tentative unique avec un token rafraîchi)
+publier le micro et la caméra avant avec les paramètres par défaut
+succès  → pushReplacement vers /room (retour vers /rooms à la sortie)
+échec   → dialogue d'erreur avec le message serveur (401 / 403 / 404)
+toujours → état occupé = false
 ```
 
-### 5.3 Demande de permissions (Android uniquement)
+### 4.4 Demande de permissions (Android uniquement)
 
 Au montage : `bluetooth`, `bluetoothConnect`, `camera`, `microphone` — chacune sollicitée ;
 un refus définitif est journalisé.
 
-### 5.4 Arguments transmis (JoinArgs)
+### 4.5 Paramètres de connexion par défaut
 
-| Champ | Valeur par défaut |
+| Paramètre | Valeur |
 |---|---|
-| `url` | URL LiveKit |
-| `token` | obtenu |
-| `username` | saisi |
-| `role` | `trainee` (ou `coach` si sélectionné) |
-| `e2ee` | `false` |
-| `e2eeKey` | `null` |
-| `simulcast` | `true` |
+| Microphone | activé, capture audio par défaut |
+| Caméra | avant, 640×480, 30 fps max |
 | `adaptiveStream` | `true` |
 | `dynacast` | `true` |
-| `preferredCodec` | `VP8` |
-| `enableBackupVideoCodec` | `true` si VP9/AV1, sinon `false` |
+| `simulcast` | `false` |
+| Codec vidéo | `H264` (codec de secours activé) |
+| E2EE | désactivé |
+| Rôle | `trainee` |
+| `canControlRecording` | `can_control_recording` renvoyé par `GET /mobile/rooms` |
 
-## 6. Écran de pré-connexion
+## 5. Connexion sans écran de pré-connexion
 
-### 6.1 Composition
+Il n'y a **plus d'écran PreJoin** : la room est rejointe directement depuis l'écran de
+connexion salle. Le micro et la caméra avant sont publiés avec les paramètres par défaut ;
+l'utilisateur peut ensuite les modifier depuis la barre de contrôles de la session.
 
-| Zone | Contenu |
-|---|---|
-| Prévisualisation | aperçu caméra 320×240 (ou icône si désactivée) |
-| Caméra | interrupteur + liste des caméras + liste des résolutions |
-| Microphone | interrupteur + liste des micros |
-| Action | bouton « JOIN » (indicateur pendant la connexion) |
+## 6. Écran de session
 
-### 6.2 Règles de périphériques
-
-| Situation | Comportement |
-|---|---|
-| Périphérique sélectionné disparu | sélection vidée |
-| Plus de périphériques | track associée libérée |
-| Activation avec aucun sélectionné | sélection automatique du premier + création de track |
-| Changement de périphérique | ancienne track **arrêtée**, nouvelle créée |
-| Changement de résolution | nouvelle track créée avec les nouveaux paramètres |
-| Chaque changement | persistance immédiate des préférences |
-
-### 6.3 Retour arrière
-
-Désactive caméra **et** micro (libère les tracks), puis revient en arrière.
-
-### 6.4 Connexion
-
-```
-construire les options E2EE si demandées
-créer l'écouteur d'événements
-préparer la connexion
-connecter avec fastConnectOptions (micro + caméra courants)
-succès → navigation vers la session (pile racine)
-échec  → dialogue d'erreur
-toujours → retour vers l'accueil (écrans inférieurs détruits)
-```
-
-## 7. Écran de session
-
-### 7.1 Composition (zones)
+### 6.1 Composition (zones)
 
 ```
 ┌──────────────────────────────────────────┬─────────────┐
@@ -167,7 +138,7 @@ toujours → retour vers l'accueil (écrans inférieurs détruits)
 | Barre de contrôles | bas, dans les marges sûres | padding horizontal 16, vertical 8 |
 | SideSheet | colonne droite | 220 px |
 
-### 7.2 Insets de la galerie (anti-chevauchement)
+### 6.2 Insets de la galerie (anti-chevauchement)
 
 La galerie recule à droite pour éviter les chevauchements, dans cet ordre de priorité :
 
@@ -178,7 +149,7 @@ La galerie recule à droite pour éviter les chevauchements, dans cet ordre de p
 
 L'animation de l'inset dure 300 ms (courbe `easeOut`).
 
-### 7.3 Comportements de démarrage / arrêt
+### 6.3 Comportements de démarrage / arrêt
 
 | Moment | Action |
 |---|---|
@@ -189,9 +160,9 @@ L'animation de l'inset dure 300 ms (courbe `easeOut`).
 | Déconnexion | retour à l'écran précédent |
 | Libération | désactivation wakelock, arrêt de tous les flux, libération de la session |
 
-## 8. Barre de contrôles
+## 7. Barre de contrôles
 
-### 8.1 Boutons
+### 7.1 Boutons
 
 | Contrôle | Comportement mobile | Comportement desktop |
 |---|---|---|
@@ -200,13 +171,13 @@ L'animation de l'inset dure 300 ms (courbe `easeOut`).
 | Bascule caméra | avant ↔ arrière | idem |
 | Haut-parleur | bascule (état reflété) | — |
 | Sélection sortie audio | — | menu |
-| Lunettes BLE | ouvre la feuille BLE ; icône + niveau batterie | idem |
+| Lunettes BLE | ouvre la feuille Engo ; icône lunettes + niveau batterie | idem |
 | Capteurs | ouvre la feuille capteurs ; icône favori + point vert de statut | idem |
 | Carte | bascule d'affichage de la mini-carte | idem |
 | PIP posture | bascule d'affichage du PIP | idem |
 | Déconnexion | quitte la session | idem |
 
-### 8.2 États reflétés
+### 7.2 États reflétés
 
 | État | Source |
 |---|---|
@@ -219,12 +190,12 @@ L'animation de l'inset dure 300 ms (courbe `easeOut`).
 | Session lunettes active | état de session BLE |
 | Carte / PIP affichés | bascules locales |
 
-## 9. Feuille des lunettes (BLE)
+## 8. Feuille des lunettes Engo (BLE)
 
 | Aspect | Comportement |
 |---|---|
 | Ouverture | demande les permissions (`bluetooth`, `bluetoothConnect`, `bluetoothScan`, `location`), puis démarre le scan |
-| Liste | devices scannés avec nom et RSSI ; déduplication par identifiant |
+| Liste | **uniquement les appareils Engo/ActiveLook** (`isEngoDevice`), avec nom et RSSI ; déduplication par identifiant |
 | État de connexion | phase détaillée avec couleur + icône (idle / connecting / connected / initializing / ready / disconnecting / disconnected / failed) |
 | Action connexion | connexion au device choisi |
 | Session | boutons « Démarrer la session » / « Arrêter la session » |
@@ -235,19 +206,19 @@ L'animation de l'inset dure 300 ms (courbe `easeOut`).
 passage à l'état `ready` compte comme « connecté » pour l'UI (transition détectée pour
 déclencher l'abonnement aux métriques côté orchestration).
 
-## 10. Feuille des capteurs
+## 9. Feuille des capteurs
 
 | Aspect | Comportement |
 |---|---|
 | Type | feuille déplaçable (hauteur ajustable au scroll) |
 | Permissions | mêmes permissions que la feuille BLE, puis scan |
-| Sections | **Cardio (HRM)**, **Cadence (CSC)**, **Autres appareils** |
-| Appareil inconnu | boutons « Cardio » / « Cadence » pour le rattacher manuellement à l'un des rôles |
+| Sections | **Cardio (HRM)** et **Cadence (CSC)** uniquement |
+| Appareil non reconnu | masqué de la liste |
 | Appareil connecté | bannière avec nom, batterie, état |
 | Connexion | une connexion HRM et une cadence **indépendantes** (parallèles) |
 | Fermeture | arrêt du scan |
 
-## 11. SideSheet de posture
+## 10. SideSheet de posture
 
 | Aspect | Comportement |
 |---|---|
@@ -258,7 +229,7 @@ déclencher l'abonnement aux métriques côté orchestration).
 | Taille | 220 px de large, bordure gauche, fond sombre |
 | Données affichées | dernière posture reçue du participant sélectionné (sans HUD de données) |
 
-## 12. Visibilité des squelettes
+## 11. Visibilité des squelettes
 
 | Aspect | Comportement |
 |---|---|
@@ -267,7 +238,7 @@ déclencher l'abonnement aux métriques côté orchestration).
 | Effet | recalcule de la liste (le squelette disparaît/réapparaît) |
 | PIP global | une bascule globale contrôle l'affichage des squelettes (PIP + overlays) |
 
-## 13. Notifications et messages
+## 12. Notifications et messages
 
 | Type | Usage |
 |---|---|
@@ -276,7 +247,7 @@ déclencher l'abonnement aux métriques côté orchestration).
 | Message éphémère (snackbar) | validation du formulaire de connexion |
 | Journal (debug) | erreurs de décodage, erreurs BLE, états de capteurs |
 
-## 14. Gestion des permissions par plateforme
+## 13. Gestion des permissions par plateforme
 
 | Permission | Où demandée | Plateforme |
 |---|---|---|
@@ -286,7 +257,7 @@ déclencher l'abonnement aux métriques côté orchestration).
 | Localisation | au démarrage du suivi GPS (si refusé → abandon silencieux) | Toutes |
 | Foreground service | manifeste (caméra, micro, périphériques connectés) | Android |
 
-## 15. Points d'attention pour le portage KMP
+## 14. Points d'attention pour le portage KMP
 
 | Élément | Recommandation |
 |---|---|

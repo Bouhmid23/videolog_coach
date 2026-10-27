@@ -27,7 +27,8 @@ n'est déclarée, bien qu'une partie du code contienne des branches de compatibi
 | Bluetooth basse consommée | `flutter_reactive_ble ^5.4.2` |
 | Détection de pose (IA locale) | MediaPipe via `flutter_pose_detection ^0.4.0` (détecteur NPU) |
 | Positionnement | `geolocator ^13.0.2` |
-| Requêtes HTTP | `http ^1.6.0` (récupération de token) |
+| Authentification | Firebase Auth (`firebase_core`, `firebase_auth`) — email / mot de passe |
+| Requêtes HTTP | `http ^1.6.0` (token, rooms, enregistrement) |
 | Persistance locale | `shared_preferences` (préférences de pré-connexion) |
 | Permissions | `permission_handler ^12.0.1` |
 | Gestion d'état | `ChangeNotifier` (pattern observateur) — le package `provider` est déclaré mais non utilisé |
@@ -60,7 +61,7 @@ lib/
 │   ├── controls_viewmodel         contrôles média + BLE
 │   └── pose_detection_viewmodel   détection → classification → diffusion
 └── presentation/    → ÉCRANS ET COMPOSANTS D'UI
-    ├── screens/                   login, home, rooms, connect, prejoin, room
+    ├── screens/                   login, rooms, connect, room
     └── widgets/                   contrôles, participant, carte, squelette…
 ```
 
@@ -76,35 +77,37 @@ lib/
 ## 4. Flux utilisateur
 
 ```
-┌──────────┐   ┌──────────┐   ┌──────────┐   ┌────────────┐   ┌──────────┐   ┌──────────┐
-│  Login   │ → │   Home   │ → │  Rooms   │ → │  Connect   │ → │ PreJoin  │ → │   Room   │
-└──────────┘   └──────────┘   └──────────┘   └────────────┘   └──────────┘   └──────────┘
-  /login       /home/:user    /rooms/:user   /connect/:room   /prejoin        /room
-                                                              (extra: args)  (extra: room)
+┌──────────┐   ┌──────────┐   ┌────────────┐   ┌──────────┐
+│  Login   │ → │  Rooms   │ → │  Connect   │ → │   Room   │
+└──────────┘   └──────────┘   └────────────┘   └──────────┘
+  /login        /rooms          /connect/:room   /room
+                                                (extra: args)
 ```
 
-1. **Login** — saisie email/mot de passe. **Authentification fictive** : l'identifiant
-   affiché est dérivé de l'email (partie avant `@`). Aucun appel réseau.
-2. **Home** — tableau de bord **statique** (KPIs codés en dur), bouton vers les salles.
-3. **Rooms** — liste statique contenant une seule salle : `poc-room`.
-4. **Connect** — saisie du nom du participant, **récupération du token** via l'API,
-   affichage des informations de connexion (room, serveur WebSocket, API).
-5. **PreJoin** — prévisualisation caméra, sélection des périphériques, activation
-   micro/caméra, choix de la résolution, préférences persistées.
-6. **Room** — session complète : vidéo plein écran, barre de contrôles, galerie des pairs,
+1. **Login** — email / mot de passe envoyés directement à **Firebase Authentication**
+   (jamais à l'API Videolog). Le routeur redirige toute route protégée vers `/login`
+   tant qu'aucune session Firebase n'existe.
+2. **Rooms** — liste réelle via `GET /mobile/rooms`, avec statut d'enregistrement et
+   `can_control_recording`.
+3. **Connect** — le compte Firebase et la room sont affichés ; le token LiveKit est
+   obtenu via `POST /token` avec l'ID token Firebase en Bearer. L'identité LiveKit
+   est l'UID Firebase dérivé côté serveur. La connexion utilise les paramètres par
+   défaut (micro et caméra avant) et remplace l'écran par la room.
+4. **Room** — session complète : vidéo plein écran, barre de contrôles, galerie des pairs,
    mini-carte, panneau latéral de posture.
 
 ## 5. Matrice des fonctionnalités
 
 | Fonctionnalité | État | Référence détaillée |
 |---|---|---|
-| Authentification | Factice (aucune API) | `07-ui-behavior.md` |
-| Obtention de token LiveKit | ✅ Réelle (HTTP POST) | `01-video-conferencing.md` |
+| Authentification | ✅ Réelle (Firebase Auth, email / mot de passe) | `01-video-conferencing.md` |
+| Liste des sessions mobiles | ✅ Réelle (`GET /mobile/rooms`) | `MOBILE_RECORDING_WORKFLOW.md` |
+| Obtention de token LiveKit | ✅ Réelle (HTTP POST authentifié) | `01-video-conferencing.md` |
 | Appel audio/vidéo | ✅ Réel (LiveKit) | `01-video-conferencing.md` |
 | Chiffrement de bout en bout (E2EE) | ✅ Supporté (désactivé par défaut) | `01-video-conferencing.md` |
 | Partage d'écran | ⚠️ Affichage des flux reçus uniquement (pas de bouton d'initialisation) | `01-video-conferencing.md` |
 | Chat texte | ❌ Absent | — |
-| Enregistrement de session | ❌ Absent | — |
+| Enregistrement de session (Egress) | ✅ Manuel : démarrer / suivre / arrêter, durée max 180 s | `MOBILE_RECORDING_WORKFLOW.md` |
 | Télémétrie temps réel (DataChannel) | ✅ Réelle, 2 Hz | `02-telemetry.md` |
 | Suivi GPS + distance | ✅ Réel | `03-gps-map.md` |
 | Mini-carte des participants | ✅ Réelle | `03-gps-map.md` |
@@ -119,11 +122,13 @@ lib/
 
 | Constante | Valeur |
 |---|---|
-| URL API (token) | `https://api.videolog.app` |
-| Endpoint token | `POST /token` |
-| URL LiveKit (WebSocket) | `wss://livekit.videolog.app` |
-| Room par défaut | `poc-room` |
-| Domaines alternatifs (commentés) | `https://livekit.opkodelabs.com`, `http://192.168.1.7:7880`, `ws://192.168.1.7:7880` |
+| URL API | `https://api.videolog.app` |
+| Authentification | Firebase Auth (projet `videolog-on-air`), ID token en Bearer |
+| Endpoint token | `POST /token` (body `{room}`) |
+| Liste des sessions | `GET /mobile/rooms?limit=50` |
+| Enregistrement | `POST /mobile/rooms/{room}/recording/start?layout=grid`, `GET .../recording`, `POST .../recording/stop` |
+| URL LiveKit (WebSocket) | `wss://livekit.videolog.app` (champ `url` de la réponse token) |
+| Room par défaut | `poc-room` (fallback local ; la liste réelle vient de l'API) |
 
 > `usesCleartextTraffic="true"` est activé dans le manifeste Android, ce qui autorise le
 > HTTP non chiffré (utile pour les tests en local).
@@ -145,12 +150,10 @@ Un service *foreground* est déclaré avec `foregroundServiceType="camera|microp
 
 ## 8. État du dépôt et dettes techniques
 
-- **Tests** : uniquement le test template par défaut (obsolète, referencant un compteur
-  qui n'existe plus). Aucun test unitaire sur la logique métier.
+- **Tests** : 4 tests de modèles (`RecordingState`, `MobileRoom`) ; pas encore de test UI.
 - **README** : template Flutter par défaut (non personnalisé).
 - **Code mort** à ne pas porter (détails dans `08-kmp-porting.md`) :
-  - `presentation/screens/prejoin.dart` (doublon non importé de `connect.dart`)
-  - `core/livekit_service.dart`, `core/api_service.dart`
+  - `core/livekit_service.dart`
   - `widgets/smoothed_pose_avatar.dart`, `widgets/sound_waveform.dart`, `widgets/text_field.dart`
 - **Bug connu** : `PoseAnimationController` instancie un contrôleur d'animation avec un
   `vsync` invalide (non utilisé en l'état).

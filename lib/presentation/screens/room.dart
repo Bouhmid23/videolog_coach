@@ -5,12 +5,14 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../core/pip_service.dart';
+import '../../core/recording_controller.dart';
 import '../../data/user_role.dart';
 import '../../theme.dart';
 import '../../utils.dart';
 import '../utils/ui_utils.dart';
 import '../widgets/controls.dart';
 import '../widgets/participant.dart';
+import '../widgets/recording_controls.dart';
 import '../../viewmodels/room_viewmodel.dart';
 
 class RoomPage extends StatefulWidget {
@@ -18,12 +20,16 @@ class RoomPage extends StatefulWidget {
   final EventsListener<RoomEvent> listener;
   final UserRole role;
   final bool fastConnection;
+  final String? roomName;
+  final bool canControlRecording;
 
   const RoomPage(
     this.room,
     this.listener, {
     this.role = UserRole.trainee,
     this.fastConnection = false,
+    this.roomName,
+    this.canControlRecording = false,
     super.key,
   });
 
@@ -33,6 +39,7 @@ class RoomPage extends StatefulWidget {
 
 class _RoomPageState extends State<RoomPage> {
   late final RoomViewModel _vm;
+  RecordingController? _recordingController;
 
   static const double _galleryHeight = 180;
   static const double _galleryHudHeight = 84;  // Valeurs visibles sur plusieurs lignes
@@ -42,6 +49,15 @@ class _RoomPageState extends State<RoomPage> {
     super.initState();
     _vm = RoomViewModel();
     _vm.addListener(_onStateChanged);
+
+    final recordingRoomName = widget.roomName ?? widget.room.name;
+    if (recordingRoomName != null && recordingRoomName.isNotEmpty) {
+      _recordingController = RecordingController(
+        roomName: recordingRoomName,
+        canControl: widget.canControlRecording,
+      );
+      unawaited(_recordingController!.load());
+    }
 
     PipService.initialize();
     PipService.isInPip.addListener(_onStateChanged);
@@ -79,6 +95,7 @@ class _RoomPageState extends State<RoomPage> {
   void dispose() {
     PipService.isInPip.removeListener(_onStateChanged);
     unawaited(PipService.disableAutoEnter());
+    _recordingController?.dispose();
     _vm.removeListener(_onStateChanged);
     _vm.dispose();
     onWindowShouldClose = null;
@@ -112,6 +129,19 @@ class _RoomPageState extends State<RoomPage> {
                   : _buildEmptyState('Aucun participant principal'),
             ),
           ),
+
+          // ========================================================================
+          // CONTRÔLE D'ENREGISTREMENT EGRESS
+          // ========================================================================
+          if (!inPip && _recordingController != null)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: SafeArea(
+                minimum: const EdgeInsets.only(top: 8, right: 8),
+                child: RecordingControls(controller: _recordingController!),
+              ),
+            ),
 
           // ========================================================================
           // OVERLAY BAS : autres users -> contr��les
@@ -190,6 +220,8 @@ class _RoomPageState extends State<RoomPage> {
                         controlsViewModel: _vm.controlsViewModel,
                         onBleConnected: _vm.onBleConnected,
                         onBleDisconnected: _vm.onBleDisconnected,
+                        showPosture: _vm.showPosture,
+                        onTogglePosture: _vm.togglePosture,
                       ),
                     ),
             ],

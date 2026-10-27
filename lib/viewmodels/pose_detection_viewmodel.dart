@@ -3,11 +3,13 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb, debugPrint, kDebugMode;
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, ValueNotifier, kIsWeb, debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import '../core/posture_detection_service.dart';
 import '../data/posture_codec.dart';
 import '../data/remote_posture.dart';
 
@@ -20,8 +22,22 @@ class _CapturedFrame {
   final DateTime capturedAt;
 }
 
+/// Dernière pose détectée, prête à être dessinée par l'UI.
+class PoseFrame {
+  const PoseFrame({
+    required this.pose,
+    required this.frameSize,
+    required this.capturedAt,
+  });
+
+  final Pose pose;
+  final Size frameSize;
+  final DateTime capturedAt;
+}
+
 /// Capture la caméra locale, détecte la pose (NPU) et publie le squelette
-/// en binaire sur le topic `posture`. Aucun rendu côté mobile.
+/// en binaire sur le topic `posture`. La dernière pose est aussi exposée via
+/// [frameNotifier] pour le rendu local du squelette.
 ///
 /// Choix pour le temps réel :
 ///  - pipeline à 2 étages : la capture N+1 démarre pendant la détection N ;
@@ -30,13 +46,19 @@ class _CapturedFrame {
 ///  - taille de frame lue dans l'en-tête PNG (pas de décodage d'image) ;
 ///  - paquet « pose perdue » pour que le web efface le squelette.
 class PoseDetectionViewModel extends ChangeNotifier {
+  final PostureSmoothing _smoothing = PostureSmoothing();
+
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
     // Force the plugin's TFLite/QNN path. Its default MediaPipe path requires
     // libmediapipe_tasks_vision_jni.so, which is missing for x86_64 and can
     // fail to load on some device builds. TFLite falls back to CPU when QNN
     // is unavailable, including on Google Tensor and non-Snapdragon devices.
-    config: PoseDetectorConfig.realtime().copyWith(
-      preferredAcceleration: AccelerationMode.npu,
+    config: PoseDetectorConfig(
+      //maxPoses: ,
+      //preferredAcceleration: AccelerationMode.cpu,
+      enableZEstimation: true,
+      minConfidence: 0.6,
+      mode: DetectionMode.fast,
     ),
   );
 
@@ -70,6 +92,9 @@ class PoseDetectionViewModel extends ChangeNotifier {
   int _candidateCount = 0;
 
   RemotePosture? _currentPosture;
+
+  /// Dernière pose (coordonnées source + taille de frame) pour l'overlay local.
+  final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(null);
 
   RemotePosture? get currentPosture => _currentPosture;
   bool get isBusy => _running;
@@ -113,6 +138,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _candidateLabel = null;
     _candidateCount = 0;
     _currentPosture = null;
+    _smoothing.reset();
+    frameNotifier.value = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -146,6 +173,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
       final detectWatch = Stopwatch()..start();
       try {
         final result = await _poseDetector.detectPose(frame.bytes);
+        if (!_running) break;
         detectWatch.stop();
         _detectMicros += detectWatch.elapsedMicroseconds;
         _detectSamples++;
@@ -156,7 +184,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
           final size = await _frameSize(frame.bytes);
           if (kDebugMode) _debugLog(frame.bytes, result.firstPose!, size);
           _lastSize = size;
-          final pose = result.firstPose!;
+          final pose = _smoothing.smooth(result.firstPose!);
+          frameNotifier.value = PoseFrame(
+            pose: pose,
+            frameSize: size,
+            capturedAt: frame.capturedAt,
+          );
           final posture = _stabilizedPosture(classifyPosture(pose));
           _hadPose = true;
           _publish(pose, posture, size, capturedAt: frame.capturedAt);
@@ -406,6 +439,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _stableLabel = null;
     _candidateLabel = null;
     _candidateCount = 0;
+    _smoothing.reset();
+    frameNotifier.value = null;
     if (_currentPosture != null) {
       _currentPosture = null;
       notifyListeners();
@@ -522,6 +557,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   @override
   void dispose() {
     stop();
+    frameNotifier.dispose();
     _poseDetector.dispose();
     super.dispose();
   }

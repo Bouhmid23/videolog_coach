@@ -7,6 +7,7 @@ import 'package:livekit_client/livekit_client.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../core/auth_service.dart';
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
@@ -68,6 +69,7 @@ class RoomViewModel extends ChangeNotifier {
 
   // ── Posture PIP & SideSheet ──
   bool _showPosePip = true;
+  bool _showPosture = true;
   String? _selectedParticipantIdentity;
   bool _showSideSheet = false;
 
@@ -81,11 +83,20 @@ class RoomViewModel extends ChangeNotifier {
   SportMetrics? get bleMetrics => _bleMetrics;
   double get totalDistanceMiles => _totalDistanceMiles;
   bool get showPosePip => _showPosePip;
+  bool get showPosture => _showPosture;
   String? get selectedParticipantIdentity => _selectedParticipantIdentity;
   bool get showSideSheet => _showSideSheet;
 
   void togglePosePip() {
     _showPosePip = !_showPosePip;
+    notifyListeners();
+  }
+
+  void togglePosture() {
+    _showPosture = !_showPosture;
+    for (final track in _participantTracks) {
+      track.showPosture = _showPosture;
+    }
     notifyListeners();
   }
 
@@ -186,11 +197,14 @@ class RoomViewModel extends ChangeNotifier {
     CallForegroundService.setOnEndCall(() {
       unawaited(room.disconnect());
     });
+    final firebaseName = AuthService.instance.displayName;
     unawaited(CallForegroundService.start(
       roomName: room.name ?? '',
-      username: displayNameForIdentity(
-        room.localParticipant?.identity ?? '',
-      ),
+      username: firebaseName.isNotEmpty
+          ? firebaseName
+          : displayNameForIdentity(
+              room.localParticipant?.identity ?? '',
+            ),
     ));
 
     controlsViewModel = ControlsViewModel();
@@ -589,10 +603,8 @@ class RoomViewModel extends ChangeNotifier {
             participant: room.localParticipant!,
             //posture: poseViewModel.currentPosture,
             telemetry: localTelemetry,
-            /*pose: poseViewModel.currentPose,
-            poseFrameSize: poseViewModel.currentFrameSize,
-            avatarOnly: true,
-            showPosePip: _showPosePip,*/
+            poseListenable: poseViewModel.frameNotifier,
+            showPosture: _showPosture,
           ));
         }
       }
@@ -617,7 +629,7 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(_cscStatusSub?.cancel());
     unawaited(bleService.dispose());
     unawaited(sensorService.dispose());
-    //unawaited(poseViewModel.dispose());
+    poseViewModel.dispose();
     controlsViewModel.dispose();
     _room?.removeListener(_onRoomDidUpdate);
     unawaited(_listener?.dispose());

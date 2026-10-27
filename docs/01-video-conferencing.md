@@ -9,31 +9,25 @@ dépendance au framework UI n'est requise pour comprendre ce document.
 | Constante | Valeur |
 |---|---|
 | URL API (token) | `https://api.videolog.app` |
-| Endpoint token | `POST /token` |
-| URL serveur LiveKit (WebSocket) | `wss://livekit.videolog.app` |
-| Room par défaut | `poc-room` |
-| Timeout de la requête token | 10 secondes |
+| Endpoint token | `POST /token` (Bearer Firebase, body `{room}`) |
+| URL serveur LiveKit (WebSocket) | renvoyée dans `url` (`wss://livekit.videolog.app` en production) |
+| Room par défaut | `poc-room` (fallback local) |
+| Timeout des requêtes API | 15 secondes |
 
 ## 2. Workflow d'entrée dans une session
 
 ```
 Écran Connect
-   │  1. Saisie du nom du participant (identité)
+   │  1. Compte Firebase courant et room sélectionnée
    │  2. Demande des permissions Android (bluetooth, bluetoothConnect,
    │     camera, microphone) — uniquement sur Android
-   │  3. POST /token {identity, room} → {token}
-   ▼
-Arguments de jonction (JoinArgs)
-   │  url, token, username, e2ee, e2eeKey, simulcast, adaptiveStream,
-   │  dynacast, preferredCodec, enableBackupVideoCodec
-   ▼
-Écran PreJoin
-   │  4. Énumération des périphériques (audioinput / videoinput)
-   │  5. Création des tracks locaux (prévisualisation)
-   │  6. Connexion préparée puis connexion avec fastConnectOptions
+   │  3. POST /token {room} + Bearer Firebase → {token, room, identity, url}
+   │  4. Création de la Room + écouteur, connexion
+   │     (nouvelle tentative unique avec un token rafraîchi)
+   │  5. Publication du micro et de la caméra avant par défaut
    ▼
 Écran Room
-      7. Session active : écoute des événements, publication/réception
+       6. Session active : écoute des événements, publication/réception
 ```
 
 ### 2.1 Contrat HTTP du token
@@ -42,21 +36,28 @@ Arguments de jonction (JoinArgs)
 ```
 POST https://api.videolog.app/token
 Content-Type: application/json
-Timeout: 10 s
+Authorization: Bearer <Firebase ID token>
+Timeout: 15 s
 
-{ "identity": "<nom participant>", "room": "<nom room>" }
+{ "room": "<nom room>" }
 ```
 
 **Réponse attendue** : `200 OK`
 ```json
-{ "token": "<JWT LiveKit>" }
+{
+  "token": "<JWT LiveKit>",
+  "room": "<nom room>",
+  "identity": "<UID Firebase vérifié>",
+  "url": "wss://livekit.videolog.app"
+}
 ```
 
-Tout autre code HTTP provoque une erreur affichée à l'utilisateur. L'API côté serveur
-délègue à `livekit-api` qui signe le JWT avec l'API_KEY/SECRET du serveur LiveKit.
-
-> Variante documentée dans le code mais inactive : `POST /livekit/token` avec
-> `{username, room}` et code `201`.
+L'identité LiveKit est dérivée du UID Firebase par le serveur ; le client ne
+l'envoie pas. Tout autre code HTTP provoque une erreur affichée à l'utilisateur
+(`401` non connecté, `403` non autorisé, `404` session absente). L'API côté
+serveur délègue à `livekit-api` qui signe le JWT avec l'API_KEY/SECRET du
+serveur LiveKit. Le JWT expire après dix minutes ; le client redemande un token
+en cas d'échec de connexion.
 
 ### 2.2 Paramètres par défaut de la salle
 
@@ -180,43 +181,23 @@ L'énumération des périphériques est réactive : à chaque changement matéri
 d'un casque, etc.), les listes entrées/sorties sont rafraîchies et les sélections
 invalidées si le périphérique sélectionné a disparu.
 
-## 6. Écran de pré-connexion (PreJoin)
+## 6. Connexion avec les paramètres par défaut
 
-### 6.1 Gestion des tracks
+Il n'y a plus d'écran de pré-connexion. La publication démarre dès la connexion :
 
-| État | Comportement |
+| Élément | Valeur par défaut |
 |---|---|
-| Caméra activée + aucun device sélectionné | Sélection automatique du premier device, création de la track |
-| Caméra désactivée | Arrêt et libération de la track, sélection vidée |
-| Plus aucun device videoinput | Track caméra libérée |
-| Idem pour l'audio | Mêmes règles (audioinput) |
-| Changer de device | Ancienne track arrêtée, nouvelle track créée avec le nouveau device |
-| Changer de résolution | Nouvelle track créée avec les nouveaux paramètres |
+| Microphone | activé immédiatement (`setMicrophoneEnabled`) |
+| Caméra | avant, 640×480, 30 fps max (`setCameraEnabled`) |
+| Capture caméra | `CameraCaptureOptions` de `RoomOptions` |
+| Codec vidéo | `H264`, codec de secours activé |
+| Simulcast | désactivé |
+| Adaptive stream / dynacast | activés |
+| E2EE | désactivé |
 
-### 6.2 Résolutions vidéo proposées
-
-| Préréglage | Dimensions |
-|---|---|
-| h480_43 | 640×480 (4:3) |
-| h540_169 | 960×540 (16:9) |
-| h720_169 (par défaut) | 1280×720 |
-| h1080_169 | 1920×1080 |
-
-### 6.3 Préférences persistées
-
-Deux clés locales (stockage clé/valeur) :
-
-| Clé | Type | Défaut |
-|---|---|---|
-| `prejoin-enable-video` | bool | `true` |
-| `prejoin-enable-audio` | bool | `true` |
-
-Elles sont lues à l'ouverture de l'écran et écrites à chaque bascule.
-
-### 6.4 Retour arrière
-
-L'action « retour » désactive caméra **et** micro (libérant les tracks) avant de revenir
-à l'écran précédent.
+Après l'entrée dans la room, l'utilisateur peut couper/réactiver le micro et la caméra,
+changer de caméra ou sélectionner les périphériques depuis la barre de contrôles. Aucune
+préférence PreJoin n'est plus persistée.
 
 ## 7. Rendu des participants
 

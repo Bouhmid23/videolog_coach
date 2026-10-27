@@ -1,11 +1,15 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:intl/intl.dart';
 import 'package:livekit_client/livekit_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:videolog_coach/core/call_foreground_service.dart';
 import 'package:videolog_coach/theme.dart';
 import 'package:logging/logging.dart';
 
+import 'firebase_options.dart';
 import 'router.dart';
 
 void main() async {
@@ -16,6 +20,15 @@ void main() async {
   });
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // La session Firebase est persistée par défaut. Si l'utilisateur a décoché
+  // « Se souvenir de moi », on efface la session au prochain démarrage.
+  final prefs = await SharedPreferences.getInstance();
+  if (!(prefs.getBool('remember_me') ?? true)) {
+    await FirebaseAuth.instance.signOut();
+  }
 
   FlutterForegroundTask.initCommunicationPort();
   CallForegroundService.initialize();

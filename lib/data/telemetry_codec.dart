@@ -7,13 +7,13 @@ import 'remote_telemetry.dart';
 /// Format v2, big-endian :
 /// - 1 octet : version (0x02)
 /// - 1 octet : code du rôle (0=coach, 1=trainee, 2=other)
-/// - 2 octets : vitesse (uint16, cm/s, 0-65535 = 0-655.35 km/h, 65535=null)
+/// - 2 octets : vitesse (uint16, km/h × 100, 65535=null)
 /// - 1 octet : fréquence cardiaque (uint8, 0-255 bpm, 255=null)
 /// - 1 octet : cadence (uint8, 0-255 rpm, 255=null)
-/// - 4 octets : latitude (int32, micro-degrees, ±180° = ±1.8e9, 0x7FFFFFFF=null)
-/// - 4 octets : longitude (int32, micro-degrees, ±180° = ±1.8e9, 0x7FFFFFFF=null)
+/// - 4 octets : latitude (int32, degrés × 10^7, 0x7FFFFFFF=null)
+/// - 4 octets : longitude (int32, degrés × 10^7, 0x7FFFFFFF=null)
 /// - 2 octets : altitude (int16, cm, 0x7FFF=null)
-/// - 1 octet : bearing/cap (uint8, degrees 0-360, 255=null)
+/// - 1 octet : bearing/cap (uint8, degrés 0-254, 255=null)
 /// - 4 octets : timestamp (uint32, epoch ms)
 ///
 /// Taille totale : 21 octets (fixe)
@@ -42,7 +42,7 @@ class TelemetryCodec {
     required int timestampMs,
   }) {
     final data = Uint8List(packetSize);
-    final bd = ByteData.view(data.buffer);
+    final bd = ByteData.sublistView(data);
     var o = 0;
 
     // Version
@@ -51,9 +51,9 @@ class TelemetryCodec {
     // Role
     data[o++] = _roleToCode(role);
 
-    // Speed: uint16 en cm/s (0-65535 = 0-655.35 km/h)
-    final speedCmPerS = speed != null ? (speed * 100).round() : nullUint16;
-    bd.setUint16(o, speedCmPerS.clamp(0, nullUint16));
+    // Speed: km/h × 100 ; 65535 est réservé à null.
+    final speedKmhTimes100 = speed != null ? (speed * 100).round() : nullUint16;
+    bd.setUint16(o, speedKmhTimes100.clamp(0, nullUint16), Endian.big);
     o += 2;
 
     // Heart rate: uint8 (0-255 bpm)
@@ -64,27 +64,29 @@ class TelemetryCodec {
     final cad = cadence != null ? cadence.round() : nullUint8;
     data[o++] = cad.clamp(0, nullUint8);
 
-    // Latitude: int32 en micro-degrees (8 décimales)
-    final latMicro = lat != null ? (lat * 10000000).round() : nullInt32;
-    bd.setInt32(o, latMicro.clamp(-nullInt32, nullInt32));
+    // Latitude: degrés × 10^7 (sept décimales).
+    final latScaled = lat != null ? (lat * 10000000).round() : nullInt32;
+    bd.setInt32(o, latScaled.clamp(-nullInt32, nullInt32), Endian.big);
     o += 4;
 
-    // Longitude: int32 en micro-degrees (8 décimales)
-    final lngMicro = lng != null ? (lng * 10000000).round() : nullInt32;
-    bd.setInt32(o, lngMicro.clamp(-nullInt32, nullInt32));
+    // Longitude: degrés × 10^7 (sept décimales).
+    final lngScaled = lng != null ? (lng * 10000000).round() : nullInt32;
+    bd.setInt32(o, lngScaled.clamp(-nullInt32, nullInt32), Endian.big);
     o += 4;
 
     // Altitude: int16 en cm (2 décimales en mètres)
     final altitudeCm = altitude != null ? (altitude * 100).round() : nullInt16;
-    bd.setInt16(o, altitudeCm.clamp(-nullInt16, nullInt16));
+    bd.setInt16(o, altitudeCm.clamp(-nullInt16, nullInt16), Endian.big);
     o += 2;
 
-    // Bearing: uint8 en degrés (0-360)
-    final bearingVal = bearing != null ? bearing.clamp(0, 360).round() : nullUint8;
+    // Bearing: 255 est réservé à null ; seuls 0..254 sont représentables.
+    final bearingVal = bearing != null && bearing >= 0 && bearing <= 254
+        ? bearing.round()
+        : nullUint8;
     data[o++] = bearingVal.clamp(0, nullUint8);
 
     // Timestamp: uint32
-    bd.setUint32(o, timestampMs & 0xFFFFFFFF);
+    bd.setUint32(o, timestampMs & 0xFFFFFFFF, Endian.big);
 
     return data;
   }
@@ -95,10 +97,10 @@ class TelemetryCodec {
     List<int> raw, {
     DateTime? receivedAt,
   }) {
-    if (raw.length < packetSize) return null;
+    if (raw.length != packetSize) return null;
 
     final data = raw is Uint8List ? raw : Uint8List.fromList(raw);
-    final bd = ByteData.view(data.buffer);
+    final bd = ByteData.sublistView(data);
 
     // Version
     final packetVersion = data[0];
@@ -110,7 +112,7 @@ class TelemetryCodec {
     if (role == null) return null;
 
     // Speed
-    final speedRaw = bd.getUint16(2);
+    final speedRaw = bd.getUint16(2, Endian.big);
     final speed = speedRaw == nullUint16 ? null : speedRaw / 100.0;
 
     // Heart rate
@@ -122,15 +124,15 @@ class TelemetryCodec {
     final cadence = cadenceRaw == nullUint8 ? null : cadenceRaw.toDouble();
 
     // Latitude
-    final latRaw = bd.getInt32(6);
+    final latRaw = bd.getInt32(6, Endian.big);
     final lat = latRaw == nullInt32 ? null : latRaw / 10000000.0;
 
     // Longitude
-    final lngRaw = bd.getInt32(10);
+    final lngRaw = bd.getInt32(10, Endian.big);
     final lng = lngRaw == nullInt32 ? null : lngRaw / 10000000.0;
 
     // Altitude (cm)
-    final altitudeRaw = bd.getInt16(14);
+    final altitudeRaw = bd.getInt16(14, Endian.big);
     final altitude = altitudeRaw == nullInt16 ? null : altitudeRaw / 100.0;
 
     // Bearing (degrees)
@@ -138,7 +140,7 @@ class TelemetryCodec {
     final bearing = bearingRaw == nullUint8 ? null : bearingRaw.toDouble();
 
     // Timestamp
-    final timestampMs = bd.getUint32(17);
+    final timestampMs = bd.getUint32(17, Endian.big);
 
     return RemoteTelemetry(
       heartRate: heartRate?.round(),

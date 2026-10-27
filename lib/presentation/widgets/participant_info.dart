@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
+import '../../viewmodels/pose_detection_viewmodel.dart';
 import '../utils/ui_utils.dart';
 
 enum ParticipantTrackType { kUserMedia, kScreenShare }
@@ -24,10 +26,14 @@ class ParticipantTrack {
     required this.participant,
     this.type = ParticipantTrackType.kUserMedia,
     this.telemetry,
+    this.poseListenable,
+    this.showPosture = false,
   });
   Participant participant;
   final ParticipantTrackType type;
   RemoteTelemetry? telemetry;
+  ValueListenable<PoseFrame?>? poseListenable;
+  bool showPosture;
 }
 
 /// Widget affichant les informations d'un participant (nom, audio, qualité, etc.)

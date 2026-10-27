@@ -5,28 +5,28 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 
 // ─── UUIDs ────────────────────────────────────────────────────────────────────
 const String _kServiceUuid = "0783B03E-8535-B5A0-7140-A304D2495CB7";
-const String _kTxUuid      = "0783B03E-8535-B5A0-7140-A304D2495CB8";
-const String _kRxUuid      = "0783B03E-8535-B5A0-7140-A304D2495CBA";
+const String _kTxUuid = "0783B03E-8535-B5A0-7140-A304D2495CB8";
+const String _kRxUuid = "0783B03E-8535-B5A0-7140-A304D2495CBA";
 const String _kControlUuid = "0783B03E-8535-B5A0-7140-A304D2495CB9";
 const String _kGestureUuid = "0783B03E-8535-B5A0-7140-A304D2495CBB";
-const String _kTouchUuid   = "0783B03E-8535-B5A0-7140-A304D2495CBC";
+const String _kTouchUuid = "0783B03E-8535-B5A0-7140-A304D2495CBC";
 const String _kBatteryUuid = "00002A19-0000-1000-8000-00805F9B34FB";
 
-const int _kTargetMtu    = 512;
+const int _kTargetMtu = 512;
 const int _kMaxChunkSize = 128;
 
 // ─── Commandes ActiveLook §4 ──────────────────────────────────────────────────
 const int _cmdDisplayPower = 0x00;
-const int _cmdClear        = 0x01;
-const int _cmdBattery      = 0x05;
-const int _cmdLuminance    = 0x10;
-const int _cmdAlsOnly      = 0x22;
-const int _cmdLine         = 0x32;
-const int _cmdTxtDisplay   = 0x37;
-const int _cmdHoldFlush    = 0x39;
+const int _cmdClear = 0x01;
+const int _cmdBattery = 0x05;
+const int _cmdLuminance = 0x10;
+const int _cmdAlsOnly = 0x22;
+const int _cmdLine = 0x32;
+const int _cmdTxtDisplay = 0x37;
+const int _cmdHoldFlush = 0x39;
 
-const int _actionHold       = 0x00;
-const int _actionFlush      = 0x01;
+const int _actionHold = 0x00;
+const int _actionFlush = 0x01;
 const int _actionResetFlush = 0xFF;
 
 // ─── Résolution ───────────────────────────────────────────────────────────────
@@ -44,14 +44,14 @@ const int _kTextRotation = 0x04; // miroir horizontal Engo
 // ─── §5.7 Text — couleur ─────────────────────────────────────────────────────
 // Doc §5.1 Color : niveaux de gris 0–15. 0 = noir (invisible), 15 = blanc max.
 const int _kColorWhite = 0x0F; // blanc maximum
-const int _kColorGray  = 0x09; // gris moyen pour les labels
+const int _kColorGray = 0x09; // gris moyen pour les labels
 
 // ─── §4.8 Font — fonts prédéfinies ───────────────────────────────────────────
 // Seules les fonts 1, 2, 3 sont définies par défaut dans le firmware.
 // Font 4 n'existe PAS par défaut → plante silencieusement.
 const int _kFontSmall = 1; // ~16 px — labels (DIST, BPM, KCAL)
 const int _kFontValue = 3; // ~32 px — valeurs numériques
-const int _kFontBig   = 2; // ~24 px — countdown
+const int _kFontBig = 2; // ~24 px — countdown
 
 // Largeur approx par caractère (Big Endian, mesurée empiriquement sur Engo)
 const Map<int, int> _kFontCharW = {1: 10, 2: 14, 3: 20};
@@ -61,7 +61,7 @@ const Map<int, int> _kFontCharH = {1: 16, 2: 24, 3: 32};
 
 // ─── §3.5 Contrôle de flux ────────────────────────────────────────────────────
 const int _flowCanSend = 0x01;
-const int _flowStop    = 0x02;
+const int _flowStop = 0x02;
 
 // ─── Layout HUD 3 zones ───────────────────────────────────────────────────────
 //
@@ -89,23 +89,30 @@ const int _flowStop    = 0x02;
 //    Zone 3  label y=150        (h=16 → bas à y=166)
 //            value y=174        (h=32 → bas à y=206)
 //
-const int _xLeft      = 10;   // marge gauche standard
+const int _xLeft = 10; // marge gauche standard
 const int _yDistLabel = 5;
 const int _yDistValue = 35;
-const int _ySep1      = 60;
-const int _yBpmLabel  = 65;
-const int _yBpmValue  = 95;
-const int _ySep2      = 120;
+const int _ySep1 = 60;
+const int _yBpmLabel = 65;
+const int _yBpmValue = 95;
+const int _ySep2 = 120;
 const int _yKcalLabel = 125;
 const int _yKcalValue = 155;
-const int _ySep3      = 180;
-const int _yRpmLabel  = 185;
-const int _yRpmValue  = 215;
+const int _ySep3 = 180;
+const int _yRpmLabel = 185;
+const int _yRpmValue = 215;
 const int _kSafeMarginX = 16;
 
 // ─── Modèle ───────────────────────────────────────────────────────────────────
 enum BleConnectionPhase {
-  idle, connecting, connected, initializing, ready, disconnecting, disconnected, failed,
+  idle,
+  connecting,
+  connected,
+  initializing,
+  ready,
+  disconnecting,
+  disconnected,
+  failed,
 }
 
 class BleConnectionStatus {
@@ -116,21 +123,25 @@ class BleConnectionStatus {
   final DateTime updatedAt;
 
   const BleConnectionStatus({
-    required this.phase, this.deviceId, required this.message,
-    this.error, required this.updatedAt,
+    required this.phase,
+    this.deviceId,
+    required this.message,
+    this.error,
+    required this.updatedAt,
   });
 
-  BleConnectionStatus.idle() : this(
-    phase: BleConnectionPhase.idle,
-    message: 'Prêt pour une connexion BLE',
-    updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
-  );
+  BleConnectionStatus.idle()
+    : this(
+        phase: BleConnectionPhase.idle,
+        message: 'Prêt pour une connexion BLE',
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      );
 
   bool get isBusy =>
-      phase == BleConnectionPhase.connecting  ||
-          phase == BleConnectionPhase.connected   ||
-          phase == BleConnectionPhase.initializing ||
-          phase == BleConnectionPhase.disconnecting;
+      phase == BleConnectionPhase.connecting ||
+      phase == BleConnectionPhase.connected ||
+      phase == BleConnectionPhase.initializing ||
+      phase == BleConnectionPhase.disconnecting;
 }
 
 class SportMetrics {
@@ -142,73 +153,116 @@ class SportMetrics {
   final bool? touchDetected;
 
   const SportMetrics({
-    this.distanceMiles = 0, this.bpm = 0, this.kcal = 0,
-    this.battery, this.gestureDetected, this.touchDetected,
+    this.distanceMiles = 0,
+    this.bpm = 0,
+    this.kcal = 0,
+    this.battery,
+    this.gestureDetected,
+    this.touchDetected,
   });
 
   static int estimateKcal({
-    required int bpm, required double weightKg, required int ageYears,
-    required bool isMale, required int durationSeconds,
+    required int bpm,
+    required double weightKg,
+    required int ageYears,
+    required bool isMale,
+    required int durationSeconds,
   }) {
     final min = durationSeconds / 60.0;
     if (isMale) {
-      return ((-55.0969 + 0.6309*bpm + 0.1988*weightKg + 0.2017*ageYears) / 4.184 * min).round();
+      return ((-55.0969 +
+                  0.6309 * bpm +
+                  0.1988 * weightKg +
+                  0.2017 * ageYears) /
+              4.184 *
+              min)
+          .round();
     } else {
-      return ((-20.4022 + 0.4472*bpm - 0.1263*weightKg + 0.074*ageYears) / 4.184 * min).round();
+      return ((-20.4022 + 0.4472 * bpm - 0.1263 * weightKg + 0.074 * ageYears) /
+              4.184 *
+              min)
+          .round();
     }
   }
 
   static double haversineDistanceMiles(
-      double lat1, double lon1, double lat2, double lon2) {
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
     const r = 3958.8;
     final dLat = _rad(lat2 - lat1), dLon = _rad(lon2 - lon1);
-    final a = sin(dLat/2)*sin(dLat/2) +
-        cos(_rad(lat1))*cos(_rad(lat2))*sin(dLon/2)*sin(dLon/2);
-    return r * 2 * atan2(sqrt(a), sqrt(1-a));
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_rad(lat1)) * cos(_rad(lat2)) * sin(dLon / 2) * sin(dLon / 2);
+    return r * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
+
   static double _rad(double d) => d * pi / 180;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 class BleTelemetryService {
-  BleTelemetryService({FlutterReactiveBle? ble}) : _ble = ble ?? FlutterReactiveBle();
+  BleTelemetryService({FlutterReactiveBle? ble})
+    : _ble = ble ?? FlutterReactiveBle();
 
   final FlutterReactiveBle _ble;
 
-  StreamSubscription<DiscoveredDevice>?      _scanSub;
+  StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<ConnectionStateUpdate>? _connectionSub;
-  StreamSubscription<List<int>>?             _txSub, _controlSub, _gestureSub, _touchSub, _batterySub;
+  StreamSubscription<List<int>>? _txSub,
+      _controlSub,
+      _gestureSub,
+      _touchSub,
+      _batterySub;
 
-  final _devicesCtrl          = StreamController<List<DiscoveredDevice>>.broadcast();
-  final _metricsCtrl          = StreamController<SportMetrics>.broadcast();
-  final _connectionCtrl       = StreamController<DeviceConnectionState>.broadcast();
-  final _connectionStatusCtrl = StreamController<BleConnectionStatus>.broadcast();
+  final _devicesCtrl = StreamController<List<DiscoveredDevice>>.broadcast();
+  final _metricsCtrl = StreamController<SportMetrics>.broadcast();
+  final _connectionCtrl = StreamController<DeviceConnectionState>.broadcast();
+  final _connectionStatusCtrl =
+      StreamController<BleConnectionStatus>.broadcast();
 
-  Stream<List<DiscoveredDevice>> get devicesStream          => _devicesCtrl.stream;
-  Stream<SportMetrics>           get metricsStream          => _metricsCtrl.stream;
-  Stream<DeviceConnectionState>  get connectionStream       => _connectionCtrl.stream;
-  Stream<BleConnectionStatus>    get connectionStatusStream => _connectionStatusCtrl.stream;
+  Stream<List<DiscoveredDevice>> get devicesStream => _devicesCtrl.stream;
+  Stream<SportMetrics> get metricsStream => _metricsCtrl.stream;
+  Stream<DeviceConnectionState> get connectionStream => _connectionCtrl.stream;
+  Stream<BleConnectionStatus> get connectionStatusStream =>
+      _connectionStatusCtrl.stream;
 
   final List<DiscoveredDevice> _devices = [];
   String? connectedDeviceId;
-  bool _canSendData         = true;
+  bool _canSendData = true;
   bool _displaySessionActive = false;
   BleConnectionStatus _connectionStatus = BleConnectionStatus.idle();
 
   bool get isDisplaySessionActive => _displaySessionActive;
   BleConnectionStatus get connectionStatus => _connectionStatus;
 
+  /// Reconnaît une paire de lunettes ActiveLook/Engo via son nom annoncé ou
+  /// le service propriétaire présent dans la réponse de scan.
+  bool isEngoDevice(DiscoveredDevice device) {
+    final name = device.name.toLowerCase().trim();
+    if (name.contains('engo') ||
+        name.contains('activelook') ||
+        name.contains('active look')) {
+      return true;
+    }
+    return device.serviceUuids.any(
+      (uuid) => uuid.toString().toLowerCase().contains('0783b03e'),
+    );
+  }
+
   static final _serviceUuid = Uuid.parse(_kServiceUuid);
-  static final _txUuid      = Uuid.parse(_kTxUuid);
-  static final _rxUuid      = Uuid.parse(_kRxUuid);
+  static final _txUuid = Uuid.parse(_kTxUuid);
+  static final _rxUuid = Uuid.parse(_kRxUuid);
   static final _controlUuid = Uuid.parse(_kControlUuid);
   static final _gestureUuid = Uuid.parse(_kGestureUuid);
-  static final _touchUuid   = Uuid.parse(_kTouchUuid);
+  static final _touchUuid = Uuid.parse(_kTouchUuid);
   static final _batteryUuid = Uuid.parse(_kBatteryUuid);
 
   int _negotiatedMtu = 20;
-  final _cmdQueue        = <(String, List<int>)>[];
-  bool  _cmdQueueRunning = false;
+  final _cmdQueue = <(String, List<int>)>[];
+  bool _cmdQueueRunning = false;
 
   // ─── Helpers §5.7 ─────────────────────────────────────────────────────────
   // Centrage horizontal : retourne le x du coin supérieur-gauche du texte.
@@ -225,8 +279,6 @@ class BleTelemetryService {
         .toInt();
   }*/
 
-
-
   // ─── Scan ─────────────────────────────────────────────────────────────────
   Future<void> startScan() async {
     await _scanSub?.cancel();
@@ -235,13 +287,16 @@ class BleTelemetryService {
     _scanSub = _ble
         .scanForDevices(withServices: [], scanMode: ScanMode.lowLatency)
         .listen((d) {
-      final i = _devices.indexWhere((e) => e.id == d.id);
-      i >= 0 ? _devices[i] = d : _devices.add(d);
-      _devicesCtrl.add(List.unmodifiable(_devices));
-    }, onError: _devicesCtrl.addError);
+          final i = _devices.indexWhere((e) => e.id == d.id);
+          i >= 0 ? _devices[i] = d : _devices.add(d);
+          _devicesCtrl.add(List.unmodifiable(_devices));
+        }, onError: _devicesCtrl.addError);
   }
 
-  Future<void> stopScan() async { await _scanSub?.cancel(); _scanSub = null; }
+  Future<void> stopScan() async {
+    await _scanSub?.cancel();
+    _scanSub = null;
+  }
 
   // ─── Queue ────────────────────────────────────────────────────────────────
   Future<void> enqueueCommand(String deviceId, List<int> cmd) async {
@@ -252,9 +307,16 @@ class BleTelemetryService {
   Future<void> _drainCommandQueue() async {
     _cmdQueueRunning = true;
     while (_cmdQueue.isNotEmpty) {
-      if (!_canSendData) { await Future.delayed(const Duration(milliseconds: 20)); continue; }
+      if (!_canSendData) {
+        await Future.delayed(const Duration(milliseconds: 20));
+        continue;
+      }
       final (id, cmd) = _cmdQueue.removeAt(0);
-      try { await sendCommand(id, cmd); } catch (e) { debugPrint('⚠️ BLE cmd failed: $e'); }
+      try {
+        await sendCommand(id, cmd);
+      } catch (e) {
+        debugPrint('⚠️ BLE cmd failed: $e');
+      }
       await Future.delayed(const Duration(milliseconds: 8));
     }
     _cmdQueueRunning = false;
@@ -268,16 +330,28 @@ class BleTelemetryService {
     const text = 'READY';
     // Centre vertical : y = (H - fontH) / 2
     final yText = (_kDisplayH - (_kFontCharH[_kFontValue] ?? 32)) ~/ 2;
-    await enqueueCommand(deviceId, _buildTextCommand(
-      x: 250, y: yText,
-      fontId: _kFontValue, color: _kColorWhite, text: text,
-    ));
+    await enqueueCommand(
+      deviceId,
+      _buildTextCommand(
+        x: 250,
+        y: yText,
+        fontId: _kFontValue,
+        color: _kColorWhite,
+        text: text,
+      ),
+    );
 
     const sub = 'Session en cours...';
-    await enqueueCommand(deviceId, _buildTextCommand(
-      x: 250, y: yText + (_kFontCharH[_kFontValue] ?? 32) + 8,
-      fontId: _kFontSmall, color: _kColorGray, text: sub,
-    ));
+    await enqueueCommand(
+      deviceId,
+      _buildTextCommand(
+        x: 250,
+        y: yText + (_kFontCharH[_kFontValue] ?? 32) + 8,
+        fontId: _kFontSmall,
+        color: _kColorGray,
+        text: sub,
+      ),
+    );
 
     await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionFlush]));
     await Future.delayed(const Duration(milliseconds: 1500));
@@ -288,58 +362,114 @@ class BleTelemetryService {
       await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionHold]));
       await enqueueCommand(deviceId, _buildFrame(_cmdClear, []));
       final h = _kFontCharH[_kFontBig] ?? 24;
-      await enqueueCommand(deviceId, _buildTextCommand(
-        x: 250, y: (_kDisplayH - h) ~/ 2,
-        fontId: _kFontBig, color: _kColorWhite, text: step,
-      ));
-      await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionFlush]));
-      await Future.delayed(step == 'GO!' ? const Duration(milliseconds: 800) : const Duration(seconds: 1));
+      await enqueueCommand(
+        deviceId,
+        _buildTextCommand(
+          x: 250,
+          y: (_kDisplayH - h) ~/ 2,
+          fontId: _kFontBig,
+          color: _kColorWhite,
+          text: step,
+        ),
+      );
+      await enqueueCommand(
+        deviceId,
+        _buildFrame(_cmdHoldFlush, [_actionFlush]),
+      );
+      await Future.delayed(
+        step == 'GO!'
+            ? const Duration(milliseconds: 800)
+            : const Duration(seconds: 1),
+      );
     }
   }
 
   // ─── Connexion ────────────────────────────────────────────────────────────
   Future<void> connectAndListen(String deviceId) async {
     await disconnect();
-    _emitStatus(BleConnectionPhase.connecting, deviceId: deviceId, message: 'Connexion BLE...');
+    _emitStatus(
+      BleConnectionPhase.connecting,
+      deviceId: deviceId,
+      message: 'Connexion BLE...',
+    );
 
     _connectionSub = _ble
-        .connectToDevice(id: deviceId, connectionTimeout: const Duration(seconds: 12))
-        .listen((update) async {
-      _connectionCtrl.add(update.connectionState);
+        .connectToDevice(
+          id: deviceId,
+          connectionTimeout: const Duration(seconds: 12),
+        )
+        .listen(
+          (update) async {
+            _connectionCtrl.add(update.connectionState);
 
-      if (update.connectionState == DeviceConnectionState.connected) {
-        connectedDeviceId = deviceId;
-        _emitStatus(BleConnectionPhase.connected, deviceId: deviceId, message: 'Connexion établie');
-        _emitStatus(BleConnectionPhase.initializing, deviceId: deviceId, message: 'Initialisation...');
-        try {
-          _negotiatedMtu = (await _ble.requestMtu(deviceId: deviceId, mtu: _kTargetMtu)) - 3;
-          debugPrint('✅ MTU: $_negotiatedMtu B');
-        } catch (e) { _negotiatedMtu = 20; debugPrint('⚠️ MTU fallback 20B: $e'); }
+            if (update.connectionState == DeviceConnectionState.connected) {
+              connectedDeviceId = deviceId;
+              _emitStatus(
+                BleConnectionPhase.connected,
+                deviceId: deviceId,
+                message: 'Connexion établie',
+              );
+              _emitStatus(
+                BleConnectionPhase.initializing,
+                deviceId: deviceId,
+                message: 'Initialisation...',
+              );
+              try {
+                _negotiatedMtu =
+                    (await _ble.requestMtu(
+                      deviceId: deviceId,
+                      mtu: _kTargetMtu,
+                    )) -
+                    3;
+                debugPrint('✅ MTU: $_negotiatedMtu B');
+              } catch (e) {
+                _negotiatedMtu = 20;
+                debugPrint('⚠️ MTU fallback 20B: $e');
+              }
 
-        await _subscribeAll(deviceId);
-        _displaySessionActive = false;
-        await Future.delayed(const Duration(milliseconds: 200));
-        await enqueueCommand(deviceId, _buildFrame(_cmdBattery, []));
-        _emitStatus(BleConnectionPhase.ready, deviceId: deviceId, message: 'Lunettes prêtes');
-      }
+              await _subscribeAll(deviceId);
+              _displaySessionActive = false;
+              await Future.delayed(const Duration(milliseconds: 200));
+              await enqueueCommand(deviceId, _buildFrame(_cmdBattery, []));
+              _emitStatus(
+                BleConnectionPhase.ready,
+                deviceId: deviceId,
+                message: 'Lunettes prêtes',
+              );
+            }
 
-      if (update.connectionState == DeviceConnectionState.disconnected) {
-        connectedDeviceId = null;
-        _displaySessionActive = false;
-        _emitStatus(BleConnectionPhase.disconnected, deviceId: deviceId, message: 'Déconnecté');
-        await _cancelCharSubs();
-      }
-    }, onError: (e) {
-      _emitStatus(BleConnectionPhase.failed, deviceId: deviceId, message: 'Connexion échouée', error: e.toString());
-      _connectionCtrl.addError(e);
-    });
+            if (update.connectionState == DeviceConnectionState.disconnected) {
+              connectedDeviceId = null;
+              _displaySessionActive = false;
+              _emitStatus(
+                BleConnectionPhase.disconnected,
+                deviceId: deviceId,
+                message: 'Déconnecté',
+              );
+              await _cancelCharSubs();
+            }
+          },
+          onError: (e) {
+            _emitStatus(
+              BleConnectionPhase.failed,
+              deviceId: deviceId,
+              message: 'Connexion échouée',
+              error: e.toString(),
+            );
+            _connectionCtrl.addError(e);
+          },
+        );
   }
 
   // ─── Session ──────────────────────────────────────────────────────────────
   Future<void> startDisplaySession([String? deviceId]) async {
     final target = deviceId ?? connectedDeviceId;
     if (target == null || _displaySessionActive) return;
-    _emitStatus(BleConnectionPhase.initializing, deviceId: target, message: 'Démarrage session...');
+    _emitStatus(
+      BleConnectionPhase.initializing,
+      deviceId: target,
+      message: 'Démarrage session...',
+    );
 
     await enqueueCommand(target, _buildFrame(_cmdDisplayPower, [0x01]));
     await Future.delayed(const Duration(milliseconds: 300));
@@ -352,7 +482,10 @@ class BleTelemetryService {
     await Future.delayed(const Duration(milliseconds: 100));
 
     // ResetFlush : remet holdFlush à zéro (état inconnu après connexion)
-    await enqueueCommand(target, _buildFrame(_cmdHoldFlush, [_actionResetFlush]));
+    await enqueueCommand(
+      target,
+      _buildFrame(_cmdHoldFlush, [_actionResetFlush]),
+    );
     await Future.delayed(const Duration(milliseconds: 100));
 
     // Efface "Connection successful" affiché par le firmware
@@ -362,44 +495,71 @@ class BleTelemetryService {
     await _showReadyScreen(target);
     await _showCountdown(target);
 
-    await enqueueCommand(target, _buildFrame(_cmdHoldFlush, [_actionResetFlush]));
+    await enqueueCommand(
+      target,
+      _buildFrame(_cmdHoldFlush, [_actionResetFlush]),
+    );
     await enqueueCommand(target, _buildFrame(_cmdClear, []));
     await Future.delayed(const Duration(milliseconds: 100));
 
     _displaySessionActive = true;
-    _emitStatus(BleConnectionPhase.ready, deviceId: target, message: 'Session ActiveLook active');
+    _emitStatus(
+      BleConnectionPhase.ready,
+      deviceId: target,
+      message: 'Session ActiveLook active',
+    );
   }
 
   Future<void> stopDisplaySession() async {
     final target = connectedDeviceId;
     if (!_displaySessionActive) return;
-    _emitStatus(BleConnectionPhase.disconnecting, deviceId: target, message: 'Arrêt session...');
+    _emitStatus(
+      BleConnectionPhase.disconnecting,
+      deviceId: target,
+      message: 'Arrêt session...',
+    );
 
     if (target != null) {
       await enqueueCommand(target, _buildFrame(_cmdHoldFlush, [_actionHold]));
       await enqueueCommand(target, _buildFrame(_cmdClear, []));
       const msg = 'Session terminee';
-      await enqueueCommand(target, _buildTextCommand(
-        x: 250, y: (_kDisplayH - 16) ~/ 2,
-        fontId: _kFontSmall, color: _kColorWhite, text: msg,
-      ));
+      await enqueueCommand(
+        target,
+        _buildTextCommand(
+          x: 250,
+          y: (_kDisplayH - 16) ~/ 2,
+          fontId: _kFontSmall,
+          color: _kColorWhite,
+          text: msg,
+        ),
+      );
       await enqueueCommand(target, _buildFrame(_cmdHoldFlush, [_actionFlush]));
       await Future.delayed(const Duration(seconds: 1));
       await enqueueCommand(target, _buildFrame(_cmdDisplayPower, [0x00]));
     }
 
     _displaySessionActive = false;
-    _emitStatus(BleConnectionPhase.ready, deviceId: target, message: 'Session arrêtée');
+    _emitStatus(
+      BleConnectionPhase.ready,
+      deviceId: target,
+      message: 'Session arrêtée',
+    );
   }
 
   // ─── Abonnements ──────────────────────────────────────────────────────────
   Future<void> _subscribeAll(String deviceId) async {
     QualifiedCharacteristic char(Uuid uuid) => QualifiedCharacteristic(
-      deviceId: deviceId, serviceId: _serviceUuid, characteristicId: uuid,
+      deviceId: deviceId,
+      serviceId: _serviceUuid,
+      characteristicId: uuid,
     );
 
-    _txSub      = _ble.subscribeToCharacteristic(char(_txUuid)).listen(_parseTxFrame, onError: _metricsCtrl.addError);
-    _controlSub = _ble.subscribeToCharacteristic(char(_controlUuid)).listen((b) {
+    _txSub = _ble
+        .subscribeToCharacteristic(char(_txUuid))
+        .listen(_parseTxFrame, onError: _metricsCtrl.addError);
+    _controlSub = _ble.subscribeToCharacteristic(char(_controlUuid)).listen((
+      b,
+    ) {
       if (b.isEmpty) return;
       final v = b[0];
       _canSendData = (v == _flowCanSend);
@@ -409,25 +569,34 @@ class BleTelemetryService {
         debugPrint('⚠️ ActiveLook erreur: 0x${v.toRadixString(16)}');
       }
     });
-    _gestureSub = _ble.subscribeToCharacteristic(char(_gestureUuid)).listen((b) {
-      if (b.isNotEmpty && b[0] == 0x01) _metricsCtrl.add(const SportMetrics(gestureDetected: true));
+    _gestureSub = _ble.subscribeToCharacteristic(char(_gestureUuid)).listen((
+      b,
+    ) {
+      if (b.isNotEmpty && b[0] == 0x01)
+        _metricsCtrl.add(const SportMetrics(gestureDetected: true));
     });
-    _touchSub   = _ble.subscribeToCharacteristic(char(_touchUuid)).listen((b) {
-      if (b.isNotEmpty && b[0] == 0x01) _metricsCtrl.add(const SportMetrics(touchDetected: true));
+    _touchSub = _ble.subscribeToCharacteristic(char(_touchUuid)).listen((b) {
+      if (b.isNotEmpty && b[0] == 0x01)
+        _metricsCtrl.add(const SportMetrics(touchDetected: true));
     });
-    _batterySub = _ble.subscribeToCharacteristic(QualifiedCharacteristic(
-      deviceId: deviceId,
-      serviceId: Uuid.parse("0000180F-0000-1000-8000-00805F9B34FB"),
-      characteristicId: _batteryUuid,
-    )).listen((b) {
-      if (b.isNotEmpty) _metricsCtrl.add(SportMetrics(battery: b[0].clamp(0, 100)));
-    });
+    _batterySub = _ble
+        .subscribeToCharacteristic(
+          QualifiedCharacteristic(
+            deviceId: deviceId,
+            serviceId: Uuid.parse("0000180F-0000-1000-8000-00805F9B34FB"),
+            characteristicId: _batteryUuid,
+          ),
+        )
+        .listen((b) {
+          if (b.isNotEmpty)
+            _metricsCtrl.add(SportMetrics(battery: b[0].clamp(0, 100)));
+        });
   }
 
   void _parseTxFrame(List<int> bytes) {
     if (bytes.length < 5 || bytes[0] != 0xFF || bytes.last != 0xAA) return;
     final cmdId = bytes[1];
-    final data  = bytes.sublist(4, bytes.length - 1);
+    final data = bytes.sublist(4, bytes.length - 1);
     if (cmdId == _cmdBattery && data.isNotEmpty) {
       _metricsCtrl.add(SportMetrics(battery: data[0].clamp(0, 100)));
     }
@@ -448,19 +617,19 @@ class BleTelemetryService {
   //   7. Flush à la fin → rendu en une seule passe sans flickering
   //
   Future<void> displayMetrics(
-      String deviceId, {
-        required double distanceMiles,
-        int? bpm,
-        required int kcal,
-        int? cadence,
-      }) async {
+    String deviceId, {
+    required double distanceMiles,
+    int? bpm,
+    required int kcal,
+    int? cadence,
+  }) async {
     if (!_displaySessionActive || !_canSendData) return;
 
-    final distKm  = distanceMiles * 1.60934;
+    final distKm = distanceMiles * 1.60934;
     final distStr = '${distKm.toStringAsFixed(2)} km';
-    final bpmStr  = bpm != null ? '$bpm bpm' : '-- bpm';
+    final bpmStr = bpm != null ? '$bpm bpm' : '-- bpm';
     final kcalStr = '$kcal kcal';
-    final rpmStr  = '${cadence ?? 0} rpm';
+    final rpmStr = '${cadence ?? 0} rpm';
 
     debugPrint("distance $distStr");
     debugPrint("bpm $bpmStr");
@@ -472,24 +641,52 @@ class BleTelemetryService {
     await enqueueCommand(deviceId, _buildFrame(_cmdClear, []));
 
     // ── DIST (Zone 1) ────────────────────────────────────────────────────
-    await enqueueCommand(deviceId, _buildTextCommand(
-      x: 250, y: _yDistValue, fontId: _kFontValue, color: _kColorWhite, text: distStr,
-    ));
+    await enqueueCommand(
+      deviceId,
+      _buildTextCommand(
+        x: 250,
+        y: _yDistValue,
+        fontId: _kFontValue,
+        color: _kColorWhite,
+        text: distStr,
+      ),
+    );
 
     // ── BPM (Zone 2) ─────────────────────────────────────────────────────
-    await enqueueCommand(deviceId, _buildTextCommand(
-      x: 250, y: _yBpmValue, fontId: _kFontValue, color: _kColorWhite, text: bpmStr,
-    ));
+    await enqueueCommand(
+      deviceId,
+      _buildTextCommand(
+        x: 250,
+        y: _yBpmValue,
+        fontId: _kFontValue,
+        color: _kColorWhite,
+        text: bpmStr,
+      ),
+    );
 
     // ── KCAL (Zone 3) ────────────────────────────────────────────────────
-    await enqueueCommand(deviceId, _buildTextCommand(
-      x: 250, y: _yKcalValue, fontId: _kFontValue, color: _kColorWhite, text: kcalStr,
-    ));
+    await enqueueCommand(
+      deviceId,
+      _buildTextCommand(
+        x: 250,
+        y: _yKcalValue,
+        fontId: _kFontValue,
+        color: _kColorWhite,
+        text: kcalStr,
+      ),
+    );
 
     // ── RPM (Zone 4) ─────────────────────────────────────────────────────
-    await enqueueCommand(deviceId, _buildTextCommand(
-      x: 250, y: _yRpmValue, fontId: _kFontValue, color: _kColorWhite, text: rpmStr,
-    ));
+    await enqueueCommand(
+      deviceId,
+      _buildTextCommand(
+        x: 250,
+        y: _yRpmValue,
+        fontId: _kFontValue,
+        color: _kColorWhite,
+        text: rpmStr,
+      ),
+    );
 
     // ── Fin rendu atomique ────────────────────────────────────────────────
     await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionFlush]));
@@ -515,33 +712,47 @@ class BleTelemetryService {
   //   str    (nB)              → ASCII, PAS de null-terminator nécessaire
   //                               (le firmware lit jusqu'au footer 0xAA)
   List<int> _buildTextCommand({
-    required int x, required int y,
-    required int fontId, required int color,
+    required int x,
+    required int y,
+    required int fontId,
+    required int color,
     required String text,
   }) {
     return _buildFrame(_cmdTxtDisplay, [
-      (x >> 8) & 0xFF, x & 0xFF,    // s16 x big-endian
-      (y >> 8) & 0xFF, y & 0xFF,    // s16 y big-endian
-      _kTextRotation,                // u8  r = 0x04 (miroir Engo)
-      fontId,                        // u8  f
-      color,                         // u8  c
-      ...text.codeUnits,             // str ASCII
+      (x >> 8) & 0xFF, x & 0xFF, // s16 x big-endian
+      (y >> 8) & 0xFF, y & 0xFF, // s16 y big-endian
+      _kTextRotation, // u8  r = 0x04 (miroir Engo)
+      fontId, // u8  f
+      color, // u8  c
+      ...text.codeUnits, // str ASCII
     ]);
   }
 
   // ─── Envoi BLE → caractéristique RX ──────────────────────────────────────
   Future<void> sendCommand(String deviceId, List<int> commandBytes) async {
     if (!_canSendData) return;
-    final rxChar  = QualifiedCharacteristic(deviceId: deviceId, serviceId: _serviceUuid, characteristicId: _rxUuid);
-    final chunk   = _negotiatedMtu.clamp(20, _kMaxChunkSize);
+    final rxChar = QualifiedCharacteristic(
+      deviceId: deviceId,
+      serviceId: _serviceUuid,
+      characteristicId: _rxUuid,
+    );
+    final chunk = _negotiatedMtu.clamp(20, _kMaxChunkSize);
 
     if (commandBytes.length <= chunk) {
-      debugPrint('📡 BLE ${commandBytes.length}B cmd=0x${commandBytes[1].toRadixString(16)}');
+      debugPrint(
+        '📡 BLE ${commandBytes.length}B cmd=0x${commandBytes[1].toRadixString(16)}',
+      );
       await _ble.writeCharacteristicWithResponse(rxChar, value: commandBytes);
     } else {
       debugPrint('📡 BLE fragmenté ${commandBytes.length}B → ${chunk}B/chunk');
       for (var i = 0; i < commandBytes.length; i += chunk) {
-        await _ble.writeCharacteristicWithResponse(rxChar, value: commandBytes.sublist(i, (i+chunk).clamp(0, commandBytes.length)));
+        await _ble.writeCharacteristicWithResponse(
+          rxChar,
+          value: commandBytes.sublist(
+            i,
+            (i + chunk).clamp(0, commandBytes.length),
+          ),
+        );
         await Future.delayed(const Duration(milliseconds: 5));
       }
     }
@@ -549,14 +760,24 @@ class BleTelemetryService {
 
   // ─── Cleanup ──────────────────────────────────────────────────────────────
   Future<void> _cancelCharSubs() async {
-    for (final s in [_txSub, _controlSub, _gestureSub, _touchSub, _batterySub]) {
+    for (final s in [
+      _txSub,
+      _controlSub,
+      _gestureSub,
+      _touchSub,
+      _batterySub,
+    ]) {
       await s?.cancel();
     }
     _txSub = _controlSub = _gestureSub = _touchSub = _batterySub = null;
   }
 
   Future<void> disconnect() async {
-    _emitStatus(BleConnectionPhase.disconnecting, deviceId: connectedDeviceId, message: 'Déconnexion...');
+    _emitStatus(
+      BleConnectionPhase.disconnecting,
+      deviceId: connectedDeviceId,
+      message: 'Déconnexion...',
+    );
     await _cancelCharSubs();
     await _connectionSub?.cancel();
     _connectionSub = null;
@@ -568,13 +789,21 @@ class BleTelemetryService {
   Future<void> dispose() async {
     await stopScan();
     await disconnect();
-    for (final c in [_devicesCtrl, _metricsCtrl, _connectionCtrl, _connectionStatusCtrl]) {
+    for (final c in [
+      _devicesCtrl,
+      _metricsCtrl,
+      _connectionCtrl,
+      _connectionStatusCtrl,
+    ]) {
       await c.close();
     }
   }
 
-  void _emitStatus(BleConnectionPhase phase, {
-    String? deviceId, required String message, String? error,
+  void _emitStatus(
+    BleConnectionPhase phase, {
+    String? deviceId,
+    required String message,
+    String? error,
   }) {
     final s = BleConnectionStatus(
       phase: phase,
