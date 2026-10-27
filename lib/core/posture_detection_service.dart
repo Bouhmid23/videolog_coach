@@ -4,11 +4,22 @@ import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 class PostureSmoothing {
   final Map<LandmarkType, _SmoothedPoint> _smoothedPoints = {};
   final Map<int, _SmoothedWorldPoint> _smoothedWorldPoints = {};
-  final double alpha;
+  double _alpha;
 
-  PostureSmoothing({this.alpha = 0.35});
+  PostureSmoothing({double alpha = 1.0})
+    : _alpha = alpha.clamp(0.0, 1.0).toDouble();
+
+  double get alpha => _alpha;
+
+  set alpha(double value) {
+    final next = value.clamp(0.0, 1.0).toDouble();
+    if (next == _alpha) return;
+    _alpha = next;
+    reset();
+  }
 
   Pose smooth(Pose pose) {
+    if (_alpha >= 1.0) return pose;
     final List<PoseLandmark> smoothedLandmarks = [];
 
     for (final entry in pose.landmarks) {
@@ -23,7 +34,7 @@ class PostureSmoothing {
         ),
       );
 
-      smoothed.update(entry.x, entry.y, entry.z, alpha);
+      smoothed.update(entry.x, entry.y, entry.z, _alpha);
 
       smoothedLandmarks.add(
         PoseLandmark(
@@ -41,7 +52,7 @@ class PostureSmoothing {
         point.typeIndex,
         () => _SmoothedWorldPoint(point.x, point.y, point.z),
       );
-      smoothed.update(point.x, point.y, point.z, alpha);
+      smoothed.update(point.x, point.y, point.z, _alpha);
       return WorldLandmark(
         typeIndex: point.typeIndex,
         x: smoothed.x,

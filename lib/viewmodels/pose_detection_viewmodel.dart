@@ -3,11 +3,20 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
-    show ChangeNotifier, ValueNotifier, kDebugMode, kIsWeb, debugPrint;
+    show
+        ChangeNotifier,
+        ValueNotifier,
+        TargetPlatform,
+        defaultTargetPlatform,
+        kDebugMode,
+        kIsWeb,
+        debugPrint;
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:livekit_client/livekit_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/posture_detection_service.dart';
 import '../data/posture_codec.dart';
@@ -53,7 +62,8 @@ class PoseFrame {
 ///  - capture JPEG gardée en mémoire et dimensions lues depuis le résultat ;
 ///  - paquet « pose perdue » pour que le web efface le squelette.
 class PoseDetectionViewModel extends ChangeNotifier {
-  final PostureSmoothing _smoothing = PostureSmoothing();
+  static const String _smoothingAlphaPreference = 'pose_smoothing_alpha';
+  final PostureSmoothing _smoothing = PostureSmoothing(alpha: 1.0);
 
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
     // Le backend GPU MediaPipe est le plus rapide pour un flux caméra continu.
@@ -81,6 +91,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   bool _hadPose = false;
   DateTime _lastLostSent = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime? _lossStartedAt;
 
   // Mesures (moyennes et débits calculés sur une fenêtre d'une seconde).
   int _captureMicros = 0;
@@ -96,6 +107,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   DateTime _statsWindowStart = DateTime.now();
   DateTime _lastRuntimeLandmarkLog = DateTime.fromMillisecondsSinceEpoch(0);
   Size? _lastFrameSize;
+  String _deviceModel = 'unknown';
 
   final Stopwatch _videoClock = Stopwatch()..start();
 
@@ -114,8 +126,19 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   RemotePosture? get currentPosture => _currentPosture;
   bool get isBusy => _running;
+  double get smoothingAlpha => _smoothing.alpha;
 
   Future<void> init() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        final device = await DeviceInfoPlugin().androidInfo;
+        _deviceModel = '${device.manufacturer} ${device.model}'.trim();
+      } catch (error) {
+        debugPrint('[Pose] Could not read Android model: $error');
+      }
+    }
+    final preferences = await SharedPreferences.getInstance();
+    _smoothing.alpha = preferences.getDouble(_smoothingAlphaPreference) ?? 1.0;
     final acceleration = await _poseDetector.initialize();
     final config = _poseDetector.config;
     debugPrint(
@@ -125,8 +148,16 @@ class PoseDetectionViewModel extends ChangeNotifier {
       'detection=${config.effectivePoseDetectionConfidence} '
       'presence=${config.effectivePosePresenceConfidence} '
       'tracking=${config.effectiveTrackingConfidence} '
-      'zEstimation=${config.enableZEstimation} runningMode=VIDEO',
+      'zEstimation=${config.enableZEstimation} runningMode=VIDEO '
+      'model=lite device=$_deviceModel smoothingAlpha=${_smoothing.alpha.toStringAsFixed(2)}',
     );
+  }
+
+  Future<void> setSmoothingAlpha(double value) async {
+    _smoothing.alpha = value;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setDouble(_smoothingAlphaPreference, _smoothing.alpha);
+    notifyListeners();
   }
 
   /// [destinationIdentities] : si seul le viewer web consomme le squelette,
@@ -158,6 +189,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _stableLabel = null;
     _candidateLabel = null;
     _candidateCount = 0;
+    _lossStartedAt = null;
     _currentPosture = null;
     _smoothing.reset();
     frameNotifier.value = null;
@@ -215,14 +247,17 @@ class PoseDetectionViewModel extends ChangeNotifier {
                 )
               : _fallbackSize;
           _lastFrameSize = size;
-          final pose = _smoothing.smooth(result.firstPose!);
+          final rawPose = result.firstPose!;
+          final pose = _smoothing.smooth(rawPose);
           _logRuntimeLandmarks(pose);
           frameNotifier.value = PoseFrame(
             pose: pose,
             frameSize: size,
             capturedAt: frame.capturedAt,
           );
-          final posture = _stabilizedPosture(classifyPosture(pose));
+          final posture = _stabilizedPosture(
+            classifyPosture(rawPose, frameSize: size),
+          );
           _hadPose = true;
           _publish(
             pose,
@@ -295,6 +330,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
     debugPrint(
       '📊 pose ${seconds.toStringAsFixed(2)}s '
       'model=lite resolution=$resolution '
+      'device=$_deviceModel '
       'capture=${averageMs(_captureMicros, _captureSamples).toStringAsFixed(1)}ms '
       'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
       'infer=${averageMs(_inferMicros, _inferSamples).toStringAsFixed(1)}ms '
@@ -428,7 +464,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
             _publishSamples++;
             if (kDebugMode && frameSeq != null && frameSize != null) {
               debugPrint(
-                '📊 pose-frame seq=$frameSeq model=lite '
+                '📊 pose-frame seq=$frameSeq model=lite device=$_deviceModel '
                 'resolution=${frameSize.width.toInt()}x${frameSize.height.toInt()} '
                 'capture=${(captureMicros ?? 0) / 1000.0}ms '
                 'detect=${(detectMicros ?? 0) / 1000.0}ms '
@@ -456,11 +492,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
       _lastLostSent = now;
       _publishLost(capturedAt);
     }
-    // Keep the last stable label through transient detector dropouts; otherwise
-    // the next first frame bypasses the three-frame hysteresis.
-    _candidateLabel = null;
-    _candidateCount = 0;
-    _smoothing.reset();
+    _lossStartedAt ??= now;
+    if (_smoothing.alpha < 1.0) _smoothing.reset();
     frameNotifier.value = null;
     if (_currentPosture != null) {
       _currentPosture = null;
@@ -484,6 +517,15 @@ class PoseDetectionViewModel extends ChangeNotifier {
       }
       return null;
     }
+
+    final lossStartedAt = _lossStartedAt;
+    if (lossStartedAt != null &&
+        DateTime.now().difference(lossStartedAt) >
+            const Duration(milliseconds: 900)) {
+      _candidateLabel = null;
+      _candidateCount = 0;
+    }
+    _lossStartedAt = null;
 
     if (_stableLabel == null) {
       _stableLabel = raw.label;
@@ -517,7 +559,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
     return stabilized;
   }
 
-  RemotePosture? classifyPosture(Pose pose) {
+  RemotePosture? classifyPosture(
+    Pose pose, {
+    required Size frameSize,
+  }) {
     PoseLandmark? landmark(LandmarkType type) => pose.getLandmark(type);
     bool visible(LandmarkType type) =>
         (landmark(type)?.visibility ?? 0) >= 0.5;
@@ -556,8 +601,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
     final kneeMid = midpoint(LandmarkType.leftKnee, LandmarkType.rightKnee);
     final ankleMid = midpoint(LandmarkType.leftAnkle, LandmarkType.rightAnkle);
 
-    final torsoDx = shoulderMid.dx - hipMid.dx;
-    final torsoDy = hipMid.dy - shoulderMid.dy;
+    final torsoDx = (shoulderMid.dx - hipMid.dx) * frameSize.width;
+    final torsoDy = (hipMid.dy - shoulderMid.dy) * frameSize.height;
     final torsoAngleDeg =
         math.atan2(
           torsoDx.abs(),
@@ -580,13 +625,14 @@ class PoseDetectionViewModel extends ChangeNotifier {
         LandmarkType.rightAnkle,
       ];
       if (!legPoints.every(visible)) return null;
-      final legTorsoLength = math.max((hipMid.dy - shoulderMid.dy).abs(), 1e-6);
+      final legTorsoLength =
+          math.max((hipMid.dy - shoulderMid.dy).abs() * frameSize.height, 1e-6);
       final kneeDrop = kneeMid == null
           ? 0.0
-          : (kneeMid.dy - hipMid.dy) / legTorsoLength;
+          : (kneeMid.dy - hipMid.dy) * frameSize.height / legTorsoLength;
       final ankleDrop = ankleMid == null
           ? 0.0
-          : (ankleMid.dy - hipMid.dy) / legTorsoLength;
+          : (ankleMid.dy - hipMid.dy) * frameSize.height / legTorsoLength;
       label = kneeDrop < 0.35 && ankleDrop < 0.7 ? 'assis' : 'debout';
     }
 

@@ -84,6 +84,7 @@ class RoomViewModel extends ChangeNotifier {
   double get totalDistanceMiles => _totalDistanceMiles;
   bool get showPosePip => _showPosePip;
   bool get showPosture => _showPosture;
+  double get poseSmoothingAlpha => poseViewModel.smoothingAlpha;
   String? get selectedParticipantIdentity => _selectedParticipantIdentity;
   bool get showSideSheet => _showSideSheet;
 
@@ -97,6 +98,11 @@ class RoomViewModel extends ChangeNotifier {
     for (final track in _participantTracks) {
       track.showPosture = _showPosture;
     }
+    notifyListeners();
+  }
+
+  Future<void> setPoseSmoothingAlpha(double alpha) async {
+    await poseViewModel.setSmoothingAlpha(alpha);
     notifyListeners();
   }
 

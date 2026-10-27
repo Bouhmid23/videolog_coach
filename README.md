@@ -20,6 +20,10 @@ sample showing the image-z and world-z ranges. FPS, dropout, and turn-around
 behavior require measurement on the target device; the code does not guarantee
 20 poses/s or prevent semantic left/right changes during a full turn.
 
+The trainee can adjust posture smoothing from the call controls. The value is
+saved on the device, defaults to **1.00** (raw points), and can be changed while
+the app is running without rebuilding.
+
 A new Flutter project.
 
 ## Getting Started

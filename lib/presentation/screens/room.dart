@@ -215,6 +215,10 @@ class _RoomPageState extends State<RoomPage> {
                         onBleDisconnected: _vm.onBleDisconnected,
                         showPosture: _vm.showPosture,
                         onTogglePosture: _vm.togglePosture,
+                        postureSmoothingAlpha: _vm.poseSmoothingAlpha,
+                        onSetPostureSmoothingAlpha: widget.role.isTrainee
+                            ? _vm.setPoseSmoothingAlpha
+                            : null,
                       ),
                     ),
                 ],

@@ -24,6 +24,8 @@ class ControlsWidget extends StatefulWidget {
   final VoidCallback onBleDisconnected;
   final bool showPosture;
   final VoidCallback? onTogglePosture;
+  final double postureSmoothingAlpha;
+  final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
 
   const ControlsWidget(
     this.room,
@@ -35,6 +37,8 @@ class ControlsWidget extends StatefulWidget {
     required this.onBleDisconnected,
     this.showPosture = true,
     this.onTogglePosture,
+    this.postureSmoothingAlpha = 1.0,
+    this.onSetPostureSmoothingAlpha,
     super.key,
   });
 
@@ -111,6 +115,57 @@ class _ControlsWidgetState extends State<ControlsWidget>
       ),
     );
     await _vm.closeSensorSheet();
+  }
+
+  Future<void> _openPostureSmoothingDialog() async {
+    final onChange = widget.onSetPostureSmoothingAlpha;
+    if (onChange == null) return;
+    var pendingAlpha = widget.postureSmoothingAlpha;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Lissage de la posture'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                pendingAlpha >= 1.0
+                    ? '1,00 · points bruts, sans lissage'
+                    : '${pendingAlpha.toStringAsFixed(2)} · lissage appliqué',
+              ),
+              Slider(
+                value: pendingAlpha,
+                min: 0,
+                max: 1,
+                divisions: 20,
+                label: pendingAlpha.toStringAsFixed(2),
+                onChanged: (value) => setDialogState(() {
+                  pendingAlpha = value;
+                }),
+              ),
+              const Text(
+                'Le réglage est mémorisé sur cet appareil. '
+                'À 1,00, image et worldLandmarks sont envoyés sans lissage.',
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () {
+                unawaited(onChange(pendingAlpha));
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Appliquer'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _onTapDisconnect() async {
@@ -464,6 +519,12 @@ class _ControlsWidgetState extends State<ControlsWidget>
                     : LKColors.textSecondary,
                 isActive: widget.showPosture,
               ),
+              if (widget.onSetPostureSmoothingAlpha != null)
+                _buildControlButton(
+                  icon: Icons.tune_rounded,
+                  onPressed: _openPostureSmoothingDialog,
+                  tooltip: 'Régler le lissage de la posture',
+                ),
 
               // ── Disconnect ──
               _buildControlButton(
