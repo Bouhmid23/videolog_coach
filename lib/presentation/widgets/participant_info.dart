@@ -45,6 +45,7 @@ class ParticipantTrack {
 /// - Feedback visuel de l'état
 class ParticipantInfoWidget extends StatelessWidget {
   final String? title;
+  final Widget? titleContent;
   final bool audioAvailable;
   final ConnectionQuality connectionQuality;
   final bool isScreenShare;
@@ -56,6 +57,7 @@ class ParticipantInfoWidget extends StatelessWidget {
 
   const ParticipantInfoWidget({
     this.title,
+    this.titleContent,
     this.audioAvailable = true,
     this.connectionQuality = ConnectionQuality.excellent,
     this.isScreenShare = false,
@@ -106,7 +108,14 @@ class ParticipantInfoWidget extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         // Nom du participant
-        if (title != null)
+        if (titleContent != null)
+          Flexible(
+            child: Padding(
+              padding: EdgeInsets.only(right: UIUtils.sm),
+              child: titleContent,
+            ),
+          )
+        else if (title != null)
           Flexible(
             child: Padding(
               padding: EdgeInsets.only(right: UIUtils.sm),
@@ -135,40 +144,13 @@ class ParticipantInfoWidget extends StatelessWidget {
               audioAvailable ? 'Audio activé' : 'Audio désactivé',
             ),
 
-            // Qualité de connexion / E2EE, remplacées par l'action locale.
-            if (showConnectionStatus) ...[
-              if (connectionQuality != ConnectionQuality.unknown)
-                _buildStatusIcon(
-                  context,
-                  _getConnectionIcon(connectionQuality),
-                  _getConnectionColor(connectionQuality),
-                  true,
-                  _getConnectionTooltip(connectionQuality),
-                ),
-              _buildStatusIcon(
-                context,
-                enabledE2EE ? Icons.lock : Icons.lock_open,
-                enabledE2EE ? Colors.green : Colors.red,
-                true,
-                enabledE2EE ? 'Chiffré (E2EE)' : 'Non chiffré',
-              ),
-            ],
             if (trailing != null)
               Padding(
                 padding: EdgeInsets.only(left: UIUtils.sm),
                 child: trailing,
               ),
 
-            // Icône participant local
-            if (isLocal) ...[
-              _buildStatusIcon(
-                context,
-                Icons.person,
-                LKColors.primary,
-                true,
-                'Vous',
-              ),
-            ],
+
           ],
         ),
       ],

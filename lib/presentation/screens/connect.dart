@@ -269,8 +269,8 @@ class _ConnectPageState extends State<ConnectPage> {
                         _buildAccountCard(context),
                         SizedBox(height: UIUtils.md),
                         _buildConfigCard(context),
-                        SizedBox(height: UIUtils.md),
-                        _buildInfoBanner(context),
+                        /*SizedBox(height: UIUtils.md),
+                        _buildInfoBanner(context),*/
                       ],
                     ),
                   ),
@@ -363,7 +363,7 @@ class _ConnectPageState extends State<ConnectPage> {
               ),
             ],
           ),
-          SizedBox(height: UIUtils.lg),
+          /*SizedBox(height: UIUtils.lg),
           Wrap(
             spacing: UIUtils.sm,
             runSpacing: UIUtils.sm,
@@ -392,7 +392,7 @@ class _ConnectPageState extends State<ConnectPage> {
                 color: LKColors.textSecondary,
               ),
             ],
-          ),
+          ),*/
         ],
       ),
     );
@@ -595,7 +595,7 @@ class _ConnectPageState extends State<ConnectPage> {
     );
   }
 
-  Widget _buildInfoBanner(BuildContext context) {
+  /*Widget _buildInfoBanner(BuildContext context) {
     return Container(
       padding: UIUtils.paddingMD,
       decoration: BoxDecoration(
@@ -624,7 +624,7 @@ class _ConnectPageState extends State<ConnectPage> {
         ],
       ),
     );
-  }
+  }*/
 
   Widget _buildBottomBar(BuildContext context) {
     return Container(

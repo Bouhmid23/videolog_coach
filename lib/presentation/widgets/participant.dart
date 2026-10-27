@@ -327,27 +327,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
             ),
           ),
 
-        // 3. HUD de donnees (telemetrie)
-        if (widget.showDataHud &&
-            !isScreenShare &&
-            (widget.telemetry != null || widget.posture != null))
-          Positioned(
-            top: widget.infoAtTop ? UIUtils.md + 25 : UIUtils.md,
-            left: UIUtils.xs,
-            right: UIUtils.md,
-            child: SafeArea(
-              bottom: false,
-              left: false,
-              right: false,
-              child: DataHud(
-                telemetry: widget.telemetry,
-                //posture: widget.posture,
-                //showPosture: widget.showPosture,
-              ),
-            ),
-          ),
-
-        // 4. Info du participant (en haut pour le flux principal, en bas sinon)
+        // 3. Barre d'identite et valeurs du participant principal
         Align(
           alignment: widget.infoAtTop
               ? Alignment.topCenter
@@ -366,10 +346,20 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     final isLocal = widget.participant is LocalParticipant;
 
     Widget buildInfo({Widget? trailing, bool showConnectionStatus = true}) {
+      final usePrimaryDataHud = widget.showDataHud && !isScreenShare;
       return ParticipantInfoWidget(
         title: widget.participant.name.isNotEmpty
             ? displayNameForIdentity(widget.participant.name)
             : displayNameForIdentity(widget.participant.identity),
+        titleContent: usePrimaryDataHud
+            ? DataHud(
+                telemetry: widget.telemetry,
+                showValues: true,
+                transparent: true,
+                compact: true,
+                showToggle: false,
+              )
+            : null,
         audioAvailable:
             audioPublication?.muted == false &&
             audioPublication?.subscribed == true,
@@ -417,13 +407,17 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
 
 class DataHud extends StatefulWidget {
   final RemoteTelemetry? telemetry;
-  //final RemotePosture? posture;
-  //final bool showPosture;
+  final bool showValues;
+  final bool transparent;
+  final bool compact;
+  final bool showToggle;
 
   const DataHud({
     this.telemetry,
-    //this.posture,
-    //required this.showPosture,
+    this.showValues = true,
+    this.transparent = false,
+    this.compact = false,
+    this.showToggle = true,
     super.key,
   });
 
@@ -433,52 +427,60 @@ class DataHud extends StatefulWidget {
 
 class _DataHudState extends State<DataHud> {
   bool _expanded = true;
-
-  /// Largeur sous laquelle le HUD bascule en mode compact (padding et police
-  /// réduits) sur les tuiles de galerie.
   static const double _compactWidth = 320;
 
-  List<(IconData, Color, String)> _buildItems() {
-    final items = <(IconData, Color, String)>[];
-
-    // Télémétrie
+  List<(IconData, Color, String, String)> _buildItems() {
+    final items = <(IconData, Color, String, String)>[];
     final telemetry = widget.telemetry;
-    if (telemetry != null) {
-      if (telemetry.hasHrm) {
-        items.add((
-          Icons.favorite_rounded,
-          LKColors.danger,
-          '${telemetry.heartRate} bpm',
-        ));
-      }
-      if (telemetry.speed != null) {
-        items.add((
-          Icons.speed_rounded,
-          LKColors.warning,
-          '${telemetry.speed!.toStringAsFixed(1)} km/h',
-        ));
-      }
-      if (telemetry.cadence != null) {
-        items.add((
-          Icons.pedal_bike_rounded,
-          LKColors.success,
-          '${telemetry.cadence!.toStringAsFixed(0)} rpm',
-        ));
-      }
-      if (telemetry.altitude != null) {
-        items.add((
-          Icons.height_rounded,
-          LKColors.secondary,
-          '${telemetry.altitude!.toStringAsFixed(0)} m',
-        ));
-      }
-      if (telemetry.bearing != null) {
-        items.add((
-          Icons.explore_rounded,
-          LKColors.warning,
-          '${telemetry.bearing!.toStringAsFixed(0)}°',
-        ));
-      }
+    if (telemetry == null) return items;
+
+    if (telemetry.hasHrm) {
+      items.add((
+        Icons.favorite_rounded,
+        LKColors.danger,
+        '${telemetry.heartRate} bpm',
+        '',
+      ));
+    }
+    if (telemetry.speed != null) {
+      items.add((
+        Icons.speed_rounded,
+        LKColors.warning,
+        '${telemetry.speed!.toStringAsFixed(1)} km/h',
+        '',
+      ));
+    }
+    if (telemetry.cadence != null) {
+      items.add((
+        Icons.pedal_bike_rounded,
+        LKColors.success,
+        '${telemetry.cadence!.toStringAsFixed(0)} rpm',
+        '',
+      ));
+    }
+    if (telemetry.altitude != null) {
+      items.add((
+        Icons.height_rounded,
+        LKColors.secondary,
+        '${telemetry.altitude!.toStringAsFixed(0)} m',
+        '',
+      ));
+    }
+    if (telemetry.bearing != null) {
+      items.add((
+      Icons.explore_rounded,
+      LKColors.warning,
+      '${telemetry.bearing!.toStringAsFixed(0)} deg',
+      '',
+      ));
+    }
+    if (telemetry.lat != null || telemetry.lng != null) {
+      items.add((
+        Icons.location_on_rounded,
+        LKColors.primary,
+        'Position',
+        '',
+      ));
     }
 
     return items;
@@ -487,14 +489,60 @@ class _DataHudState extends State<DataHud> {
   @override
   Widget build(BuildContext context) {
     final items = _buildItems();
-    if (items.isEmpty) return const SizedBox.shrink();
+    if (items.isEmpty) {
+      if (!widget.transparent) return const SizedBox.shrink();
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.sensors_off_rounded,
+            size: 13,
+            color: LKColors.textHint,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            'Aucune donnée capteur',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: LKColors.textHint,
+              fontSize: 9,
+            ),
+          ),
+        ],
+      );
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Sur une tuile étroite, on conserve la taille compacte mais les
-        // valeurs restent visibles (les chips passent sur plusieurs lignes).
-        final compact = constraints.maxWidth < _compactWidth;
-        final showText = _expanded;
+        final compact = widget.compact || constraints.maxWidth < _compactWidth;
+        final content = Wrap(
+          spacing: compact ? UIUtils.xs : UIUtils.sm,
+          runSpacing: compact ? 0 : UIUtils.xs,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            for (final item in items)
+              _HudChip(
+                icon: item.$1,
+                color: item.$2,
+                text: widget.showValues ? item.$3 : item.$4,
+                compact: compact,
+                transparent: widget.transparent,
+              ),
+            if (widget.showToggle && !compact && !widget.transparent)
+              _HudChip(
+                icon: _expanded
+                    ? Icons.unfold_less_rounded
+                    : Icons.unfold_more_rounded,
+                color: LKColors.textSecondary,
+                text: _expanded ? 'Reduire' : 'Details',
+                showText: _expanded,
+                onTap: () => setState(() => _expanded = !_expanded),
+              ),
+          ],
+        );
+
+        if (widget.transparent) {
+          return Align(alignment: Alignment.centerLeft, child: content);
+        }
 
         return Align(
           alignment: Alignment.topLeft,
@@ -513,33 +561,7 @@ class _DataHudState extends State<DataHud> {
                   border: Border.all(color: LKColors.border, width: 0.5),
                   boxShadow: UIUtils.shadowSM,
                 ),
-                child: Wrap(
-                  spacing: UIUtils.sm,
-                  runSpacing: UIUtils.xs,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    // Chips de données
-                    for (final item in items)
-                      _HudChip(
-                        icon: item.$1,
-                        color: item.$2,
-                        text: item.$3,
-                        showText: showText,
-                        compact: compact,
-                      ),
-                    // Toggle extension / compression (uniquement en mode large)
-                    if (!compact)
-                      _HudChip(
-                        icon: _expanded
-                            ? Icons.unfold_less_rounded
-                            : Icons.unfold_more_rounded,
-                        color: LKColors.textSecondary,
-                        text: _expanded ? 'Réduire' : 'Détails',
-                        showText: _expanded,
-                        onTap: () => setState(() => _expanded = !_expanded),
-                      ),
-                  ],
-                ),
+                child: content,
               ),
             ),
           ),
@@ -549,13 +571,13 @@ class _DataHudState extends State<DataHud> {
   }
 }
 
-/// Puce pour afficher une information ( chip )
 class _HudChip extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String text;
   final bool showText;
   final bool compact;
+  final bool transparent;
   final VoidCallback? onTap;
 
   const _HudChip({
@@ -564,6 +586,7 @@ class _HudChip extends StatelessWidget {
     required this.text,
     this.showText = true,
     this.compact = false,
+    this.transparent = false,
     this.onTap,
   });
 
@@ -573,19 +596,29 @@ class _HudChip extends StatelessWidget {
       duration: UIUtils.animationDuration,
       curve: UIUtils.animationCurve,
       padding: EdgeInsets.symmetric(
-        horizontal: compact ? UIUtils.xs + 2 : UIUtils.sm,
-        vertical: compact ? UIUtils.xs - 1 : UIUtils.xs + 1,
+        horizontal: transparent
+            ? 2
+            : compact
+            ? UIUtils.xs + 2
+            : UIUtils.sm,
+        vertical: transparent
+            ? 1
+            : compact
+            ? UIUtils.xs - 1
+            : UIUtils.xs + 1,
       ),
-      decoration: BoxDecoration(
-        color: LKColors.surfaceElevated,
-        borderRadius: UIUtils.borderRadiusAllSM,
-        border: Border.all(
-          color: onTap != null
-              ? LKColors.border.withValues(alpha: 0.8)
-              : LKColors.border,
-          width: 0.3,
-        ),
-      ),
+      decoration: transparent
+          ? null
+          : BoxDecoration(
+              color: LKColors.surfaceElevated,
+              borderRadius: UIUtils.borderRadiusAllSM,
+              border: Border.all(
+                color: onTap != null
+                    ? LKColors.border.withValues(alpha: 0.8)
+                    : LKColors.border,
+                width: 0.3,
+              ),
+            ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -594,7 +627,7 @@ class _HudChip extends StatelessWidget {
             duration: UIUtils.animationDuration,
             curve: UIUtils.animationCurve,
             child: !showText
-                ? SizedBox(width: 0)
+                ? const SizedBox(width: 0)
                 : Padding(
                     padding: EdgeInsets.only(left: UIUtils.xs - 2),
                     child: Text(
@@ -602,7 +635,11 @@ class _HudChip extends StatelessWidget {
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
-                        fontSize: 10,
+                        fontSize: transparent
+                            ? 11
+                            : compact
+                            ? 9
+                            : 10,
                       ),
                     ),
                   ),
@@ -620,7 +657,6 @@ class _HudChip extends StatelessWidget {
   }
 }
 
-/// Ã‰tat pour le participant local
 class _LocalParticipantWidgetState
     extends _ParticipantWidgetState<LocalParticipantWidget> {
   @override

@@ -41,8 +41,8 @@ class _RoomPageState extends State<RoomPage> {
   RecordingController? _recordingController;
 
   static const double _galleryHeight = 180;
-  static const double _galleryHudHeight =
-      84; // Valeurs visibles sur plusieurs lignes
+  static const double _galleryHudSpacing = 4;
+  static const double _galleryHudHeight = 36;
 
   @override
   void initState() {
@@ -153,7 +153,7 @@ class _RoomPageState extends State<RoomPage> {
                     Padding(
                       padding: EdgeInsets.only(bottom: UIUtils.sm),
                       child: SizedBox(
-                        height: _galleryHeight + _galleryHudHeight,
+                        height: _galleryHeight + _galleryHudHeight + _galleryHudSpacing,
                         child: ListView.separated(
                           scrollDirection: Axis.horizontal,
                           padding: EdgeInsets.symmetric(horizontal: UIUtils.md),
@@ -162,25 +162,26 @@ class _RoomPageState extends State<RoomPage> {
                               SizedBox(width: UIUtils.sm),
                           itemBuilder: (BuildContext context, int index) {
                             final track = secondaryTracks[index];
-                            final hasHud = track.telemetry != null;
+                            final hasHud = track.telemetry?.hasData == true;
                             return SizedBox(
                               width: _galleryHeight,
-                              height: _galleryHeight + _galleryHudHeight,
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.end,
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   // HUD de télémétrie au-dessus de la tuile
-                                  SizedBox(
-                                    height: _galleryHudHeight,
-                                    child: hasHud
-                                        ? DataHud(
-                                            telemetry: track.telemetry,
-                                            //posture: track.posture,
-                                            //showPosture: track.showPosture,
-                                          )
-                                        : const SizedBox.shrink(),
-                                  ),
+                                  if (hasHud) ...[
+                                    DataHud(
+                                      telemetry: track.telemetry,
+                                      showValues: false,
+                                      compact: true,
+                                      showToggle: false,
+                                      //posture: track.posture,
+                                      //showPosture: track.showPosture,
+                                    ),
+                                    const SizedBox(height: _galleryHudSpacing),
+                                  ],
                                   // Tuile vidéo du participant (HUD interne désactivé)
                                   SizedBox(
                                     width: _galleryHeight,

@@ -27,28 +27,89 @@ class RecordingController extends ChangeNotifier {
   final bool canControl;
   final Duration pollInterval;
 
+  static const Duration pendingConfirmationTimeout = Duration(seconds: 45);
+
   RecordingState? state;
   bool loading = false;
   String? error;
+  String? operation;
+  bool pendingTimedOut = false;
   String layout = 'grid';
+  DateTime? _pendingSince;
+  DateTime? lastStatusCheckAt;
+  bool? lastStatusCheckSucceeded;
+  String? lastStatusCheckMessage;
+  String? lastStatusCheckStatus;
+  int successfulStatusChecks = 0;
+  int failedStatusChecks = 0;
 
   Timer? _pollTimer;
+  Timer? _pendingTimeoutTimer;
+  String? _trackedPendingStatus;
   bool _requestInFlight = false;
   bool _disposed = false;
 
   bool get canStart =>
-      canControl && !loading && (state == null ? false : state!.canStart);
+      canControl &&
+      !loading &&
+      !_requestInFlight &&
+      (state == null ? false : state!.canStart);
 
-  bool get canStop => canControl && !loading && (state?.canStop ?? false);
+  bool get canStop =>
+      canControl && !loading && !_requestInFlight && (state?.canStop ?? false);
 
   bool get isPending => state?.isPending ?? false;
 
   bool get isRecording => state?.isActive ?? false;
 
+  String get operationLabel => switch (operation) {
+    'start' => 'Envoi du démarrage...',
+    'stop' => "Envoi de l'arrêt...",
+    _ => 'Actualisation...',
+  };
+
+  String get pendingLabel {
+    if (pendingTimedOut) return 'À vérifier';
+    return state?.isStarting == true ? 'Préparation...' : 'Finalisation...';
+  }
+
+  String? get pendingDiagnosticMessage {
+    if (!pendingTimedOut) return null;
+    final elapsed = _pendingSince == null
+        ? pendingConfirmationTimeout.inSeconds
+        : DateTime.now().difference(_pendingSince!).inSeconds;
+    final checkTime = lastStatusCheckAt?.toLocal().toIso8601String();
+    final checkedAfterPending =
+        lastStatusCheckAt != null &&
+        (_pendingSince == null || !lastStatusCheckAt!.isBefore(_pendingSince!));
+    if (checkedAfterPending && lastStatusCheckSucceeded == true) {
+      return 'Attente: ${elapsed}s. Derniere verification reussie'
+          '${checkTime == null ? '' : ' ($checkTime)'}: statut '
+          '${lastStatusCheckStatus ?? state?.rawStatus ?? 'inconnu'}. '
+          'Egress: ${state?.egressId ?? 'non fourni'}. '
+          'Le mobile communique avec l\'API. Le statut reste en attente '
+          'cote service d\'enregistrement (backend/LiveKit). '
+          'Controles: $successfulStatusChecks reussis, '
+          '$failedStatusChecks en echec.';
+    }
+    if (checkedAfterPending && lastStatusCheckSucceeded == false) {
+      return 'Attente: ${elapsed}s. Derniere verification echouee'
+          '${checkTime == null ? '' : ' ($checkTime)'}: '
+          '${lastStatusCheckMessage ?? 'aucun statut recu'}. '
+          'Le mobile n\'a pas obtenu de statut fiable; verifiez le reseau, '
+          'la session et la reponse API. Controles: '
+          '$successfulStatusChecks reussis, $failedStatusChecks en echec.';
+    }
+    return 'Attente: ${elapsed}s. Aucune verification de statut n\'a abouti.';
+  }
+
   /// Raison lisible quand [canStart] est faux, utile pour l'UI et les logs.
   String? get startBlockReason {
     if (!canControl) {
       return 'Votre compte ne peut pas piloter l\'enregistrement de cette session.';
+    }
+    if (_requestInFlight && !loading) {
+      return 'Vérification de l\'état en cours. Réessayez dans un instant.';
     }
     if (loading) return 'Une opération d\'enregistrement est déjà en cours.';
     if (state == null) {
@@ -64,6 +125,9 @@ class RecordingController extends ChangeNotifier {
   String? get stopBlockReason {
     if (!canControl) {
       return 'Votre compte ne peut pas piloter l\'enregistrement de cette session.';
+    }
+    if (_requestInFlight && !loading) {
+      return 'Vérification de l\'état en cours. Réessayez dans un instant.';
     }
     if (loading) return 'Une opération d\'enregistrement est déjà en cours.';
     if (state == null) {
@@ -87,6 +151,17 @@ class RecordingController extends ChangeNotifier {
     if (!silent) {
       loading = true;
       error = null;
+      if (pendingTimedOut && state?.isPending == true) {
+        pendingTimedOut = false;
+        _pendingSince = DateTime.now();
+        successfulStatusChecks = 0;
+        failedStatusChecks = 0;
+        _pendingTimeoutTimer?.cancel();
+        _pendingTimeoutTimer = Timer(
+          pendingConfirmationTimeout,
+          _onPendingConfirmationTimeout,
+        );
+      }
       _notify();
     }
     debugPrint(
@@ -96,13 +171,24 @@ class RecordingController extends ChangeNotifier {
     try {
       final next = await ApiService.getRecording(roomName);
       state = next;
-      error = null;
+      lastStatusCheckAt = DateTime.now();
+      lastStatusCheckSucceeded = true;
+      lastStatusCheckStatus = next.rawStatus;
+      lastStatusCheckMessage = 'Reponse API recue';
+      successfulStatusChecks++;
+      if (!pendingTimedOut) error = null;
       debugPrint(
         '[Recording] load OK room=$roomName status=${next.rawStatus} '
         'normalized=${next.status} egress=${next.egressId}',
       );
     } on ApiException catch (exception, stack) {
       error = _errorMessage(exception);
+      lastStatusCheckAt = DateTime.now();
+      lastStatusCheckSucceeded = false;
+      failedStatusChecks++;
+      lastStatusCheckMessage = exception.statusCode == 0
+          ? exception.message
+          : 'HTTP ${exception.statusCode}: ${exception.message}';
       debugPrint(
         '[Recording] load FAILED room=$roomName HTTP=${exception.statusCode} '
         'message=${exception.message} detail=${exception.detail}',
@@ -113,6 +199,10 @@ class RecordingController extends ChangeNotifier {
       }
     } catch (err, stack) {
       error = 'Impossible de récupérer l\'état de l\'enregistrement.';
+      lastStatusCheckAt = DateTime.now();
+      lastStatusCheckSucceeded = false;
+      failedStatusChecks++;
+      lastStatusCheckMessage = err.toString();
       debugPrint('[Recording] load FAILED room=$roomName error=$err');
       debugPrintStack(stackTrace: stack);
     } finally {
@@ -159,7 +249,9 @@ class RecordingController extends ChangeNotifier {
     String operation,
     Future<RecordingState> Function() action,
   ) async {
+    _requestInFlight = true;
     loading = true;
+    this.operation = operation;
     error = null;
     _notify();
 
@@ -176,7 +268,9 @@ class RecordingController extends ChangeNotifier {
       );
     } on ApiException catch (exception, stack) {
       error = _errorMessage(exception);
-      refreshAfterError = exception.isConflict;
+      // A timeout can happen after the server received the command. Refresh
+      // to reconcile the UI before reporting the final result.
+      refreshAfterError = exception.isConflict || exception.statusCode == 0;
       debugPrint(
         '[Recording] $operation FAILED room=$roomName '
         'HTTP=${exception.statusCode} message=${exception.message} '
@@ -191,7 +285,9 @@ class RecordingController extends ChangeNotifier {
       debugPrint('[Recording] $operation FAILED room=$roomName error=$err');
       debugPrintStack(stackTrace: stack);
     } finally {
+      _requestInFlight = false;
       loading = false;
+      this.operation = null;
       _syncPolling();
       _notify();
     }
@@ -210,8 +306,24 @@ class RecordingController extends ChangeNotifier {
   }
 
   void _syncPolling() {
-    final shouldPoll =
-        (state?.isPending ?? false) || (state?.isActive ?? false);
+    final pendingStatus = state?.isPending == true ? state!.status : null;
+    if (pendingStatus != _trackedPendingStatus) {
+      _pendingTimeoutTimer?.cancel();
+      _trackedPendingStatus = pendingStatus;
+      pendingTimedOut = false;
+      _pendingSince = pendingStatus == null ? null : DateTime.now();
+      if (pendingStatus != null) {
+        successfulStatusChecks = 0;
+        failedStatusChecks = 0;
+        _pendingTimeoutTimer = Timer(
+          pendingConfirmationTimeout,
+          _onPendingConfirmationTimeout,
+        );
+      }
+    }
+
+    final pending = pendingStatus != null;
+    final shouldPoll = (pending && !pendingTimedOut) || isRecording;
     if (shouldPoll) {
       _pollTimer ??= Timer.periodic(
         pollInterval,
@@ -223,6 +335,24 @@ class RecordingController extends ChangeNotifier {
     }
   }
 
+  void _onPendingConfirmationTimeout() {
+    if (_disposed || state?.isPending != true) return;
+    pendingTimedOut = true;
+    _pendingTimeoutTimer = null;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    final action = state!.isStarting ? 'démarrage' : 'arrêt';
+    error =
+        "Le serveur n'a pas confirmé le $action après "
+        '${pendingConfirmationTimeout.inSeconds} secondes. '
+        "Vérifiez l'état avant de relancer l'opération.";
+    debugPrint(
+      '[Recording] confirmation timeout room=$roomName '
+      'status=${state!.rawStatus} after=${pendingConfirmationTimeout.inSeconds}s',
+    );
+    _notify();
+  }
+
   void _notify() {
     if (!_disposed) notifyListeners();
   }
@@ -232,6 +362,8 @@ class RecordingController extends ChangeNotifier {
     _disposed = true;
     _pollTimer?.cancel();
     _pollTimer = null;
+    _pendingTimeoutTimer?.cancel();
+    _pendingTimeoutTimer = null;
     super.dispose();
   }
 }

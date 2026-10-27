@@ -306,19 +306,6 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 ),
               ),
               SizedBox(width: UIUtils.md),
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: LKColors.primary.withValues(alpha: 0.16),
-                  borderRadius: UIUtils.borderRadiusAllLG,
-                ),
-                child: Icon(
-                  Icons.sports_score_rounded,
-                  color: LKColors.primary,
-                  size: 24,
-                ),
-              ),
             ],
           ),
           SizedBox(height: UIUtils.lg),
@@ -410,7 +397,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
         : isLive
         ? LKColors.success
         : LKColors.primary;
-    final stateLabel = isRecording
+    final _ = isRecording
         ? 'Enregistrement'
         : room.isBusy
         ? room.recordingLabel
@@ -457,7 +444,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
+                    /*Container(
                       width: 50,
                       height: 50,
                       decoration: BoxDecoration(
@@ -472,7 +459,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
                         size: 25,
                       ),
                     ),
-                    SizedBox(width: UIUtils.md),
+                    SizedBox(width: UIUtils.md),*/
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -486,7 +473,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          SizedBox(height: UIUtils.sm),
+                          /*SizedBox(height: UIUtils.sm),
                           Wrap(
                             spacing: UIUtils.sm,
                             runSpacing: UIUtils.xs,
@@ -499,13 +486,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
                                 color: accent,
                                 emphasize: isLive || isRecording,
                               ),
-                              _buildInfoPill(
+                              *//*_buildInfoPill(
                                 context,
                                 icon: Icons.people_alt_rounded,
                                 label: room.participantCount == 0
                                     ? 'Aucun participant'
                                     : '${room.participantCount} participant${room.participantCount > 1 ? 's' : ''}',
-                              ),
+                              ),*//*
                               if (room.canControlRecording)
                                 _buildInfoPill(
                                   context,
@@ -514,33 +501,12 @@ class _RoomsScreenState extends State<RoomsScreen> {
                                   color: LKColors.success,
                                 ),
                             ],
-                          ),
+                          ),*/
                         ],
                       ),
                     ),
                   ],
                 ),
-                if (updated != null) ...[
-                  SizedBox(height: UIUtils.md),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.schedule_rounded,
-                        size: 13,
-                        color: LKColors.textHint,
-                      ),
-                      SizedBox(width: UIUtils.xs),
-                      Expanded(
-                        child: Text(
-                          updated,
-                          style: UIUtils.bodySmall(
-                            context,
-                          ).copyWith(color: LKColors.textHint, fontSize: 10),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
                 SizedBox(height: UIUtils.md),
                 SizedBox(
                   height: 46,

@@ -23,10 +23,19 @@ class RemoteTelemetry {
 
   bool get hasHrm => heartRate != null;
 
+  bool get hasData =>
+      hasHrm ||
+      cadence != null ||
+      speed != null ||
+      lat != null ||
+      lng != null ||
+      altitude != null ||
+      bearing != null;
+
   factory RemoteTelemetry.fromJson(
-      Map<String, dynamic> json, {
-        DateTime? receivedAt,
-      }) {
+    Map<String, dynamic> json, {
+    DateTime? receivedAt,
+  }) {
     final payload = json['payload'];
     Map<String, dynamic> inner;
     if (payload is Map) {
@@ -40,7 +49,7 @@ class RemoteTelemetry {
     double? lng;
     double? altitude;
     double? bearing;
-    
+
     if (gps is Map) {
       final gpsMap = Map<String, dynamic>.from(gps);
       lat = _readDouble(gpsMap['lat']);
@@ -63,9 +72,9 @@ class RemoteTelemetry {
   }
 
   static RemoteTelemetry? tryParse(
-      Map<String, dynamic> json, {
-        DateTime? receivedAt,
-      }) {
+    Map<String, dynamic> json, {
+    DateTime? receivedAt,
+  }) {
     if (json['type'] != 'telemetry') return null;
     try {
       return RemoteTelemetry.fromJson(json, receivedAt: receivedAt);

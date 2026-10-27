@@ -1,8 +1,10 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 
+import '../../theme.dart';
 import '../../viewmodels/pose_detection_viewmodel.dart';
 import 'pose_animation.dart';
 
@@ -165,14 +167,31 @@ class _PoseSkeletonPainter extends CustomPainter {
           .toDouble();
       if (strength < 0.18) continue;
 
-      final fade = ((strength - 0.12) / 0.55).clamp(0.0, 1.0).toDouble();
-      final width = (1.15 + fade * 0.45) * bone.widthMultiplier;
+      final visibility = (0.68 + strength * 0.32).clamp(0.0, 1.0).toDouble();
+      final width = (2.25 + strength * 0.5) * bone.widthMultiplier;
+      final colorFrom = _colorForLandmark(bone.from);
+      final colorTo = _colorForLandmark(bone.to);
+      final colorShader = ui.Gradient.linear(from, to, [colorFrom, colorTo]);
       canvas.drawLine(
         from,
         to,
         Paint()
-          ..color = const Color(0xFF06131B).withValues(alpha: 0.20 * fade)
-          ..strokeWidth = width + 1.1
+          ..color = Color.lerp(
+            colorFrom,
+            colorTo,
+            0.5,
+          )!.withValues(alpha: 0.28 * visibility)
+          ..strokeWidth = width + 3.8
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0)
+          ..isAntiAlias = true,
+      );
+      canvas.drawLine(
+        from,
+        to,
+        Paint()
+          ..color = const Color(0xFF07111F).withValues(alpha: 0.72)
+          ..strokeWidth = width + 1.8
           ..strokeCap = StrokeCap.round
           ..isAntiAlias = true,
       );
@@ -180,8 +199,18 @@ class _PoseSkeletonPainter extends CustomPainter {
         from,
         to,
         Paint()
-          ..color = const Color(0xFFE8F8FC).withValues(alpha: 0.50 * fade)
+          ..shader = colorShader
+          ..color = Colors.white.withValues(alpha: visibility)
           ..strokeWidth = width
+          ..strokeCap = StrokeCap.round
+          ..isAntiAlias = true,
+      );
+      canvas.drawLine(
+        from,
+        to,
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.42 * visibility)
+          ..strokeWidth = math.max(0.7, width * 0.22)
           ..strokeCap = StrokeCap.round
           ..isAntiAlias = true,
       );
@@ -198,15 +227,48 @@ class _PoseSkeletonPainter extends CustomPainter {
     for (final type in joints) {
       final point = points[type];
       final strength = confidence[type] ?? 0.0;
-      if (point == null || strength < 0.42) continue;
+      if (point == null || strength < 0.28) continue;
+      final color = _colorForLandmark(type);
+      final visibility = (0.72 + strength * 0.28).clamp(0.0, 1.0).toDouble();
+      canvas.drawCircle(
+        point,
+        6.0,
+        Paint()
+          ..color = color.withValues(alpha: 0.38 * visibility)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0)
+          ..isAntiAlias = true,
+      );
+      canvas.drawCircle(
+        point,
+        4.0,
+        Paint()
+          ..color = const Color(0xFF07111F).withValues(alpha: 0.82)
+          ..isAntiAlias = true,
+      );
+      canvas.drawCircle(
+        point,
+        3.25,
+        Paint()
+          ..color = color.withValues(alpha: 0.96 * visibility)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..isAntiAlias = true,
+      );
       canvas.drawCircle(
         point,
         1.35,
         Paint()
-          ..color = const Color(0xFFE8F8FC).withValues(alpha: 0.56 * strength)
+          ..color = Colors.white.withValues(alpha: 0.94 * visibility)
           ..isAntiAlias = true,
       );
     }
+  }
+
+  Color _colorForLandmark(LandmarkType type) {
+    final name = type.name;
+    if (name.startsWith('left')) return LKColors.logoLight;
+    if (name.startsWith('right')) return LKColors.logoBlue;
+    return LKColors.primary;
   }
 
   @override

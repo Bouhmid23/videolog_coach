@@ -33,14 +33,53 @@ class RecordingControls extends StatelessWidget {
               SizedBox(width: UIUtils.xs),
             ],
             if (controller.loading || isPending) ...[
-              _ActivityIndicator(
-                color: isPending ? LKColors.warning : LKColors.textSecondary,
-                tooltip: controller.state?.label ?? 'Enregistrement...',
-              ),
-              const SizedBox(width: 4),
+              if (!controller.pendingTimedOut) ...[
+                _ActivityIndicator(
+                  color: isPending ? LKColors.warning : LKColors.textSecondary,
+                  tooltip: controller.loading
+                      ? controller.operationLabel
+                      : controller.state?.label ?? 'Vérification du statut',
+                ),
+                const SizedBox(width: 4),
+              ],
               _RecordingPill(
-                label: controller.state?.label ?? 'Enregistrement…',
+                label: controller.loading
+                    ? controller.operationLabel
+                    : controller.isPending
+                    ? controller.pendingLabel
+                    : controller.operationLabel,
+                color: controller.pendingTimedOut
+                    ? LKColors.warning
+                    : isPending
+                    ? LKColors.warning
+                    : LKColors.textSecondary,
+              ),
+              if (controller.pendingTimedOut)
+                IconButton(
+                  onPressed: () => controller.load(),
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  color: LKColors.primary,
+                  tooltip: "Vérifier l'état auprès du serveur",
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
+                ),
+            ] else if (controller.state == null) ...[
+              _RecordingPill(
+                label: 'État indisponible',
                 color: LKColors.warning,
+              ),
+              IconButton(
+                onPressed: () => controller.load(),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                color: LKColors.primary,
+                tooltip: 'Réessayer la vérification',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               ),
             ] else if (isActive) ...[
               _RecordingPill(
@@ -61,7 +100,22 @@ class RecordingControls extends StatelessWidget {
                     minHeight: 28,
                   ),
                 ),
-            ] else if (controller.canControl)
+            ] else if (controller.canControl) ...[
+              if (controller.state?.status == 'failed') ...[
+                _RecordingPill(label: 'Échec', color: LKColors.danger),
+                IconButton(
+                  onPressed: () => _showServerFailure(context),
+                  icon: const Icon(Icons.error_outline_rounded, size: 17),
+                  color: LKColors.danger,
+                  tooltip: 'Voir la raison de l\'échec',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 24,
+                    minHeight: 28,
+                  ),
+                ),
+              ],
               PopupMenuButton<String>(
                 tooltip: 'Démarrer l\'enregistrement',
                 onSelected: (layout) => _start(context, layout),
@@ -87,6 +141,7 @@ class RecordingControls extends StatelessWidget {
                   ),
                 ),
               ),
+            ],
           ],
         );
       },
@@ -105,19 +160,33 @@ class RecordingControls extends StatelessWidget {
     final started = await controller.startWithLayout(layout);
     if (!context.mounted) return;
 
-    final message = started
-        ? (controller.state?.isStarting == true
-              ? 'Démarrage en cours…'
-              : 'Enregistrement démarré.')
-        : (controller.error ??
+    final resultState = controller.state;
+    final reconciled = controller.isRecording || controller.isPending;
+    final operationFailed =
+        (!started && !reconciled) || resultState?.status == 'failed';
+    final message = !started && controller.isRecording
+        ? 'Le serveur confirme que l\'enregistrement est actif.'
+        : !started && resultState?.isStarting == true
+        ? 'Le serveur prépare déjà l\'enregistrement. La demande n\'a pas été relancée.'
+        : !started && resultState?.isStopping == true
+        ? 'Un arrêt est déjà en cours. Attendez sa confirmation.'
+        : !started
+        ? controller.error ??
               controller.startBlockReason ??
-              'Impossible de démarrer l\'enregistrement.');
+              "Impossible de démarrer l'enregistrement."
+        : resultState?.status == 'failed'
+        ? resultState?.error ?? 'Le serveur a signalé un échec de démarrage.'
+        : resultState?.isStarting == true
+        ? "Demande envoyée. Le serveur prépare l'enregistrement..."
+        : resultState?.isActive == true
+        ? 'Enregistrement actif.'
+        : 'Demande de démarrage reçue.';
     debugPrint(
       '[Recording UI] start layout=$layout success=$started '
       'status=${controller.state?.rawStatus} error=${controller.error} '
       'block=${controller.startBlockReason}',
     );
-    _showResult(context, message, isError: !started);
+    _showResult(context, message, isError: operationFailed);
   }
 
   Future<void> _stop(BuildContext context) async {
@@ -132,19 +201,30 @@ class RecordingControls extends StatelessWidget {
     final stopped = await controller.stop();
     if (!context.mounted) return;
 
-    final message = stopped
-        ? (controller.state?.isStopping == true
-              ? 'Arrêt en cours…'
-              : 'Enregistrement arrêté.')
-        : (controller.error ??
+    final resultState = controller.state;
+    final stopConfirmed =
+        resultState != null && !resultState.isActive && !resultState.isPending;
+    final operationFailed =
+        (!stopped && !stopConfirmed) || resultState?.status == 'failed';
+    final message = !stopped && resultState?.isStopping == true
+        ? 'Le serveur termine déjà l\'enregistrement.'
+        : !stopped && stopConfirmed
+        ? 'Le serveur confirme que l\'enregistrement est arrêté.'
+        : !stopped
+        ? controller.error ??
               controller.stopBlockReason ??
-              'Impossible d\'arrêter l\'enregistrement.');
+              "Impossible d'arrêter l'enregistrement."
+        : resultState?.status == 'failed'
+        ? resultState?.error ?? "Le serveur a signalé un échec d'arrêt."
+        : resultState?.isStopping == true
+        ? "Arrêt demandé. Le serveur termine l'enregistrement..."
+        : 'Enregistrement arrêté.';
     debugPrint(
       '[Recording UI] stop success=$stopped '
       'status=${controller.state?.rawStatus} error=${controller.error} '
       'block=${controller.stopBlockReason}',
     );
-    _showResult(context, message, isError: !stopped);
+    _showResult(context, message, isError: operationFailed);
   }
 
   void _showTransient(ScaffoldMessengerState messenger, String message) {
@@ -204,11 +284,15 @@ class RecordingControls extends StatelessWidget {
   void _showError(BuildContext context) {
     final error = controller.error;
     if (error == null) return;
+    final diagnostic = controller.pendingDiagnosticMessage;
+    final details = diagnostic == null
+        ? error
+        : '$error\n\nDiagnostic:\n$diagnostic';
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Enregistrement'),
-        content: Text(error),
+        content: SelectableText(details),
         actions: [
           if (controller.canControl)
             TextButton(
@@ -218,6 +302,25 @@ class RecordingControls extends StatelessWidget {
               },
               child: const Text('Réessayer'),
             ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Fermer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showServerFailure(BuildContext context) {
+    final detail = controller.state?.error;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Échec de l’enregistrement'),
+        content: Text(
+          detail ?? 'Le serveur n\'a pas pu démarrer l\'enregistrement.',
+        ),
+        actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Fermer'),
@@ -238,7 +341,7 @@ class _RecordingPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(maxWidth: 76),
+      constraints: const BoxConstraints(maxWidth: 112),
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.16),

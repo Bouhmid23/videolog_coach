@@ -33,11 +33,13 @@ class RecordingState {
       egressId: json['egress_id'] as String?,
       startedAt: _parseDate(json['started_at']),
       endedAt: _parseDate(json['ended_at']),
-      maxDurationSeconds: (json['max_duration_seconds'] as num?)?.toInt(),
+      maxDurationSeconds: _parseIntValue(json['max_duration_seconds']),
       error: json['error'] as String?,
       files: (json['files'] as List<dynamic>? ?? const [])
           .whereType<Map>()
-          .map((item) => RecordingFile.fromJson(Map<String, dynamic>.from(item)))
+          .map(
+            (item) => RecordingFile.fromJson(Map<String, dynamic>.from(item)),
+          )
           .toList(),
     );
   }
@@ -127,6 +129,22 @@ class RecordingState {
       RecordingState(roomName: '', rawStatus: rawStatus).isPending;
 }
 
+int? _parseIntValue(Object? value) {
+  final number = _parseNumber(value);
+  return number?.toInt();
+}
+
+double? _parseDoubleValue(Object? value) {
+  final number = _parseNumber(value);
+  return number?.toDouble();
+}
+
+num? _parseNumber(Object? value) {
+  if (value is num) return value;
+  if (value is String) return num.tryParse(value.trim());
+  return null;
+}
+
 class RecordingFile {
   const RecordingFile({
     required this.filename,
@@ -144,8 +162,8 @@ class RecordingFile {
     return RecordingFile(
       filename: (json['filename'] as String?) ?? '',
       url: (json['url'] as String?) ?? (json['minio_url'] as String?),
-      sizeBytes: (json['size'] as num?)?.toInt() ?? 0,
-      durationSeconds: (json['duration'] as num?)?.toDouble() ?? 0,
+      sizeBytes: _parseIntValue(json['size']) ?? 0,
+      durationSeconds: _parseDoubleValue(json['duration']) ?? 0,
     );
   }
 }

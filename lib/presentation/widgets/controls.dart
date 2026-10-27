@@ -1464,52 +1464,12 @@ class _GlassesIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size(size, size),
-      painter: _GlassesPainter(color: color),
+    return Image.asset(
+      'images/glasses-svgrepo.png',
+      width: size,
+      height: size,
+      color: color,
+      colorBlendMode: BlendMode.srcIn,
     );
   }
-}
-
-class _GlassesPainter extends CustomPainter {
-  const _GlassesPainter({required this.color});
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.08
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    final radius = size.width * 0.23;
-    final lensY = size.height * 0.54;
-    final left = Offset(size.width * 0.28, lensY);
-    final right = Offset(size.width * 0.72, lensY);
-
-    canvas.drawCircle(left, radius, paint);
-    canvas.drawCircle(right, radius, paint);
-    canvas.drawLine(
-      Offset(left.dx + radius, lensY),
-      Offset(right.dx - radius, lensY),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(left.dx - radius, lensY),
-      Offset(size.width * 0.06, lensY - size.height * 0.06),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(right.dx + radius, lensY),
-      Offset(size.width * 0.94, lensY - size.height * 0.06),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _GlassesPainter oldDelegate) =>
-      color != oldDelegate.color;
 }
