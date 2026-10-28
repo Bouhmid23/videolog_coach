@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import '../../data/ball_marker.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
 import '../../viewmodels/pose_detection_viewmodel.dart';
@@ -27,12 +28,16 @@ class ParticipantTrack {
     this.type = ParticipantTrackType.kUserMedia,
     this.telemetry,
     this.poseListenable,
+    this.markers,
     this.showPosture = false,
   });
   Participant participant;
   final ParticipantTrackType type;
   RemoteTelemetry? telemetry;
   ValueListenable<PoseFrame?>? poseListenable;
+
+  /// Ballons du coach. Renseigné uniquement sur la vidéo locale du sportif.
+  ValueListenable<List<BallMarker>>? markers;
   bool showPosture;
 }
 
