@@ -49,6 +49,9 @@ class PostureCodec {
 
   static final int packetSize = headerSize + sent.length * pointSize; // 275
   static const int gravitySize = 6;
+
+  /// Au-delà de cette valeur (en x ou y), les coordonnées d'une pose sont lues en pixels.
+  static const double pixelThreshold = 10;
   static const double gravityScale = 30000;
 
   static const Map<String, int> _labelToCode = {
@@ -112,10 +115,14 @@ class PostureCodec {
     bd.setUint16(9, _clampU16(frameSize.height));
 
     // Espace des coordonnées décidé UNE fois par pose (et non par coordonnée) :
-    // normalisé, ou pixels. Une pose en pixels a toujours au moins une
-    // coordonnée > 2.
+    // normalisé, ou pixels. Le plugin renvoie des coordonnées normalisées, mais
+    // les points hors cadre (jambes d'un sportif assis près du téléphone)
+    // dépassent facilement 2 (chevilles à y ≈ 2,4) : le seuil ne doit donc pas
+    // être trop bas, sinon toute la pose est divisée par la taille de l'image
+    // et s'écrase au coin (0, 0). Une pose en pixels, elle, dépasse toujours
+    // [pixelThreshold] pour au moins un point visible.
     final normalized = landmarks.every(
-      (l) => l.x.abs() <= 2 && l.y.abs() <= 2,
+      (l) => l.x.abs() <= pixelThreshold && l.y.abs() <= pixelThreshold,
     );
     final fw = frameSize.width > 0 ? frameSize.width : 1.0;
     final fh = frameSize.height > 0 ? frameSize.height : 1.0;
