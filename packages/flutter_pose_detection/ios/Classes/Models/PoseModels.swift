@@ -162,6 +162,25 @@ struct PoseLandmark {
     }
 }
 
+/// MediaPipe world landmark : mètres, centré sur le bassin (même sens que Android).
+struct WorldLandmark {
+    let typeIndex: Int
+    let x: Double
+    let y: Double
+    let z: Double
+    let visibility: Double
+
+    func toDictionary() -> [String: Any] {
+        return [
+            "type": typeIndex,
+            "x": x,
+            "y": y,
+            "z": z,
+            "visibility": visibility
+        ]
+    }
+}
+
 /// Bounding box for detected pose.
 struct BoundingBox {
     let left: Double
@@ -184,11 +203,13 @@ struct Pose {
     let landmarks: [PoseLandmark]
     let score: Double
     let boundingBox: BoundingBox?
+    var worldLandmarks: [WorldLandmark] = []
 
     func toDictionary() -> [String: Any] {
         var dict: [String: Any] = [
             "landmarks": landmarks.map { $0.toDictionary() },
-            "score": score
+            "score": score,
+            "worldLandmarks": worldLandmarks.map { $0.toDictionary() }
         ]
         if let box = boundingBox {
             dict["boundingBox"] = box.toDictionary()

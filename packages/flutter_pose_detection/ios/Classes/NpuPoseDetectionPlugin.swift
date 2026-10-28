@@ -64,6 +64,8 @@ public class NpuPoseDetectionPlugin: NSObject, FlutterPlugin {
             handleInitialize(call, result: result)
         case "detectPose":
             handleDetectPose(call, result: result)
+        case "detectPoseVideo":
+            handleDetectPoseVideo(call, result: result)
         case "detectPoseFromFile":
             handleDetectPoseFromFile(call, result: result)
         case "processFrame":
@@ -143,6 +145,46 @@ public class NpuPoseDetectionPlugin: NSObject, FlutterPlugin {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let poseResult = try detector.detectPose(imageData: imageData)
+                DispatchQueue.main.async {
+                    result([
+                        "success": true,
+                        "result": poseResult.toDictionary()
+                    ])
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    result(self.errorResponse(
+                        code: "inferenceFailed",
+                        message: "Pose detection failed",
+                        platformMessage: error.localizedDescription
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Detect Pose Video
+
+    /// Image + horodatage de capture : suivi de la personne entre les images
+    /// (mode vidéo de PoseLandmarker), comme sur Android. L'image arrive en
+    /// octets bruts (Uint8List), pas en base64.
+    private func handleDetectPoseVideo(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let detector = mediaPipeDetector else {
+            result(errorResponse(code: "notInitialized", message: "Detector not initialized"))
+            return
+        }
+
+        guard let args = call.arguments as? [String: Any],
+              let typed = args["imageData"] as? FlutterStandardTypedData,
+              let timestampMs = (args["timestampMs"] as? NSNumber)?.intValue else {
+            result(errorResponse(code: "invalidImageFormat", message: "Invalid image data"))
+            return
+        }
+        let imageData = typed.data
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let poseResult = try detector.detectPoseVideo(imageData: imageData, timestampMs: timestampMs)
                 DispatchQueue.main.async {
                     result([
                         "success": true,
