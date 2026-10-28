@@ -203,11 +203,12 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     return facingMode == 'user' || facingMode == 'front';
   }
 
-  /// Fit de la vidéo et des overlays. `contain` est obligatoire : en `cover`,
-  /// le téléphone rogne ~20 % de la largeur que le coach voit en entier et
-  /// les ballons posés près des bords sortent de l'écran.
+  /// Fit de la vidéo et des overlays. La vidéo garde `contain` pour ne rien
+  /// rogner côté coach ; les overlays (squelette, ballons) utilisent `cover`,
+  /// comme avant l'alignement : c'est ce rendu qui correspond à l'image
+  /// effectivement affichée sur l'appareil.
   static const VideoViewFit _videoFit = VideoViewFit.contain;
-  static const BoxFit _overlayFit = BoxFit.contain;
+  static const BoxFit _overlayFit = BoxFit.cover;
 
   /// L'écran est-il en portrait ? Les dimensions publiées/capturées sont
   /// parfois annoncées en paysage alors que l'image est affichée en portrait.
@@ -309,6 +310,49 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
 
   EventsListener<ParticipantEvent>? _listener;
 
+  /// Horodatage du dernier log de géométrie (debug, throttlé).
+  DateTime _lastGeometryLog = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Log de diagnostic : dimensions réelles du canvas, de la vidéo et de la
+  /// pose. Permet de vérifier que le squelette et l'image ont le même ratio.
+  ///
+  /// La taille n'est lisible qu'après la mise en page : on passe donc par un
+  /// callback de fin de frame (`context.size` pendant `build` lèverait une
+  /// assertion au premier rendu).
+  void _logGeometry(BuildContext context) {
+    if (!kDebugMode) return;
+    final now = DateTime.now();
+    if (now.difference(_lastGeometryLog) < const Duration(seconds: 2)) return;
+    _lastGeometryLog = now;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final canvas = context.size;
+      String settings;
+      try {
+        final data = activeVideoTrack?.mediaStreamTrack.getSettings();
+        settings = '${data?['width']}x${data?['height']}';
+      } catch (_) {
+        settings = 'indisponible';
+      }
+      String format(Size? size) => size == null
+          ? 'null'
+          : '${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}';
+
+      debugPrint(
+        '🖼️ video-geom canvas='
+        '${canvas == null ? 'null' : '${canvas.width.toStringAsFixed(1)}x'
+            '${canvas.height.toStringAsFixed(1)}'} '
+        'pose=${format(_rawPoseFrameSize)} '
+        'publication=${format(_rawPublicationFrameSize)} '
+        'capture=${format(_rawCaptureFrameSize)} '
+        'videoFrame=${format(_videoFrameSize)} settings=$settings '
+        'overlayFit=$_overlayFit mirror=$_mirrorVideo',
+      );
+    });
+  }
+
   // Animation pour l'apparition
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
@@ -405,6 +449,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   }
 
   Widget _buildVideoStack() {
+    _logGeometry(context);
     return Stack(
       children: [
         // 1. FLUX VIDEO PRINCIPAL
