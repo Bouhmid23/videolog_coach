@@ -12,8 +12,9 @@ class GlassesMessage {
   /// Taille maximale du message reçu (octets).
   static const int maxMessageBytes = 1024;
 
-  /// Longueur maximale du texte : police 2, environ 17 caractères par ligne et 8 lignes.
-  static const int maxChars = 100;
+  /// Longueur maximale du texte : police 2 (35 px de haut), 14 caractères par ligne et 6 lignes au plus,
+  /// avec de la marge pour le retour à la ligne par mots.
+  static const int maxChars = 70;
 
   static const int defaultTtlMs = 5000;
   static const int minTtlMs = 1000;
@@ -106,8 +107,8 @@ String toGlassesAscii(String text) {
 /// au-delà, la dernière est tronquée par `..`.
 List<String> wrapGlassesText(
   String ascii, {
-  int maxChars = 17,
-  int maxLines = 8,
+  int maxChars = GlassesLayout.charsPerLine,
+  int maxLines = GlassesLayout.maxLines,
 }) {
   final lines = <String>[];
   var current = '';
@@ -140,4 +141,34 @@ List<String> wrapGlassesText(
   kept[maxLines - 1] =
       '${last.length > maxChars - 2 ? last.substring(0, maxChars - 2) : last}..';
   return kept;
+}
+
+/// Géométrie du message sur l'afficheur ActiveLook (304 × 256 pixels).
+///
+/// Police 2 : 35 px de haut (documentation ActiveLook : polices 0 à 3 = 24, 24, 35 et 49 px,
+/// Computer Modern Sans Serif, proportionnelles). Avec la rotation 4 utilisée par l'appli, le
+/// texte est tourné de 180° autour du point d'ancrage (x, y) : il s'étend vers les x décroissants
+/// et vers les y décroissants. L'ancrage est donc le coin bas-droit de la boîte de texte dans le
+/// repère de l'afficheur ; vu de l'utilisateur, l'écran est retourné (haut de l'écran = y grand).
+class GlassesLayout {
+  static const int displayW = 304;
+  static const int displayH = 256;
+  static const int fontId = 2;
+  static const int fontHeight = 35;
+  static const int lineGap = 4;
+  static const int margin = 8;
+
+  /// Ancrage horizontal : marge de 8 px côté utilisateur (le texte s'étend ensuite vers x décroissant).
+  static const int anchorX = displayW - margin;
+
+  /// Largeur utile : 288 px, soit environ 14 caractères de police 2 (moyenne ≈ 17 px, majuscules ≈ 20 px).
+  static const int charsPerLine = 14;
+
+  static const int linePitch = fontHeight + lineGap;
+
+  /// Lignes qui tiennent entre les marges : (256 - 2 × 8) / 39 = 6.
+  static const int maxLines = (displayH - 2 * margin) ~/ linePitch;
+
+  /// y d'ancrage de la ligne [index] (0 = première ligne, en haut pour l'utilisateur).
+  static int anchorY(int index) => displayH - margin - index * linePitch;
 }

@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 
+import '../data/glasses_message.dart';
+
 // ─── UUIDs ────────────────────────────────────────────────────────────────────
 const String _kServiceUuid = "0783B03E-8535-B5A0-7140-A304D2495CB7";
 const String _kTxUuid = "0783B03E-8535-B5A0-7140-A304D2495CB8";
@@ -707,7 +709,7 @@ class BleTelemetryService {
   /// Anti-rafale : un nouveau message trop proche du précédent (< 500 ms) est ignoré.
   static const Duration _minMessageGap = Duration(milliseconds: 500);
 
-  /// Affiche [lines] (déjà en ASCII, au plus 8 lignes de 17 caractères). Retourne `false` si les
+  /// Affiche [lines] (déjà en ASCII, au plus 6 lignes de 14 caractères, police 2 de 35 px). Retourne `false` si les
   /// lunettes ne sont pas prêtes.
   Future<bool> showMessage(List<String> lines, Duration duration) async {
     final deviceId = connectedDeviceId;
@@ -726,16 +728,15 @@ class BleTelemetryService {
     _messageTimer?.cancel();
     _messageTimer = Timer(duration, () => _messageActive = false);
 
-    final lineHeight = (_kFontCharH[_kFontBig] ?? 24) + 4;
     await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionHold]));
     await enqueueCommand(deviceId, _buildFrame(_cmdClear, []));
     for (var i = 0; i < lines.length; i++) {
       await enqueueCommand(
         deviceId,
         _buildTextCommand(
-          x: 250,
-          y: 8 + i * lineHeight,
-          fontId: _kFontBig,
+          x: GlassesLayout.anchorX,
+          y: GlassesLayout.anchorY(i),
+          fontId: GlassesLayout.fontId,
           color: _kColorWhite,
           text: lines[i],
         ),
