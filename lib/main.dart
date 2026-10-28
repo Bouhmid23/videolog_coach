@@ -14,6 +14,12 @@ import 'firebase_options.dart';
 import 'router.dart';
 
 void main() async {
+  // `setLoggingLevel()` du SDK LiveKit règle le niveau d'un logger *non-root*
+  // ('livekit'). `package:logging` lève une UnsupportedError dans ce cas tant
+  // que le mode hiérarchique n'est pas activé. Les enregistrements continuent
+  // de remonter jusqu'au root : l'écoute ci-dessous reste donc complète.
+  hierarchicalLoggingEnabled = true;
+
   final format = DateFormat('HH:mm:ss');
   Logger.root.level = Level.FINEST;
   Logger.root.onRecord.listen((record) {
