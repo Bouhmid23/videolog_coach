@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 
+import '../../data/posture_codec.dart';
 import '../../theme.dart';
 import '../../viewmodels/pose_detection_viewmodel.dart';
 import 'pose_animation.dart';
@@ -28,6 +29,7 @@ class PoseOverlay extends StatefulWidget {
 class _PoseOverlayState extends State<PoseOverlay>
     with SingleTickerProviderStateMixin {
   late final PoseAnimationController _animation;
+  DateTime? _lastCapturedAt;
 
   @override
   void initState() {
@@ -50,30 +52,44 @@ class _PoseOverlayState extends State<PoseOverlay>
 
   void _updateFrame(PoseFrame? frame, {bool initial = false}) {
     if (frame == null) {
+      _lastCapturedAt = null;
       _animation.reset();
       return;
     }
 
+    // Décidé une fois par pose : un point légèrement hors du cadre (x ou y hors de [0, 1])
+    // reste normalisé. Sinon il serait pris pour des pixels et tomberait dans le coin (0, 0).
+    final pixels = PostureCodec.isPixelSpace(frame.pose.landmarks);
     final points = <LandmarkType, Offset>{};
     final confidence = <LandmarkType, double>{};
     for (final landmark in frame.pose.landmarks) {
       if (landmark.visibility < 0.12) continue;
 
-      final normalized = landmark.x.abs() <= 1.01 && landmark.y.abs() <= 1.01;
       points[landmark.type] = Offset(
-        normalized ? landmark.x * frame.frameSize.width : landmark.x,
-        normalized ? landmark.y * frame.frameSize.height : landmark.y,
+        pixels ? landmark.x : landmark.x * frame.frameSize.width,
+        pixels ? landmark.y : landmark.y * frame.frameSize.height,
       );
       confidence[landmark.type] = landmark.visibility
           .clamp(0.0, 1.0)
           .toDouble();
     }
 
+    // Durée de la transition = intervalle réel entre deux poses : le squelette atteint sa
+    // cible quand la pose suivante arrive (à 19 poses/s, 85 ms fixes le faisaient traîner).
+    final last = _lastCapturedAt;
+    _lastCapturedAt = frame.capturedAt;
+    final interval = last == null
+        ? const Duration(milliseconds: 85)
+        : frame.capturedAt.difference(last);
+    final duration = Duration(
+      milliseconds: interval.inMilliseconds.clamp(30, 120).toInt(),
+    );
+
     final pose = InterpolatedPose(points: points, confidence: confidence);
     if (initial || _animation.currentPose == null) {
       _animation.jumpToPose(pose);
     } else {
-      _animation.updatePose(pose);
+      _animation.updatePose(pose, duration: duration);
     }
   }
 
@@ -116,6 +132,14 @@ class _PoseSkeletonPainter extends CustomPainter {
   final BoxFit fit;
   final bool mirrorX;
 
+  static const List<SkeletonBone> _allBones = [
+    ...HumanSkeletonBones.standardBones,
+    ...HumanSkeletonBones.detailBones,
+  ];
+  static final Set<LandmarkType> _mainJoints = {
+    for (final bone in HumanSkeletonBones.standardBones) ...[bone.from, bone.to],
+  };
+
   const _PoseSkeletonPainter({
     required this.pose,
     required this.frameSize,
@@ -157,7 +181,7 @@ class _PoseSkeletonPainter extends CustomPainter {
       confidence[entry.key] = visibility;
     }
 
-    for (final bone in HumanSkeletonBones.standardBones) {
+    for (final bone in _allBones) {
       final from = points[bone.from];
       final to = points[bone.to];
       if (from == null || to == null) continue;
@@ -216,23 +240,19 @@ class _PoseSkeletonPainter extends CustomPainter {
       );
     }
 
-    // De minuscules repères aux articulations principales remplacent les
-    // anciens anneaux lumineux, qui surchargeaient l'image de la caméra.
-    final joints = <LandmarkType>{
-      for (final bone in HumanSkeletonBones.standardBones) ...[
-        bone.from,
-        bone.to,
-      ],
-    };
+    // Un repère par point visible : les 33 (corps, visage, mains, pieds). Les points de
+    // détail sont dessinés plus petits que les articulations principales.
+    final joints = points.keys.toList();
     for (final type in joints) {
       final point = points[type];
       final strength = confidence[type] ?? 0.0;
       if (point == null || strength < 0.28) continue;
       final color = _colorForLandmark(type);
+      final scale = _mainJoints.contains(type) ? 1.0 : 0.6;
       final visibility = (0.72 + strength * 0.28).clamp(0.0, 1.0).toDouble();
       canvas.drawCircle(
         point,
-        6.0,
+        6.0 * scale,
         Paint()
           ..color = color.withValues(alpha: 0.38 * visibility)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0)
@@ -240,14 +260,14 @@ class _PoseSkeletonPainter extends CustomPainter {
       );
       canvas.drawCircle(
         point,
-        4.0,
+        4.0 * scale,
         Paint()
           ..color = const Color(0xFF07111F).withValues(alpha: 0.82)
           ..isAntiAlias = true,
       );
       canvas.drawCircle(
         point,
-        3.25,
+        3.25 * scale,
         Paint()
           ..color = color.withValues(alpha: 0.96 * visibility)
           ..style = PaintingStyle.stroke
@@ -256,7 +276,7 @@ class _PoseSkeletonPainter extends CustomPainter {
       );
       canvas.drawCircle(
         point,
-        1.35,
+        1.35 * scale,
         Paint()
           ..color = Colors.white.withValues(alpha: 0.94 * visibility)
           ..isAntiAlias = true,

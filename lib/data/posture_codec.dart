@@ -52,6 +52,12 @@ class PostureCodec {
 
   /// Au-delà de cette valeur (en x ou y), les coordonnées d'une pose sont lues en pixels.
   static const double pixelThreshold = 10;
+
+  /// Vrai si les coordonnées de la pose sont en pixels (au moins un x ou y au-delà de
+  /// [pixelThreshold]). Décision prise une fois par pose, jamais point par point :
+  /// un point hors cadre (x ou y légèrement hors de [0, 1]) reste normalisé.
+  static bool isPixelSpace(Iterable<PoseLandmark> landmarks) =>
+      landmarks.any((l) => l.x.abs() > pixelThreshold || l.y.abs() > pixelThreshold);
   static const double gravityScale = 30000;
 
   static const Map<String, int> _labelToCode = {
@@ -121,9 +127,7 @@ class PostureCodec {
     // être trop bas, sinon toute la pose est divisée par la taille de l'image
     // et s'écrase au coin (0, 0). Une pose en pixels, elle, dépasse toujours
     // [pixelThreshold] pour au moins un point visible.
-    final normalized = landmarks.every(
-      (l) => l.x.abs() <= pixelThreshold && l.y.abs() <= pixelThreshold,
-    );
+    final normalized = !isPixelSpace(landmarks);
     final fw = frameSize.width > 0 ? frameSize.width : 1.0;
     final fh = frameSize.height > 0 ? frameSize.height : 1.0;
 

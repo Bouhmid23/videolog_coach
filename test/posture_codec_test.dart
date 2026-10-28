@@ -55,4 +55,10 @@ void main() {
     expect(nose.x, closeTo(0.5, 0.001));
     expect(nose.y, closeTo(0.5, 0.001));
   });
+
+  test('isPixelSpace : un point hors cadre reste normalisé, des pixels sont reconnus', () {
+    // Coude à x = 1,07, hanches à y = 1,36, chevilles à y = 2,5 : normalisé (régression du dessin).
+    expect(PostureCodec.isPixelSpace(_pose((i) => i == 13 ? 1.07 : 0.4, (i) => i >= 23 ? 2.5 : 0.5)), isFalse);
+    expect(PostureCodec.isPixelSpace(_pose((i) => 120.0, (i) => 160.0)), isTrue);
+  });
 }

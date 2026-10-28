@@ -213,6 +213,7 @@ class ConfidenceColorPalette {
 /// Contrôleur d'animation pour les poses avec easing personnalisé
 class PoseAnimationController extends ChangeNotifier {
   InterpolatedPose? _currentPose;
+  InterpolatedPose? _fromPose;
   InterpolatedPose? _targetPose;
   late AnimationController _controller;
   late Animation<double> _animation;
@@ -228,17 +229,16 @@ class PoseAnimationController extends ChangeNotifier {
       duration: transitionDuration,
       vsync: vsync,
     );
-    _animation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutCubic,
-    );
+    // Linéaire : une courbe adoucie ferait freiner le squelette à chaque pose.
+    _animation = CurvedAnimation(parent: _controller, curve: Curves.linear);
     _controller.addListener(_onAnimationUpdate);
   }
 
   void _onAnimationUpdate() {
-    if (_currentPose != null && _targetPose != null) {
+    if (_fromPose != null && _targetPose != null) {
+      // Toujours entre la pose de départ figée et la cible : pas d'interpolation cumulée.
       _currentPose = InterpolatedPose.lerp(
-        _currentPose!,
+        _fromPose!,
         _targetPose!,
         _animation.value,
       );
@@ -246,14 +246,18 @@ class PoseAnimationController extends ChangeNotifier {
     }
   }
 
-  /// Met à jour la pose cible avec une animation fluide
-  void updatePose(InterpolatedPose newPose) {
+  /// Met à jour la pose cible. [duration] : durée pour l'atteindre ; à passer égale à
+  /// l'intervalle entre deux poses, pour arriver à la cible quand la pose suivante arrive.
+  void updatePose(InterpolatedPose newPose, {Duration? duration}) {
     if (_currentPose == null) {
       _currentPose = newPose;
+      _fromPose = newPose;
       _targetPose = newPose;
       notifyListeners();
     } else {
+      _fromPose = _currentPose;
       _targetPose = newPose;
+      if (duration != null) _controller.duration = duration;
       _controller.forward(from: 0.0);
     }
   }
@@ -261,6 +265,7 @@ class PoseAnimationController extends ChangeNotifier {
   /// Met à jour immédiatement la pose (sans animation)
   void jumpToPose(InterpolatedPose newPose) {
     _currentPose = newPose;
+    _fromPose = newPose;
     _targetPose = newPose;
     _controller.reset();
     notifyListeners();
@@ -269,6 +274,7 @@ class PoseAnimationController extends ChangeNotifier {
   /// Réinitialise la pose
   void reset() {
     _currentPose = null;
+    _fromPose = null;
     _targetPose = null;
     _controller.reset();
     notifyListeners();
@@ -418,6 +424,37 @@ class HumanSkeletonBones {
       color: LKColors.success,
       widthMultiplier: 1.0,
     ),
+  ];
+
+  /// Les 21 points que [standardBones] ne relie pas : visage (0 à 10), mains (17 à 22),
+  /// pieds (29 à 32). Tracés plus fins, avec les mêmes seuils de visibilité.
+  static const List<SkeletonBone> detailBones = [
+    // Visage
+    SkeletonBone(from: LandmarkType.nose, to: LandmarkType.leftEyeInner, name: 'Face nose-leftEyeInner', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftEyeInner, to: LandmarkType.leftEye, name: 'Face leftEyeInner-leftEye', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftEye, to: LandmarkType.leftEyeOuter, name: 'Face leftEye-leftEyeOuter', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftEyeOuter, to: LandmarkType.leftEar, name: 'Face leftEyeOuter-leftEar', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.nose, to: LandmarkType.rightEyeInner, name: 'Face nose-rightEyeInner', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightEyeInner, to: LandmarkType.rightEye, name: 'Face rightEyeInner-rightEye', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightEye, to: LandmarkType.rightEyeOuter, name: 'Face rightEye-rightEyeOuter', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightEyeOuter, to: LandmarkType.rightEar, name: 'Face rightEyeOuter-rightEar', color: LKColors.primary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.mouthLeft, to: LandmarkType.mouthRight, name: 'Face mouthLeft-mouthRight', color: LKColors.primary, widthMultiplier: 0.5),
+    // Mains
+    SkeletonBone(from: LandmarkType.leftWrist, to: LandmarkType.leftPinky, name: 'Hand leftWrist-leftPinky', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftWrist, to: LandmarkType.leftIndex, name: 'Hand leftWrist-leftIndex', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftWrist, to: LandmarkType.leftThumb, name: 'Hand leftWrist-leftThumb', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftPinky, to: LandmarkType.leftIndex, name: 'Hand leftPinky-leftIndex', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightWrist, to: LandmarkType.rightPinky, name: 'Hand rightWrist-rightPinky', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightWrist, to: LandmarkType.rightIndex, name: 'Hand rightWrist-rightIndex', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightWrist, to: LandmarkType.rightThumb, name: 'Hand rightWrist-rightThumb', color: LKColors.secondary, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightPinky, to: LandmarkType.rightIndex, name: 'Hand rightPinky-rightIndex', color: LKColors.secondary, widthMultiplier: 0.5),
+    // Pieds
+    SkeletonBone(from: LandmarkType.leftAnkle, to: LandmarkType.leftHeel, name: 'Foot leftAnkle-leftHeel', color: LKColors.success, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftHeel, to: LandmarkType.leftFootIndex, name: 'Foot leftHeel-leftFootIndex', color: LKColors.success, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.leftAnkle, to: LandmarkType.leftFootIndex, name: 'Foot leftAnkle-leftFootIndex', color: LKColors.success, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightAnkle, to: LandmarkType.rightHeel, name: 'Foot rightAnkle-rightHeel', color: LKColors.success, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightHeel, to: LandmarkType.rightFootIndex, name: 'Foot rightHeel-rightFootIndex', color: LKColors.success, widthMultiplier: 0.5),
+    SkeletonBone(from: LandmarkType.rightAnkle, to: LandmarkType.rightFootIndex, name: 'Foot rightAnkle-rightFootIndex', color: LKColors.success, widthMultiplier: 0.5),
   ];
 
   /// Retne les os avec des couleurs basées sur la confiance
