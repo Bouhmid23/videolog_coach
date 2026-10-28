@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint, VoidCallback;
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, ValueListenable, debugPrint, VoidCallback;
 import 'package:geolocator/geolocator.dart';
 import 'package:livekit_client/livekit_client.dart';
 
@@ -11,6 +12,7 @@ import '../core/auth_service.dart';
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
+import '../data/ball_marker.dart';
 import '../data/remote_posture.dart';
 import '../data/remote_telemetry.dart';
 import '../data/telemetry_codec.dart';
@@ -18,6 +20,7 @@ import '../data/user_role.dart';
 import '../presentation/widgets/participant_info.dart';
 import '../utils.dart';
 import 'controls_viewmodel.dart';
+import 'marker_controller.dart';
 import 'pose_detection_viewmodel.dart';
 
 class RoomViewModel extends ChangeNotifier {
@@ -26,6 +29,9 @@ class RoomViewModel extends ChangeNotifier {
   final BleSensorService sensorService = BleSensorService();
   final PoseDetectionViewModel poseViewModel = PoseDetectionViewModel();
   late final ControlsViewModel controlsViewModel;
+
+  /// Ballons envoyés par le coach (topic LiveKit `marker`).
+  final MarkerController markers = MarkerController();
 
   // ── Callbacks ──
   VoidCallback? _onDisconnected;
@@ -84,6 +90,7 @@ class RoomViewModel extends ChangeNotifier {
   double get totalDistanceMiles => _totalDistanceMiles;
   bool get showPosePip => _showPosePip;
   bool get showPosture => _showPosture;
+  ValueListenable<List<BallMarker>> get markerListenable => markers.listenable;
   double get poseSmoothingAlpha => poseViewModel.smoothingAlpha;
   String? get selectedParticipantIdentity => _selectedParticipantIdentity;
   bool get showSideSheet => _showSideSheet;
@@ -248,6 +255,7 @@ class RoomViewModel extends ChangeNotifier {
       ..on<RoomDisconnectedEvent>((event) {
         debugPrint('🔌 Room disconnected: reason=${event.reason}');
         _stopTelemetry();
+        markers.clear();
         poseViewModel.stop();
         _onDisconnected?.call();
       })
@@ -266,6 +274,13 @@ class RoomViewModel extends ChangeNotifier {
       ..on<DataReceivedEvent>((event) {
         final participant = event.participant;
         if (participant == null) return;
+
+        // Ballon du coach : JSON sur le topic `marker`, traité avant le
+        // décodage JSON générique.
+        if (event.topic == 'marker') {
+          _handleMarker(event.data);
+          return;
+        }
 
         // Chemin rapide temps réel : paquet binaire compact sur le topic posture.
         /*if (event.topic == 'posture') {
@@ -293,6 +308,14 @@ class RoomViewModel extends ChangeNotifier {
           debugPrint('Failed to decode data: $err');
         }
       });
+  }
+
+  /// Le sportif dessine les ballons du coach sur sa propre vidéo.
+  void _handleMarker(Object? data) {
+    if (!_role.isTrainee) return;
+    final marker = BallMarker.tryParse(data, receivedAt: DateTime.now());
+    if (marker == null) return; // Message invalide : ignoré sans erreur.
+    markers.add(marker);
   }
 
   void _onRoomDidUpdate() => _sortParticipants();
@@ -610,6 +633,7 @@ class RoomViewModel extends ChangeNotifier {
             //posture: poseViewModel.currentPosture,
             telemetry: localTelemetry,
             poseListenable: poseViewModel.frameNotifier,
+            markers: _role.isTrainee ? markerListenable : null,
             showPosture: _showPosture,
           ));
         }
@@ -637,6 +661,7 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(sensorService.dispose());
     poseViewModel.dispose();
     controlsViewModel.dispose();
+    markers.dispose();
     _room?.removeListener(_onRoomDidUpdate);
     unawaited(_listener?.dispose());
     unawaited(_room?.dispose());

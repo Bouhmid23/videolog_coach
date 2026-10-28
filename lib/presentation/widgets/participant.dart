@@ -8,12 +8,14 @@ import 'package:videolog_coach/presentation/widgets/participant_info.dart';
 import 'dart:async';
 
 import '../../core/recording_controller.dart';
+import '../../data/ball_marker.dart';
 import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
 import '../../utils.dart';
 import '../../viewmodels/pose_detection_viewmodel.dart';
 import '../utils/ui_utils.dart';
+import 'marker_overlay.dart';
 import 'no_video.dart';
 import 'pose_overlay.dart';
 import 'recording_controls.dart';
@@ -40,6 +42,7 @@ abstract class ParticipantWidget extends StatefulWidget {
         //avatarOnly: participantTrack.avatarOnly,
         //showPosePip: participantTrack.showPosePip,
         poseListenable: participantTrack.poseListenable,
+        markers: participantTrack.markers,
         showPosture: participantTrack.showPosture,
         poseAside: poseAside,
         showDataHud: showDataHud,
@@ -58,6 +61,7 @@ abstract class ParticipantWidget extends StatefulWidget {
         //avatarOnly: participantTrack.avatarOnly,
         //showPosePip: participantTrack.showPosePip,
         poseListenable: participantTrack.poseListenable,
+        markers: participantTrack.markers,
         showPosture: participantTrack.showPosture,
         //onTogglePosture: participantTrack.onTogglePosture,
         poseAside: poseAside,
@@ -74,6 +78,9 @@ abstract class ParticipantWidget extends StatefulWidget {
   final RemotePosture? posture;
   final RemoteTelemetry? telemetry;
   final ValueListenable<PoseFrame?>? poseListenable;
+
+  /// Ballons du coach (topic LiveKit `marker`).
+  final ValueListenable<List<BallMarker>>? markers;
   final Pose? pose;
   final Size? poseFrameSize;
   final bool avatarOnly;
@@ -89,6 +96,7 @@ abstract class ParticipantWidget extends StatefulWidget {
   const ParticipantWidget({
     this.posture,
     this.telemetry,
+    this.markers,
     this.poseListenable,
     this.pose,
     this.poseFrameSize,
@@ -121,6 +129,7 @@ class LocalParticipantWidget extends ParticipantWidget {
     super.posture,
     super.telemetry,
     super.poseListenable,
+    super.markers,
     super.pose,
     super.poseFrameSize,
     super.avatarOnly,
@@ -153,6 +162,7 @@ class RemoteParticipantWidget extends ParticipantWidget {
     super.posture,
     super.telemetry,
     super.poseListenable,
+    super.markers,
     super.pose,
     super.poseFrameSize,
     super.avatarOnly,
@@ -191,6 +201,41 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     }
     final facingMode = track.mediaStreamTrack.getSettings()['facingMode'];
     return facingMode == 'user' || facingMode == 'front';
+  }
+
+  /// Résolution de l'image caméra, nécessaire pour reprojeter les positions
+  /// normalisées (ballons du coach) exactement comme le squelette.
+  Size? get _videoFrameSize {
+    final dimensions = videoPublication?.dimensions;
+    if (dimensions != null &&
+        dimensions.width > 0 &&
+        dimensions.height > 0) {
+      return Size(dimensions.width.toDouble(), dimensions.height.toDouble());
+    }
+
+    final track = activeVideoTrack;
+    if (track is LocalVideoTrack) {
+      final requested = track.currentOptions.params.dimensions;
+      if (requested.width > 0 && requested.height > 0) {
+        return Size(requested.width.toDouble(), requested.height.toDouble());
+      }
+    }
+
+    final poseSize = widget.poseListenable?.value?.frameSize;
+    if (poseSize != null && !poseSize.isEmpty) return poseSize;
+
+    if (track == null) return null;
+    try {
+      final settings = track.mediaStreamTrack.getSettings();
+      final width = settings['width'];
+      final height = settings['height'];
+      if (width is num && height is num && width > 0 && height > 0) {
+        return Size(width.toDouble(), height.toDouble());
+      }
+    } catch (_) {
+      // Piste déjà libérée : on retombera sur le prochain rebuild.
+    }
+    return null;
   }
 
   EventsListener<ParticipantEvent>? _listener;
@@ -324,6 +369,18 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
               valueListenable: widget.poseListenable!,
               builder: (context, frame, _) =>
                   PoseOverlay(frame: frame, mirrorX: _mirrorVideo),
+            ),
+          ),
+
+        // 3. Ballons du coach : uniquement sur la vidéo locale du sportif.
+        if (widget.participant is LocalParticipant &&
+            !isScreenShare &&
+            widget.markers != null)
+          Positioned.fill(
+            child: MarkerOverlay(
+              markers: widget.markers!,
+              frameSize: _videoFrameSize,
+              mirrorX: _mirrorVideo,
             ),
           ),
 
