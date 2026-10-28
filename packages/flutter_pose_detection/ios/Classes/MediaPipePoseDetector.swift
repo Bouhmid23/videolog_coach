@@ -1,44 +1,39 @@
 import Foundation
 import UIKit
 import CoreMedia
-import TensorFlowLite
+import MediaPipeTasksVision
 
 /**
- * MediaPipe pose detector using TFLite with CoreML delegate for ANE acceleration.
+ * Détecteur de pose iOS basé sur MediaPipe Tasks `PoseLandmarker`.
  *
- * Uses the same 2-stage pipeline as MediaPipe:
- * 1. pose_detector.tflite - Detects person bounding box (224x224 input)
- * 2. pose_landmarks_detector.tflite - Detects 33 landmarks (256x256 input)
+ * Même moteur et même modèle (`pose_landmarker_lite.task`) que sur Android :
+ * détection de la personne puis suivi entre les images (mode vidéo), avec
+ * - les landmarks image normalisés (x, y, z, visibilité) ;
+ * - les worldLandmarks en mètres, centrés sur le bassin (utilisés par le web).
  *
- * Hardware acceleration:
- * - ANE: CoreML delegate (Neural Engine on A12+)
- * - GPU: Metal delegate (fallback)
- * - CPU: XNNPACK (final fallback)
+ * Accélération : GPU en priorité, CPU en repli (comme Android).
  */
 class MediaPipePoseDetector: PoseDetectorProtocol {
 
     // MARK: - Constants
 
     private static let TAG = "MediaPipePoseDetector"
-
-    private static let MODEL_DETECTOR = "pose_detector"
-    private static let MODEL_LANDMARKS = "pose_landmarks_detector"
-
-    private static let DETECTOR_INPUT_SIZE = 224
-    private static let LANDMARKS_INPUT_SIZE = 256
+    private static let MODEL_NAME = "pose_landmarker_lite"
+    private static let MODEL_EXT = "task"
     private static let NUM_LANDMARKS = 33
-    private static let LANDMARK_DIMS = 5  // x, y, z, visibility, presence
 
     // MARK: - Properties
 
-    private var detectorInterpreter: Interpreter?
-    private var landmarksInterpreter: Interpreter?
+    private var poseLandmarker: PoseLandmarker?
     private var config: DetectorConfig
     private var _accelerationMode: AccelerationMode = .unknown
-    private var isReady = false
+
+    /// Les horodatages du mode vidéo doivent être strictement croissants.
+    private var lastTimestampMs: Int = 0
+    private let lock = NSLock()
 
     var accelerationMode: AccelerationMode { _accelerationMode }
-    var isInitialized: Bool { isReady && detectorInterpreter != nil && landmarksInterpreter != nil }
+    var isInitialized: Bool { poseLandmarker != nil }
 
     // MARK: - Initialization
 
@@ -46,386 +41,187 @@ class MediaPipePoseDetector: PoseDetectorProtocol {
         self.config = config
     }
 
-    /**
-     * Initialize MediaPipe models with hardware acceleration.
-     *
-     * Tries CoreML delegate (ANE) first, then Metal (GPU), then CPU.
-     */
+    /// Crée le PoseLandmarker : GPU d'abord, puis CPU.
     func initialize() throws -> AccelerationMode {
-        print("[\(Self.TAG)] Initializing MediaPipe pose detector...")
+        print("[\(Self.TAG)] Initializing MediaPipe PoseLandmarker...")
 
-        guard let detectorPath = getModelPath(Self.MODEL_DETECTOR),
-              let landmarksPath = getModelPath(Self.MODEL_LANDMARKS) else {
-            throw DetectorError.inferenceFailed("MediaPipe models not found")
+        guard let modelPath = getModelPath() else {
+            throw DetectorError.modelLoadFailed("\(Self.MODEL_NAME).\(Self.MODEL_EXT) not found")
         }
 
-        // Try CoreML delegate first (Neural Engine)
         if config.preferredAcceleration != .cpu {
-            if tryInitializeWithCoreML(detectorPath: detectorPath, landmarksPath: landmarksPath) {
-                return _accelerationMode
+            if let mode = try? createLandmarker(modelPath: modelPath, delegate: .GPU) {
+                print("[\(Self.TAG)] ✓ Initialized PoseLandmarker with GPU")
+                return mode
             }
-
-            // Try Metal delegate (GPU)
-            if tryInitializeWithMetal(detectorPath: detectorPath, landmarksPath: landmarksPath) {
-                return _accelerationMode
-            }
+            print("[\(Self.TAG)] ✗ GPU initialization failed, falling back to CPU")
         }
 
-        // Fallback to CPU
-        return try initializeWithCPU(detectorPath: detectorPath, landmarksPath: landmarksPath)
+        let mode = try createLandmarker(modelPath: modelPath, delegate: .CPU)
+        print("[\(Self.TAG)] ✓ Initialized PoseLandmarker with CPU")
+        return mode
     }
 
-    private func tryInitializeWithCoreML(detectorPath: String, landmarksPath: String) -> Bool {
-        do {
-            print("[\(Self.TAG)] Trying MediaPipe with CoreML delegate (ANE)...")
+    private func createLandmarker(modelPath: String, delegate: Delegate) throws -> AccelerationMode {
+        let options = PoseLandmarkerOptions()
+        options.baseOptions.modelAssetPath = modelPath
+        options.baseOptions.delegate = delegate
+        options.runningMode = .video
+        options.numPoses = max(1, min(10, config.maxPoses))
+        options.minPoseDetectionConfidence = config.minConfidence
+        options.minPosePresenceConfidence = config.minConfidence
+        options.minTrackingConfidence = config.minConfidence
 
-            var detectorOptions = Interpreter.Options()
-            detectorOptions.threadCount = 4
-
-            var landmarksOptions = Interpreter.Options()
-            landmarksOptions.threadCount = 4
-
-            guard let coreMLDelegate = CoreMLDelegate() else {
-                print("[\(Self.TAG)] CoreML delegate creation failed")
-                return false
-            }
-
-            detectorInterpreter = try Interpreter(
-                modelPath: detectorPath,
-                options: detectorOptions,
-                delegates: [coreMLDelegate]
-            )
-            try detectorInterpreter?.allocateTensors()
-
-            // Create a new CoreML delegate for landmarks model
-            guard let landmarksCoreMLDelegate = CoreMLDelegate() else {
-                cleanup()
-                return false
-            }
-
-            landmarksInterpreter = try Interpreter(
-                modelPath: landmarksPath,
-                options: landmarksOptions,
-                delegates: [landmarksCoreMLDelegate]
-            )
-            try landmarksInterpreter?.allocateTensors()
-
-            _accelerationMode = .npu
-            isReady = true
-            print("[\(Self.TAG)] ✓ Initialized MediaPipe with CoreML (ANE)")
-            return true
-        } catch {
-            print("[\(Self.TAG)] ✗ CoreML initialization failed: \(error)")
-            cleanup()
-            return false
-        }
-    }
-
-    private func tryInitializeWithMetal(detectorPath: String, landmarksPath: String) -> Bool {
-        do {
-            print("[\(Self.TAG)] Trying MediaPipe with Metal delegate (GPU)...")
-
-            var detectorOptions = Interpreter.Options()
-            detectorOptions.threadCount = 4
-
-            var landmarksOptions = Interpreter.Options()
-            landmarksOptions.threadCount = 4
-
-            let metalDelegate = MetalDelegate()
-
-            detectorInterpreter = try Interpreter(
-                modelPath: detectorPath,
-                options: detectorOptions,
-                delegates: [metalDelegate]
-            )
-            try detectorInterpreter?.allocateTensors()
-
-            let landmarksMetalDelegate = MetalDelegate()
-            landmarksInterpreter = try Interpreter(
-                modelPath: landmarksPath,
-                options: landmarksOptions,
-                delegates: [landmarksMetalDelegate]
-            )
-            try landmarksInterpreter?.allocateTensors()
-
-            _accelerationMode = .gpu
-            isReady = true
-            print("[\(Self.TAG)] ✓ Initialized MediaPipe with Metal (GPU)")
-            return true
-        } catch {
-            print("[\(Self.TAG)] ✗ Metal initialization failed: \(error)")
-            cleanup()
-            return false
-        }
-    }
-
-    private func initializeWithCPU(detectorPath: String, landmarksPath: String) throws -> AccelerationMode {
-        print("[\(Self.TAG)] Fallback to MediaPipe CPU...")
-
-        var options = Interpreter.Options()
-        options.threadCount = 4
-
-        detectorInterpreter = try Interpreter(modelPath: detectorPath, options: options)
-        try detectorInterpreter?.allocateTensors()
-
-        landmarksInterpreter = try Interpreter(modelPath: landmarksPath, options: options)
-        try landmarksInterpreter?.allocateTensors()
-
-        _accelerationMode = .cpu
-        isReady = true
-        print("[\(Self.TAG)] ✓ Initialized MediaPipe with CPU")
+        poseLandmarker = try PoseLandmarker(options: options)
+        _accelerationMode = (delegate == .GPU) ? .gpu : .cpu
         return _accelerationMode
-    }
-
-    private func cleanup() {
-        detectorInterpreter = nil
-        landmarksInterpreter = nil
-        isReady = false
     }
 
     // MARK: - Model Path
 
-    private func getModelPath(_ modelName: String) -> String? {
+    private func getModelPath() -> String? {
+        let name = Self.MODEL_NAME
+        let ext = Self.MODEL_EXT
         let podBundle = Bundle(for: type(of: self))
 
-        // Try resource bundle first
         if let resourceBundlePath = podBundle.path(forResource: "flutter_pose_detection", ofType: "bundle"),
            let resourceBundle = Bundle(path: resourceBundlePath),
-           let modelPath = resourceBundle.path(forResource: modelName, ofType: "tflite") {
-            print("[\(Self.TAG)] Found \(modelName) in resource bundle")
-            return modelPath
+           let path = resourceBundle.path(forResource: name, ofType: ext) {
+            return path
         }
-
-        // Try plugin bundle directly
-        if let bundlePath = podBundle.path(forResource: modelName, ofType: "tflite") {
-            print("[\(Self.TAG)] Found \(modelName) in pod bundle")
-            return bundlePath
+        if let path = podBundle.path(forResource: name, ofType: ext) {
+            return path
         }
-
-        // Try main bundle
-        if let mainPath = Bundle.main.path(forResource: modelName, ofType: "tflite") {
-            print("[\(Self.TAG)] Found \(modelName) in main bundle")
-            return mainPath
+        if let path = Bundle.main.path(forResource: name, ofType: ext) {
+            return path
         }
-
-        print("[\(Self.TAG)] Model not found: \(modelName).tflite")
+        print("[\(Self.TAG)] Model not found: \(name).\(ext)")
         return nil
     }
 
     // MARK: - Detection
 
     func detectPose(imageData: Data) throws -> PoseResult {
-        guard isReady else {
-            throw DetectorError.notInitialized
-        }
-
-        guard let uiImage = UIImage(data: imageData),
-              let cgImage = uiImage.cgImage else {
+        guard let uiImage = UIImage(data: imageData) else {
             throw DetectorError.invalidImageFormat
         }
+        return try detect(uiImage: uiImage, requestedTimestampMs: nil)
+    }
 
-        return try detectPose(cgImage: cgImage)
+    /// Détection avec l'horodatage de la capture (suivi entre images).
+    func detectPoseVideo(imageData: Data, timestampMs: Int) throws -> PoseResult {
+        guard let uiImage = UIImage(data: imageData) else {
+            throw DetectorError.invalidImageFormat
+        }
+        return try detect(uiImage: uiImage, requestedTimestampMs: timestampMs)
     }
 
     func detectPose(filePath: String) throws -> PoseResult {
-        guard isReady else {
-            throw DetectorError.notInitialized
-        }
-
         guard FileManager.default.fileExists(atPath: filePath) else {
             throw DetectorError.fileNotFound
         }
-
-        guard let uiImage = UIImage(contentsOfFile: filePath),
-              let cgImage = uiImage.cgImage else {
+        guard let uiImage = UIImage(contentsOfFile: filePath) else {
             throw DetectorError.invalidImageFormat
         }
-
-        return try detectPose(cgImage: cgImage)
-    }
-
-    func detectPose(cgImage: CGImage) throws -> PoseResult {
-        guard isReady else {
-            throw DetectorError.notInitialized
-        }
-
-        let startTime = CFAbsoluteTimeGetCurrent()
-
-        // Stage 1: Detect person bounding box (simplified - use full image)
-        // For single-person detection, we can skip person detection and use full image
-        let detection = Detection(xMin: 0, yMin: 0, width: 1, height: 1, score: 1)
-
-        // Stage 2: Run landmarks detector
-        let landmarks = try runLandmarksDetector(cgImage: cgImage, detection: detection)
-
-        let processingTime = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
-
-        // Calculate overall score
-        let detectedLandmarks = landmarks.filter { $0.isDetected }
-        let score = detectedLandmarks.isEmpty ? 0.0 :
-            detectedLandmarks.map { $0.visibility }.reduce(0, +) / Double(detectedLandmarks.count)
-
-        let pose: Pose?
-        if score >= Double(config.minConfidence) {
-            pose = Pose(
-                landmarks: landmarks,
-                score: score,
-                boundingBox: calculateBoundingBox(landmarks)
-            )
-        } else {
-            pose = nil
-        }
-
-        return PoseResult(
-            poses: pose.map { [$0] } ?? [],
-            processingTimeMs: processingTime,
-            accelerationMode: _accelerationMode,
-            timestamp: Date(),
-            imageWidth: cgImage.width,
-            imageHeight: cgImage.height
-        )
+        return try detect(uiImage: uiImage, requestedTimestampMs: nil)
     }
 
     func processFrame(pixelBuffer: CVPixelBuffer) throws -> PoseResult {
-        guard isReady else {
-            throw DetectorError.notInitialized
-        }
-
-        // Convert pixel buffer to CGImage
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
             throw DetectorError.invalidImageFormat
         }
-
-        return try detectPose(cgImage: cgImage)
+        return try detect(uiImage: UIImage(cgImage: cgImage), requestedTimestampMs: nil)
     }
 
-    // MARK: - Inference
+    private func nextTimestamp(_ requested: Int?) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let base = requested ?? Int(Date().timeIntervalSince1970 * 1000)
+        let ts = max(base, lastTimestampMs + 1)
+        lastTimestampMs = ts
+        return ts
+    }
 
-    /**
-     * Run landmarks detector on cropped region.
-     *
-     * Input: [1, 256, 256, 3] normalized to [0, 1]
-     * Output: [1, 195] = 33 landmarks x 5 (x, y, z, visibility, presence) + auxiliary
-     */
-    private func runLandmarksDetector(cgImage: CGImage, detection: Detection) throws -> [PoseLandmark] {
-        guard let interpreter = landmarksInterpreter else {
+    private func detect(uiImage: UIImage, requestedTimestampMs: Int?) throws -> PoseResult {
+        guard let landmarker = poseLandmarker else {
             throw DetectorError.notInitialized
         }
 
-        // Prepare input: resize and normalize to [0, 1]
-        guard let inputData = prepareInputData(cgImage: cgImage, size: Self.LANDMARKS_INPUT_SIZE) else {
-            throw DetectorError.invalidImageFormat
-        }
+        let startTime = CFAbsoluteTimeGetCurrent()
+        let image = try MPImage(uiImage: uiImage)
+        let timestamp = nextTimestamp(requestedTimestampMs)
+        let result = try landmarker.detect(videoFrame: image, timestampInMilliseconds: timestamp)
+        let processingTime = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
 
-        // Copy input
-        try interpreter.copy(inputData, toInputAt: 0)
+        let width = Int(uiImage.size.width * uiImage.scale)
+        let height = Int(uiImage.size.height * uiImage.scale)
 
-        // Run inference
-        try interpreter.invoke()
-
-        // Get output
-        let outputTensor = try interpreter.output(at: 0)
-        let outputData = outputTensor.data
-
-        // Parse landmarks
-        return parseLandmarks(outputData, detection: detection)
+        return PoseResult(
+            poses: convert(result),
+            processingTimeMs: processingTime,
+            accelerationMode: _accelerationMode,
+            timestamp: Date(),
+            imageWidth: width,
+            imageHeight: height
+        )
     }
 
-    private func prepareInputData(cgImage: CGImage, size: Int) -> Data? {
-        let bytesPerPixel = 4
-        let bytesPerRow = bytesPerPixel * size
+    // MARK: - Conversion
 
-        var pixelData = [UInt8](repeating: 0, count: size * bytesPerRow)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private func convert(_ result: PoseLandmarkerResult) -> [Pose] {
+        var poses = [Pose]()
 
-        guard let context = CGContext(
-            data: &pixelData,
-            width: size,
-            height: size,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-        ) else {
-            return nil
-        }
-
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: size, height: size))
-
-        // Convert to float normalized [0, 1]
-        var floatData = [Float](repeating: 0, count: size * size * 3)
-        for y in 0..<size {
-            for x in 0..<size {
-                let offset = y * bytesPerRow + x * bytesPerPixel
-                let floatOffset = (y * size + x) * 3
-
-                floatData[floatOffset] = Float(pixelData[offset]) / 255.0      // R
-                floatData[floatOffset + 1] = Float(pixelData[offset + 1]) / 255.0  // G
-                floatData[floatOffset + 2] = Float(pixelData[offset + 2]) / 255.0  // B
-            }
-        }
-
-        return Data(bytes: floatData, count: floatData.count * MemoryLayout<Float>.size)
-    }
-
-    private func parseLandmarks(_ outputData: Data, detection: Detection) -> [PoseLandmark] {
-        let floats = outputData.withUnsafeBytes { pointer in
-            Array(pointer.bindMemory(to: Float.self))
-        }
-
-        var landmarks = [PoseLandmark]()
-        let inputSize = Float(Self.LANDMARKS_INPUT_SIZE)
-
-        for i in 0..<Self.NUM_LANDMARKS {
-            let baseIdx = i * Self.LANDMARK_DIMS
-            guard baseIdx + 4 < floats.count else {
-                landmarks.append(PoseLandmark.notDetected(typeIndex: i))
-                continue
+        for (poseIndex, normalized) in result.landmarks.enumerated() {
+            let landmarks: [PoseLandmark] = normalized.enumerated().map { index, lm in
+                PoseLandmark(
+                    typeIndex: index,
+                    x: Double(lm.x),
+                    y: Double(lm.y),
+                    z: Double(lm.z),
+                    visibility: lm.visibility?.doubleValue ?? 0
+                )
             }
 
-            // Normalize pixel coordinates (0-256) to (0-1)
-            let x = floats[baseIdx] / inputSize
-            let y = floats[baseIdx + 1] / inputSize
-            let z = floats[baseIdx + 2] / inputSize
-            let visibility = sigmoid(floats[baseIdx + 3])
-            let presence = sigmoid(floats[baseIdx + 4])
-
-            // Transform coordinates back to original image space
-            let origX = detection.xMin + x * detection.width
-            let origY = detection.yMin + y * detection.height
-
-            if visibility >= config.minConfidence && presence >= 0.5 {
-                landmarks.append(PoseLandmark(
-                    typeIndex: i,
-                    x: Double(max(0, min(1, origX))),
-                    y: Double(max(0, min(1, origY))),
-                    z: Double(z),
-                    visibility: Double(visibility)
-                ))
+            let worldLandmarks: [WorldLandmark]
+            if poseIndex < result.worldLandmarks.count {
+                worldLandmarks = result.worldLandmarks[poseIndex].enumerated().map { index, lm in
+                    WorldLandmark(
+                        typeIndex: index,
+                        x: Double(lm.x),
+                        y: Double(lm.y),
+                        z: Double(lm.z),
+                        visibility: lm.visibility?.doubleValue ?? 0
+                    )
+                }
             } else {
-                landmarks.append(PoseLandmark.notDetected(typeIndex: i))
+                worldLandmarks = []
             }
+
+            let detected = landmarks.filter { $0.visibility > Double(config.minConfidence) }
+            let score = detected.isEmpty
+                ? 0.0
+                : detected.map { $0.visibility }.reduce(0, +) / Double(detected.count)
+
+            poses.append(Pose(
+                landmarks: landmarks,
+                score: score,
+                boundingBox: calculateBoundingBox(detected),
+                worldLandmarks: worldLandmarks
+            ))
         }
 
-        return landmarks
+        return poses
     }
-
-    private func sigmoid(_ x: Float) -> Float {
-        return 1.0 / (1.0 + exp(-x))
-    }
-
-    // MARK: - Utilities
 
     private func calculateBoundingBox(_ landmarks: [PoseLandmark]) -> BoundingBox? {
-        let detected = landmarks.filter { $0.isDetected }
-        guard !detected.isEmpty else { return nil }
+        guard !landmarks.isEmpty else { return nil }
 
-        let minX = detected.map { $0.x }.min()!
-        let maxX = detected.map { $0.x }.max()!
-        let minY = detected.map { $0.y }.min()!
-        let maxY = detected.map { $0.y }.max()!
+        let minX = landmarks.map { $0.x }.min()!
+        let maxX = landmarks.map { $0.x }.max()!
+        let minY = landmarks.map { $0.y }.min()!
+        let maxY = landmarks.map { $0.y }.max()!
 
         let padding = 0.1
         let width = maxX - minX
@@ -439,23 +235,15 @@ class MediaPipePoseDetector: PoseDetectorProtocol {
         )
     }
 
+    // MARK: - Lifecycle
+
     func updateConfig(_ config: DetectorConfig) {
         self.config = config
     }
 
     func dispose() {
-        cleanup()
+        poseLandmarker = nil
         _accelerationMode = .unknown
-        print("[\(Self.TAG)] MediaPipe detector disposed")
-    }
-
-    // MARK: - Detection Result
-
-    private struct Detection {
-        let xMin: Float
-        let yMin: Float
-        let width: Float
-        let height: Float
-        let score: Float
+        print("[\(Self.TAG)] PoseLandmarker disposed")
     }
 }
