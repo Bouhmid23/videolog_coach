@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:intl/intl.dart';
@@ -16,7 +17,12 @@ void main() async {
   final format = DateFormat('HH:mm:ss');
   Logger.root.level = Level.FINEST;
   Logger.root.onRecord.listen((record) {
-    debugPrint('${format.format(record.time)} [${record.level.name}]: ${record.message}');
+    // Le nom du logger permet de filtrer dans logcat :
+    //   adb logcat -d | grep -i -E "livekit|webrtc|flutter"
+    debugPrint(
+      '${format.format(record.time)} [${record.level.name}] '
+      '${record.loggerName}: ${record.message}',
+    );
   });
 
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,6 +42,12 @@ void main() async {
   await LiveKitClient.initialize(
     bypassVoiceProcessing: lkPlatformIsMobile(),
   );
+
+  // Logs verbeux du SDK LiveKit (signal, ICE, reconnexion) dans logcat.
+  if (kDebugMode) {
+    setLoggingLevel(LoggerLevel.kFINEST);
+  }
+
   runApp(const MyApp());
 }
 

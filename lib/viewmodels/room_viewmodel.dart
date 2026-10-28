@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart'
-    show ChangeNotifier, ValueListenable, debugPrint, VoidCallback;
+    show ChangeNotifier, ValueListenable, debugPrint, kDebugMode, VoidCallback;
 import 'package:geolocator/geolocator.dart';
 import 'package:livekit_client/livekit_client.dart';
 
@@ -12,6 +12,7 @@ import '../core/auth_service.dart';
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
+import '../core/room_connection_gate.dart';
 import '../data/ball_marker.dart';
 import '../data/participant_display_name.dart';
 import '../data/remote_posture.dart';
@@ -43,6 +44,13 @@ class RoomViewModel extends ChangeNotifier {
 
   // ── Role ──
   UserRole _role = UserRole.trainee;
+
+  // ── Sortie d'appel ──
+  /// Évite de notifier deux fois la sortie (événement SDK + bouton Quitter).
+  bool _closing = false;
+
+  /// Protection contre un double appui sur « Quitter ».
+  bool _quitting = false;
 
   // ── Telemetry ──
   Timer? _telemetryTimer;
@@ -224,7 +232,7 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(WakelockPlus.enable());
 
     CallForegroundService.setOnEndCall(() {
-      unawaited(room.disconnect());
+      unawaited(forceQuit());
     });
     final firebaseName = AuthService.instance.displayName;
     unawaited(CallForegroundService.start(
@@ -277,7 +285,25 @@ class RoomViewModel extends ChangeNotifier {
         _stopTelemetry();
         markers.clear();
         poseViewModel.stop();
-        _onDisconnected?.call();
+        _notifyDisconnected();
+      })
+      ..on<RoomReconnectingEvent>((_) {
+        // Le SDK tente une reconnexion complète : on ne rappelle SURTOUT pas
+        // connect(), on laisse l'engine faire et on garde la main à
+        // l'utilisateur via le bandeau « Reconnexion » / « Quitter ».
+        debugPrint('🔄 Room reconnecting (reconnexion SDK en cours)');
+      })
+      ..on<RoomResumingEvent>((_) {
+        debugPrint('🔄 Room resuming (session conservée)');
+      })
+      ..on<RoomAttemptReconnectEvent>((event) {
+        debugPrint(
+          '🔄 Tentative ${event.attempt}/${event.maxAttemptsRetry} '
+          'dans ${event.nextRetryDelaysInMs} ms',
+        );
+      })
+      ..on<RoomReconnectedEvent>((_) {
+        debugPrint('✅ Room reconnected');
       })
       ..on<ParticipantEvent>((event) => _sortParticipants())
       ..on<LocalTrackPublishedEvent>((_) => _sortParticipants())
@@ -360,6 +386,81 @@ class RoomViewModel extends ChangeNotifier {
     if (marker == null) return; // Message invalide : ignoré sans erreur.
 
     markers.add(marker);
+  }
+
+  /// Injecte quatre ballons de test aux positions de contrôle (debug only).
+  ///
+  /// Lecture du résultat, ballon par ballon :
+  /// - centre juste mais bords de plus en plus faux → ratio/fit ;
+  /// - gauche et droite échangées → miroir ;
+  /// - décalage constant en hauteur → l'overlay ne couvre pas la vidéo.
+  void injectDebugMarkers() {
+    if (!kDebugMode || !_role.isTrainee) return;
+
+    final now = DateTime.now();
+    const probes = <(String, double, double)>[
+      ('centre', 0.5, 0.5),
+      ('haut-gauche', 0.1, 0.1),
+      ('haut-droite', 0.9, 0.1),
+      ('bas-centre', 0.5, 0.9),
+    ];
+
+    for (final (label, x, y) in probes) {
+      markers.add(
+        BallMarker(
+          id: 'debug-$label',
+          x: x,
+          y: y,
+          ttl: const Duration(seconds: 10),
+          receivedAt: now,
+        ),
+      );
+    }
+
+    debugPrint(
+      '🧪 [BALLON] 4 ballons de test injectés : centre (0.5, 0.5), '
+      'haut-gauche (0.1, 0.1), haut-droite (0.9, 0.1), '
+      'bas-centre (0.5, 0.9)',
+    );
+  }
+
+  /// Notifie la sortie d'appel une seule fois, que ce soit l'événement SDK
+  /// ou le bouton « Quitter » qui déclenche la fermeture.
+  void _notifyDisconnected() {
+    if (_closing) return;
+    _closing = true;
+    _onDisconnected?.call();
+  }
+
+  /// Quitte de force, y compris en état « reconnecting ».
+  ///
+  /// Ne dépend pas de `RoomDisconnectedEvent` : `disconnect()` puis
+  /// `dispose()` sont exécutés directement (avec délai maximal), puis la Room
+  /// est retirée de la porte de connexion. Un appel concurrent à `connect()`
+  /// ne pourra donc pas réutiliser cette Room.
+  Future<void> forceQuit() async {
+    if (_quitting) return;
+    _quitting = true;
+
+    final room = _room;
+    _room = null;
+    debugPrint(
+      '⏏️ Quitter forcé (état=${room?.connectionState.name ?? 'sans room'})',
+    );
+
+    _stopTelemetry();
+    _stopGps();
+    markers.clear();
+    poseViewModel.stop();
+
+    // Navigation immédiate : on n'attend pas l'événement SDK, qui peut ne
+    // jamais arriver quand la Room est bloquée en reconnexion.
+    _notifyDisconnected();
+
+    if (room == null) return;
+    room.removeListener(_onRoomDidUpdate);
+    RoomConnectionGate.instance.untrack(room);
+    await RoomConnectionGate.instance.destroy(room);
   }
 
   void _onRoomDidUpdate() => _sortParticipants();
@@ -706,9 +807,14 @@ class RoomViewModel extends ChangeNotifier {
     poseViewModel.dispose();
     controlsViewModel.dispose();
     markers.dispose();
-    _room?.removeListener(_onRoomDidUpdate);
+    final room = _room;
+    _room = null;
+    room?.removeListener(_onRoomDidUpdate);
+    if (room != null) {
+      RoomConnectionGate.instance.untrack(room);
+      unawaited(RoomConnectionGate.instance.destroy(room));
+    }
     unawaited(_listener?.dispose());
-    unawaited(_room?.dispose());
     super.dispose();
   }
 }

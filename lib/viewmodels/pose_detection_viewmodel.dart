@@ -12,9 +12,8 @@ import 'package:flutter/foundation.dart'
         kIsWeb,
         debugPrint;
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -104,6 +103,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
   int _publishMicros = 0;
   int _publishSamples = 0;
   int _publishedSinceStats = 0;
+
+  /// Un seul envoi lossy en vol à la fois.
+  bool _publishInFlight = false;
+
+  /// Paquets abandonnés : Room non connectée, ou envoi déjà en vol.
+  int _droppedSinceStats = 0;
   int _seqAtLastStats = 0;
   DateTime _statsWindowStart = DateTime.now();
   DateTime _lastRuntimeLandmarkLog = DateTime.fromMillisecondsSinceEpoch(0);
@@ -340,6 +345,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
       'publish=${averageMs(_publishMicros, _publishSamples).toStringAsFixed(1)}ms '
       'capture=${(_captureSamples / seconds).toStringAsFixed(1)}fps '
       'publishData=${(_publishedSinceStats / seconds).toStringAsFixed(1)}/s '
+      'dropped=${(_droppedSinceStats / seconds).toStringAsFixed(1)}/s '
       'seq=${((_seq - _seqAtLastStats) / seconds).toStringAsFixed(1)}/s',
     );
 
@@ -352,6 +358,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _publishMicros = 0;
     _publishSamples = 0;
     _publishedSinceStats = 0;
+    _droppedSinceStats = 0;
     _seqAtLastStats = _seq;
     _statsWindowStart = now;
   }
@@ -452,6 +459,23 @@ class PoseDetectionViewModel extends ChangeNotifier {
     final participant = _room?.localParticipant;
     if (participant == null) return;
 
+    // Pendant une déconnexion/reconnexion, la Room ne peut rien envoyer.
+    // Sans ce garde, chaque frame s'empile dans le client et toutes expirent
+    // en bloc (`[TimeoutException] Timeout`) quand le socket tombe, en
+    // bloquant la boucle de publication pendant plusieurs secondes.
+    if (_room?.connectionState != ConnectionState.connected) {
+      _droppedSinceStats++;
+      return;
+    }
+
+    // Données de pose = temps réel : on jette la frame suivante tant que la
+    // précédente n'est pas partie, plutôt que de constituer un arriéré.
+    if (_publishInFlight) {
+      _droppedSinceStats++;
+      return;
+    }
+    _publishInFlight = true;
+
     _publishedSinceStats++;
     final watch = Stopwatch()..start();
     unawaited(
@@ -482,7 +506,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
             _publishMicros += watch.elapsedMicroseconds;
             _publishSamples++;
             debugPrint('⚠️ Failed to publish $kind: $e');
-          }),
+          })
+          .whenComplete(() => _publishInFlight = false),
     );
   }
 

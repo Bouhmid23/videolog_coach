@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/api_service.dart';
 import '../../core/auth_service.dart';
+import '../../core/room_connection_gate.dart';
 import '../../data/livekit_token.dart';
 import '../../data/mobile_room.dart';
 import '../../data/user_role.dart';
@@ -127,51 +128,69 @@ class _ConnectPageState extends State<ConnectPage> {
     EventsListener<RoomEvent>? listener;
 
     try {
-      // L'identité LiveKit est dérivée du UID Firebase par le serveur.
-      final tokenResult = await _fetchToken();
+      // Une seule tentative de connexion à la fois : la porte attend la fin
+      // de la précédente et détruit la Room encore vivante avant d'en créer
+      // une nouvelle (sinon deux Room se disputent le moteur natif et le SDK
+      // part en boucle « reconnecting »).
+      await RoomConnectionGate.instance.run(() async {
+        // L'identité LiveKit est dérivée du UID Firebase par le serveur.
+        final tokenResult = await _fetchToken();
 
-      if (mounted) setState(() => _stage = _ConnectStage.connecting);
+        if (mounted) setState(() => _stage = _ConnectStage.connecting);
 
-      room = _createRoom();
-      listener = room.createListener();
+        room = _createRoom();
+        listener = room!.createListener();
+        RoomConnectionGate.instance.track(room!);
 
-      try {
-        await room.prepareConnection(tokenResult.url, tokenResult.token);
-        await room.connect(tokenResult.url, tokenResult.token);
-      } catch (_) {
-        // Une tentative de connexion peut consommer ou expirer le JWT.
-        // Redemander un token avant l'unique nouvelle tentative.
-        await room.disconnect();
-        final refreshed = await _fetchToken();
-        await room.prepareConnection(refreshed.url, refreshed.token);
-        await room.connect(refreshed.url, refreshed.token);
-      }
+        try {
+          await room!.prepareConnection(tokenResult.url, tokenResult.token);
+          await room!.connect(tokenResult.url, tokenResult.token);
+        } catch (firstError) {
+          // Une tentative peut consommer ou expirer le JWT. On détruit
+          // complètement la Room AVANT l'unique nouvelle tentative : jamais
+          // deux connexions en parallèle.
+          debugPrint(
+            '⚠️ Connexion échouée ($firstError) — nouvelle tentative '
+            'après destruction de la Room',
+          );
+          await _abandon(room, listener);
+          room = null;
+          listener = null;
 
-      if (mounted) setState(() => _stage = _ConnectStage.media);
+          final refreshed = await _fetchToken();
+          room = _createRoom();
+          listener = room!.createListener();
+          RoomConnectionGate.instance.track(room!);
+          await room!.prepareConnection(refreshed.url, refreshed.token);
+          await room!.connect(refreshed.url, refreshed.token);
+        }
 
-      // Paramètres par défaut : micro et caméra avant publiés immédiatement.
-      await _publishDefaultDevices(room);
+        if (mounted) setState(() => _stage = _ConnectStage.media);
 
-      if (!ctx.mounted) {
-        await room.disconnect();
-        await listener.dispose();
-        return;
-      }
+        // Paramètres par défaut : micro et caméra avant publiés immédiatement.
+        await _publishDefaultDevices(room!);
 
-      ctx.pushReplacement(
-        '/room',
-        extra: RoomRouteArgs(
-          room: room,
-          listener: listener,
-          role: _role,
-          roomName: widget.roomName,
-          canControlRecording: widget.canControlRecording,
-        ),
-      );
+        if (!ctx.mounted) {
+          await _abandon(room, listener);
+          return;
+        }
+
+        // La Room reste suivie par la porte pendant l'appel : toute nouvelle
+        // tentative la détruira d'abord.
+        ctx.pushReplacement(
+          '/room',
+          extra: RoomRouteArgs(
+            room: room!,
+            listener: listener!,
+            role: _role,
+            roomName: widget.roomName,
+            canControlRecording: widget.canControlRecording,
+          ),
+        );
+      });
     } catch (error) {
       debugPrint('Erreur connexion: $error');
-      await room?.disconnect();
-      await listener?.dispose();
+      await _abandon(room, listener);
       if (!ctx.mounted) return;
       await ctx.showErrorDialog(error);
     } finally {
@@ -182,6 +201,20 @@ class _ConnectPageState extends State<ConnectPage> {
         });
       }
     }
+  }
+
+  /// Détruit une tentative interrompue (Room + listener) avant d'en relancer
+  /// une autre : `disconnect()` puis `dispose()`, sans laisser de Room
+  /// orpheline dans la porte.
+  Future<void> _abandon(
+    Room? room,
+    EventsListener<RoomEvent>? listener,
+  ) async {
+    if (room != null) {
+      RoomConnectionGate.instance.untrack(room);
+      await RoomConnectionGate.instance.destroy(room);
+    }
+    await listener?.dispose();
   }
 
   Room _createRoom() {

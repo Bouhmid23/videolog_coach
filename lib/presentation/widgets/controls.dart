@@ -2,12 +2,13 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:livekit_client/livekit_client.dart';
 import '../../core/ble_sensor_service.dart';
 import '../../core/ble_telemetry_service.dart';
+import '../../core/room_connection_gate.dart';
 import '../../exts.dart';
 import '../../theme.dart';
 import '../../viewmodels/controls_viewmodel.dart';
@@ -27,6 +28,14 @@ class ControlsWidget extends StatefulWidget {
   final double postureSmoothingAlpha;
   final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
 
+  /// Debug uniquement : injecte quatre ballons de test sur la vidéo locale
+  /// pour diagnostiquer l'alignement (ratio, fit, miroir, marges).
+  final VoidCallback? onDebugMarkers;
+
+  /// Quitte l'appel en détruisant la Room de force (disconnect + dispose),
+  /// y compris en état « reconnecting ». À défaut, `room.disconnect()` seul.
+  final Future<void> Function()? onQuit;
+
   const ControlsWidget(
     this.room,
     this.participant, {
@@ -39,6 +48,8 @@ class ControlsWidget extends StatefulWidget {
     this.onTogglePosture,
     this.postureSmoothingAlpha = 1.0,
     this.onSetPostureSmoothingAlpha,
+    this.onDebugMarkers,
+    this.onQuit,
     super.key,
   });
 
@@ -170,7 +181,14 @@ class _ControlsWidgetState extends State<ControlsWidget>
 
   void _onTapDisconnect() async {
     final result = await context.showDisconnectDialog();
-    if (result == true) await widget.room.disconnect();
+    if (result != true || !mounted) return;
+
+    final quit = widget.onQuit;
+    if (quit != null) {
+      await quit();
+      return;
+    }
+    await RoomConnectionGate.instance.destroy(widget.room);
   }
 
   Widget _buildControlButton({
@@ -524,6 +542,15 @@ class _ControlsWidgetState extends State<ControlsWidget>
                   icon: Icons.tune_rounded,
                   onPressed: _openPostureSmoothingDialog,
                   tooltip: 'Régler le lissage de la posture',
+                ),
+
+              // ── Debug : injection de ballons (debug uniquement) ──
+              if (kDebugMode && widget.onDebugMarkers != null)
+                _buildControlButton(
+                  icon: Icons.ads_click_rounded,
+                  onPressed: widget.onDebugMarkers,
+                  tooltip: 'Debug : injecter 4 ballons de test',
+                  iconColor: LKColors.secondary,
                 ),
 
               // ── Disconnect ──

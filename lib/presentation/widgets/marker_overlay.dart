@@ -6,6 +6,19 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../data/ball_marker.dart';
 
+/// Taille candidate de l'image caméra, utilisée par le diagnostic
+/// d'alignement des ballons (debug uniquement).
+///
+/// Les trois sources possibles — dimensions de publication LiveKit,
+/// résolution demandée à la capture et taille des images de pose — doivent
+/// avoir le même ratio que l'image affichée, sinon la projection est fausse.
+class FrameCandidate {
+  final String label;
+  final Size? size;
+
+  const FrameCandidate(this.label, this.size);
+}
+
 /// Projette une position normalisée (fractions de l'image caméra) vers
 /// l'écran, avec exactement la même transformation que `PoseOverlay` :
 /// `BoxFit.cover` + recadrage centré + miroir optionnel.
@@ -49,7 +62,7 @@ Offset projectMarker(
 ///
 /// À placer en `Positioned.fill` au-dessus du `PoseOverlay`. Le widget ne
 /// capte aucun geste et ne touche ni au flux `posture` ni à la détection.
-class MarkerOverlay extends StatelessWidget {
+class MarkerOverlay extends StatefulWidget {
   static const String assetPath = 'docs/ballon.svg';
 
   /// Taille minimale d'un ballon en pixels logiques.
@@ -63,23 +76,46 @@ class MarkerOverlay extends StatelessWidget {
   final BoxFit fit;
   final bool mirrorX;
 
+  /// Tailles d'image candidates, journalisées en debug pour diagnostiquer
+  /// un désalignement (ratio, fit, miroir, marges).
+  final List<FrameCandidate> debugFrameCandidates;
+
   const MarkerOverlay({
     required this.markers,
     required this.frameSize,
     this.fit = BoxFit.cover,
     this.mirrorX = false,
+    this.debugFrameCandidates = const [],
     super.key,
   });
+
+  @override
+  State<MarkerOverlay> createState() => _MarkerOverlayState();
+}
+
+class _MarkerOverlayState extends State<MarkerOverlay> {
+  /// Dernière signature journalisée par ballon : évite un log à chaque
+  /// rebuild tant que la géométrie et la position ne changent pas.
+  final Map<String, String> _logged = {};
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: ValueListenableBuilder<List<BallMarker>>(
-        valueListenable: markers,
+        valueListenable: widget.markers,
         builder: (context, markers, _) {
-          final frame = frameSize;
+          final frame = widget.frameSize;
           if (markers.isEmpty || frame == null || frame.isEmpty) {
+            _logged.clear();
             return const SizedBox.shrink();
+          }
+
+          if (kDebugMode) {
+            final alive = <String>{
+              for (final marker in markers)
+                if (!marker.isExpired) _markerKey(marker),
+            };
+            _logged.removeWhere((key, _) => !alive.contains(key));
           }
 
           return LayoutBuilder(
@@ -88,8 +124,8 @@ class MarkerOverlay extends StatelessWidget {
               if (size.isEmpty) return const SizedBox.shrink();
 
               final diameter = math.max(
-                minDiameter,
-                size.shortestSide * diameterRatio,
+                MarkerOverlay.minDiameter,
+                size.shortestSide * MarkerOverlay.diameterRatio,
               );
 
               return Stack(
@@ -116,9 +152,11 @@ class MarkerOverlay extends StatelessWidget {
       Offset(marker.x, marker.y),
       frame,
       size,
-      fit: fit,
-      mirrorX: mirrorX,
+      fit: widget.fit,
+      mirrorX: widget.mirrorX,
     );
+
+    if (kDebugMode) _debugLog(marker, frame, size, center);
 
     return Positioned(
       left: center.dx - diameter / 2,
@@ -132,6 +170,127 @@ class MarkerOverlay extends StatelessWidget {
       ),
     );
   }
+
+  String _markerKey(BallMarker marker) =>
+      '${marker.id}@${marker.receivedAt.microsecondsSinceEpoch}';
+
+  /// Journalise, pour chaque ballon, tout ce qui peut expliquer un
+  /// désalignement :
+  /// - `fit` et `mirrorX` ;
+  /// - la taille de l'écran (canevas de l'overlay) et son ratio ;
+  /// - l'image retenue pour la projection et son ratio ;
+  /// - les trois tailles candidates (publication, capture, pose) ;
+  /// - la zone réellement affichée et les marges de l'overlay ;
+  /// - le point projeté.
+  ///
+  /// Lecture du diagnostic :
+  /// - centre juste mais bords de plus en plus faux → ratio/fit ;
+  /// - gauche et droite échangées → miroir ;
+  /// - décalage constant en hauteur → l'overlay ne couvre pas la vidéo.
+  void _debugLog(
+    BallMarker marker,
+    Size frame,
+    Size canvas,
+    Offset point,
+  ) {
+    final signature = [
+      widget.fit.name,
+      '${widget.mirrorX}',
+      _fmtPx(canvas),
+      _fmtPx(frame),
+      for (final candidate in widget.debugFrameCandidates)
+        '${candidate.label}:${_fmtFrame(candidate.size)}',
+      point.dx.toStringAsFixed(1),
+      point.dy.toStringAsFixed(1),
+    ].join('|');
+
+    final key = _markerKey(marker);
+    if (_logged[key] == signature) return;
+    _logged[key] = signature;
+
+    final fitted = applyBoxFit(widget.fit, frame, canvas);
+    final source = Alignment.center.inscribe(
+      fitted.source,
+      Offset.zero & frame,
+    );
+    final destination = Alignment.center.inscribe(
+      fitted.destination,
+      Offset.zero & canvas,
+    );
+
+    final canvasRatio = canvas.width / canvas.height;
+    final frameRatio = frame.width / frame.height;
+    final zoom = source.isEmpty ? 0.0 : destination.width / source.width;
+
+    final lines = <String>[
+      '🎯 [BALLON] ${marker.id} @ '
+          '(${marker.x.toStringAsFixed(3)}, ${marker.y.toStringAsFixed(3)})',
+      '   fit=${widget.fit.name}  mirrorX=${widget.mirrorX}',
+      '   écran=${_fmtPx(canvas)}  ratio=${canvasRatio.toStringAsFixed(4)}',
+      '   image retenue=${_fmtPx(frame)}  '
+          'ratio=${frameRatio.toStringAsFixed(4)}',
+      '   zone source=${_fmtPx(source.size)} @'
+          '(${source.left.toStringAsFixed(1)}, ${source.top.toStringAsFixed(1)})'
+          '  → affichée=${_fmtPx(destination.size)} @'
+          '(${destination.left.toStringAsFixed(1)}, '
+          '${destination.top.toStringAsFixed(1)})  zoom=×'
+          '${zoom.toStringAsFixed(3)}',
+      '   marges overlay : haut=${destination.top.toStringAsFixed(1)} '
+          'bas=${(canvas.height - destination.bottom).toStringAsFixed(1)} '
+          'gauche=${destination.left.toStringAsFixed(1)} '
+          'droite=${(canvas.width - destination.right).toStringAsFixed(1)}',
+      '   → point écran (${point.dx.toStringAsFixed(1)}, '
+          '${point.dy.toStringAsFixed(1)})',
+    ];
+
+    if (widget.debugFrameCandidates.isNotEmpty) {
+      final ratios = <double>[];
+      lines.add('   tailles candidates :');
+      for (final candidate in widget.debugFrameCandidates) {
+        final size = candidate.size;
+        final ratio = size == null || size.isEmpty
+            ? null
+            : size.width / size.height;
+        final delta = ratio == null
+            ? null
+            : (ratio - frameRatio).abs() / frameRatio * 100;
+        if (ratio != null && !_sameRatio(ratios, ratio)) ratios.add(ratio);
+        lines.add(
+          '     • ${candidate.label.padRight(11)} ${_fmtFrame(size)}'
+          '${ratio == null ? '' : '  ratio=${ratio.toStringAsFixed(4)}'}'
+          '${delta == null ? '' : '  écart=${delta.toStringAsFixed(1)} %'}',
+        );
+      }
+
+      if (ratios.length <= 1) {
+        lines.add('   ✅ ratios cohérents entre candidats');
+      } else {
+        lines.add(
+          '   ⚠️ RATIOS DIFFÉRENTS entre candidats '
+          '(${ratios.length} valeurs) → cause 2 (ratio/fit)',
+        );
+      }
+
+      if (!_sameRatio([frameRatio], canvasRatio)) {
+        lines.add(
+          '   ℹ️ ratio écran ≠ ratio image : marges en contain, '
+          'recadrage latéral en cover',
+        );
+      }
+    }
+
+    debugPrint(lines.join('\n'));
+  }
+
+  static bool _sameRatio(List<double> ratios, double ratio) =>
+      ratios.any((r) => (r - ratio).abs() / ratio <= 0.002);
+
+  static String _fmtPx(Size size) =>
+      '${size.width.toStringAsFixed(1)}x${size.height.toStringAsFixed(1)}';
+
+  static String _fmtFrame(Size? size) => size == null || size.isEmpty
+      ? 'inconnue'
+      : '${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}';
 }
 
 /// Ballon individuel : apparition (40 % → 100 %) puis fondu sur la dernière

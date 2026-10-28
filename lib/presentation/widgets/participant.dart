@@ -9,6 +9,7 @@ import 'dart:async';
 
 import '../../core/recording_controller.dart';
 import '../../data/ball_marker.dart';
+import '../../data/frame_geometry.dart';
 import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
 import '../../data/participant_display_name.dart';
@@ -202,42 +203,108 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     return facingMode == 'user' || facingMode == 'front';
   }
 
-  /// Résolution de l'image caméra, nécessaire pour reprojeter les positions
-  /// normalisées (ballons du coach) exactement comme le squelette.
-  Size? get _videoFrameSize {
+  /// Fit de la vidéo et des overlays. `contain` est obligatoire : en `cover`,
+  /// le téléphone rogne ~20 % de la largeur que le coach voit en entier et
+  /// les ballons posés près des bords sortent de l'écran.
+  static const VideoViewFit _videoFit = VideoViewFit.contain;
+  static const BoxFit _overlayFit = BoxFit.contain;
+
+  /// L'écran est-il en portrait ? Les dimensions publiées/capturées sont
+  /// parfois annoncées en paysage alors que l'image est affichée en portrait.
+  bool get _isPortraitScreen =>
+      MediaQuery.maybeOrientationOf(context) == Orientation.portrait;
+
+  /// Taille d'image remise d'aplomb : les capteurs annoncent souvent 640×480
+  /// pour une image affichée en 480×640. Seul le ratio compte, les positions
+  /// du coach étant des fractions.
+  Size? _upright(Size? size) => size == null
+      ? null
+      : frameSizeForOrientation(size, portrait: _isPortraitScreen);
+
+  /// Dimensions brutes de la piste publiée par LiveKit.
+  Size? get _rawPublicationFrameSize {
     final dimensions = videoPublication?.dimensions;
-    if (dimensions != null &&
-        dimensions.width > 0 &&
-        dimensions.height > 0) {
-      return Size(dimensions.width.toDouble(), dimensions.height.toDouble());
+    if (dimensions == null ||
+        dimensions.width <= 0 ||
+        dimensions.height <= 0) {
+      return null;
     }
+    return Size(dimensions.width.toDouble(), dimensions.height.toDouble());
+  }
 
-    // Résolution demandée à la capture : même cadrage que l'image publiée.
+  /// Résolution brute demandée à la capture.
+  Size? get _rawCaptureFrameSize {
     final track = activeVideoTrack;
-    if (track is LocalVideoTrack) {
-      final requested = track.currentOptions.params.dimensions;
-      if (requested.width > 0 && requested.height > 0) {
-        return Size(requested.width.toDouble(), requested.height.toDouble());
-      }
-    }
+    if (track is! LocalVideoTrack) return null;
+    final requested = track.currentOptions.params.dimensions;
+    if (requested.width <= 0 || requested.height <= 0) return null;
+    return Size(requested.width.toDouble(), requested.height.toDouble());
+  }
 
-    // Dernier recours côté sportif : la taille des images de pose, acquise
-    // sur le même flux caméra.
+  /// Taille brute des images de pose, acquises sur le même flux caméra.
+  Size? get _rawPoseFrameSize {
     final poseSize = widget.poseListenable?.value?.frameSize;
     if (poseSize != null && !poseSize.isEmpty) return poseSize;
+    return null;
+  }
 
+  /// Dimensions de la piste publiée, remises en portrait si l'écran l'est.
+  Size? get _publicationFrameSize => _upright(_rawPublicationFrameSize);
+
+  /// Résolution de capture, remise en portrait si l'écran l'est.
+  Size? get _captureFrameSize => _upright(_rawCaptureFrameSize);
+
+  /// Taille des images de pose, telle quelle : c'est le ratio réellement
+  /// utilisé par `PoseOverlay` (0,75 en portrait).
+  Size? get _poseFrameSize => _rawPoseFrameSize;
+
+  /// Résolution de l'image caméra, nécessaire pour reprojeter les positions
+  /// normalisées (ballons du coach) exactement comme le squelette.
+  ///
+  /// Priorité :
+  /// 1. les images de pose (même flux caméra, ratio réel de l'image affichée) ;
+  /// 2. les dimensions publiées, échangées en portrait si elles sont en
+  ///    paysage ;
+  /// 3. la résolution demandée à la capture ;
+  /// 4. les réglages de la piste.
+  Size? get _videoFrameSize {
+    final pose = _poseFrameSize;
+    if (pose != null) return pose;
+
+    final publication = _publicationFrameSize;
+    if (publication != null) return publication;
+
+    final capture = _captureFrameSize;
+    if (capture != null) return capture;
+
+    final track = activeVideoTrack;
     if (track == null) return null;
     try {
       final settings = track.mediaStreamTrack.getSettings();
       final width = settings['width'];
       final height = settings['height'];
       if (width is num && height is num && width > 0 && height > 0) {
-        return Size(width.toDouble(), height.toDouble());
+        return _upright(Size(width.toDouble(), height.toDouble()));
       }
     } catch (_) {
       // Piste déjà libérée : on retombera sur le prochain rebuild.
     }
     return null;
+  }
+
+  /// Tailles candidates pour le log de debug : publication, capture et pose.
+  List<FrameCandidate> _debugFrameCandidates() {
+    FrameCandidate candidate(String label, Size? raw, {bool upright = true}) {
+      final normalized = upright ? _upright(raw) : raw;
+      final swapped = raw != null && normalized != null && raw != normalized;
+      return FrameCandidate(swapped ? '$label (pivoté)' : label, normalized);
+    }
+
+    return [
+      candidate('publication', _rawPublicationFrameSize),
+      candidate('capture', _rawCaptureFrameSize),
+      candidate('pose', _rawPoseFrameSize, upright: false),
+    ];
   }
 
   EventsListener<ParticipantEvent>? _listener;
@@ -350,7 +417,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
               ? VideoTrackRenderer(
                   renderMode: VideoRenderMode.auto,
                   activeVideoTrack!,
-                  fit: VideoViewFit.contain,
+                  fit: _videoFit,
                 )
               : NoVideoWidget(
                   state: isScreenShare
@@ -369,8 +436,11 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
           Positioned.fill(
             child: ValueListenableBuilder<PoseFrame?>(
               valueListenable: widget.poseListenable!,
-              builder: (context, frame, _) =>
-                  PoseOverlay(frame: frame, mirrorX: _mirrorVideo),
+              builder: (context, frame, _) => PoseOverlay(
+                frame: frame,
+                mirrorX: _mirrorVideo,
+                fit: _overlayFit,
+              ),
             ),
           ),
 
@@ -383,7 +453,11 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
             child: MarkerOverlay(
               markers: widget.markers!,
               frameSize: _videoFrameSize,
+              fit: _overlayFit,
               mirrorX: _mirrorVideo,
+              debugFrameCandidates: kDebugMode
+                  ? _debugFrameCandidates()
+                  : const [],
             ),
           ),
 

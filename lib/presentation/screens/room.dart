@@ -83,10 +83,7 @@ class _RoomPageState extends State<RoomPage> {
 
     if (lkPlatformIsDesktop()) {
       onWindowShouldClose = () async {
-        unawaited(widget.room.disconnect());
-        await widget.listener.waitFor<RoomDisconnectedEvent>(
-          duration: const Duration(seconds: 5),
-        );
+        await _vm.forceQuit();
       };
     }
   }
@@ -220,6 +217,10 @@ class _RoomPageState extends State<RoomPage> {
                         onSetPostureSmoothingAlpha: widget.role.isTrainee
                             ? _vm.setPoseSmoothingAlpha
                             : null,
+                        onDebugMarkers: widget.role.isTrainee
+                            ? _vm.injectDebugMarkers
+                            : null,
+                        onQuit: _vm.forceQuit,
                       ),
                     ),
                 ],
@@ -227,9 +228,26 @@ class _RoomPageState extends State<RoomPage> {
             ),
 
           // ========================================================================
-          // INDICATEUR DE CHARGEMENT (si necessaire)
+          // BANDEAU DE RECONNEXION (non bloquant, avec sortie forcée)
           // ========================================================================
-          if (!inPip && _vm.room?.connectionState != ConnectionState.connected)
+          if (!inPip &&
+              _vm.room?.connectionState == ConnectionState.reconnecting)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _ReconnectingBanner(
+                onQuit: () => unawaited(_vm.forceQuit()),
+              ),
+            ),
+
+          // ========================================================================
+          // INDICATEUR DE CHARGEMENT (connexion initiale uniquement : pendant
+          // une reconnexion, les contrôles doivent rester accessibles)
+          // ========================================================================
+          if (!inPip &&
+              _vm.room?.connectionState != ConnectionState.connected &&
+              _vm.room?.connectionState != ConnectionState.reconnecting)
             Positioned.fill(
               child: Container(
                 color: LKColors.background.withValues(alpha: 0.8),
@@ -273,6 +291,72 @@ class _RoomPageState extends State<RoomPage> {
               ).textTheme.bodySmall?.copyWith(color: LKColors.textHint),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Bandeau affiché pendant une reconnexion SDK.
+///
+/// Non bloquant : il laisse les contrôles du bas accessibles et propose une
+/// sortie forcée (`disconnect()` + `dispose()`) si la reconnexion s'éternise.
+class _ReconnectingBanner extends StatelessWidget {
+  const _ReconnectingBanner({required this.onQuit});
+
+  final VoidCallback onQuit;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: EdgeInsets.all(UIUtils.sm),
+        child: Material(
+          color: LKColors.surfaceElevated.withValues(alpha: 0.95),
+          borderRadius: UIUtils.borderRadiusAllMD,
+          elevation: 6,
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: UIUtils.md,
+              vertical: UIUtils.xs,
+            ),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      LKColors.secondary,
+                    ),
+                  ),
+                ),
+                SizedBox(width: UIUtils.sm),
+                Expanded(
+                  child: Text(
+                    'Reconnexion en cours…',
+                    style: UIUtils.labelMedium(context),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: onQuit,
+                  icon: const Icon(
+                    Icons.call_end_rounded,
+                    size: 18,
+                    color: LKColors.danger,
+                  ),
+                  label: Text(
+                    'Quitter',
+                    style: UIUtils.labelMedium(
+                      context,
+                    ).copyWith(color: LKColors.danger),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
