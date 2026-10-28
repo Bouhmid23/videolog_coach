@@ -62,26 +62,35 @@ void main() {
   });
 
   group('wrapGlassesText', () {
-    test('coupe aux espaces, au plus 14 caractères par ligne', () {
-      final lines = wrapGlassesText('Allez plus vite encore un effort pour finir');
-      expect(lines, ['Allez plus', 'vite encore un', 'effort pour', 'finir']);
-      expect(lines.every((l) => l.length <= 14), isTrue);
+    test('chaque ligne tient dans la largeur utile, le texte est conservé', () {
+      const text = 'Allez plus vite encore un effort pour finir';
+      final lines = wrapGlassesText(text);
+      expect(lines.every((l) => GlassesFontMetrics.textWidth(l) <= GlassesLayout.usableWidth), isTrue);
+      expect(lines.join(' '), text);
     });
 
-    test('un mot plus long qu\'une ligne est coupé', () {
-      expect(wrapGlassesText('Anticonstitutionnellement'), ['Anticonstituti', 'onnellement']);
+    test('les lettres étroites en laissent passer plus que les lettres larges', () {
+      expect(wrapGlassesText('i' * 20), hasLength(1));
+      expect(wrapGlassesText('W' * 10), hasLength(2));
     });
 
-    test('au plus 6 lignes, la dernière est tronquée par ..', () {
+    test('un mot plus large qu\'une ligne est coupé sans perdre de lettre', () {
+      const word = 'Anticonstitutionnellement';
+      final lines = wrapGlassesText(word);
+      expect(lines.length, greaterThan(1));
+      expect(lines.join(), word);
+      expect(lines.every((l) => GlassesFontMetrics.textWidth(l) <= GlassesLayout.usableWidth), isTrue);
+    });
+
+    test('au plus 6 lignes, la dernière est tronquée par .. et tient dans la largeur', () {
       final lines = wrapGlassesText(List.filled(40, 'mot').join(' '));
       expect(lines.length, 6);
       expect(lines.last.endsWith('..'), isTrue);
-      expect(lines.every((l) => l.length <= 14), isTrue);
+      expect(GlassesFontMetrics.textWidth(lines.last), lessThanOrEqualTo(GlassesLayout.usableWidth));
     });
 
-    test('70 caractères de mots courts tiennent sur 6 lignes sans troncature', () {
-      final text = List.filled(17, 'abc').join(' '); // 67 caractères
-      final lines = wrapGlassesText(text);
+    test('un message de 70 caractères courants tient sans troncature', () {
+      final lines = wrapGlassesText('Plus vite, tiens le rythme, respire bien et garde le dos droit jusqu au bout');
       expect(lines.length, lessThanOrEqualTo(6));
       expect(lines.last.endsWith('..'), isFalse);
     });
@@ -93,26 +102,60 @@ void main() {
 }
 
 void _layoutTests() {
-  group('GlassesLayout', () {
-    test('6 lignes de police 2 tiennent entre les marges', () {
-      expect(GlassesLayout.maxLines, 6);
-      for (var i = 0; i < GlassesLayout.maxLines; i++) {
-        final bottom = GlassesLayout.anchorY(i);
-        final top = bottom - GlassesLayout.fontHeight;
-        expect(top, greaterThanOrEqualTo(GlassesLayout.margin), reason: 'ligne $i coupée en haut');
-        expect(bottom, lessThanOrEqualTo(GlassesLayout.displayH - GlassesLayout.margin), reason: 'ligne $i coupée en bas');
+  group('GlassesLayout.place', () {
+    double viewerTop(GlassesLine l) => GlassesLayout.displayH - l.y.toDouble();
+    double viewerLeft(GlassesLine l) => GlassesLayout.displayW - l.x.toDouble();
+
+    test('texte vide : rien à placer', () {
+      expect(GlassesLayout.place(const []), isEmpty);
+    });
+
+    test('bloc centré verticalement, quel que soit le nombre de lignes', () {
+      for (var n = 1; n <= GlassesLayout.maxLines; n++) {
+        final placed = GlassesLayout.place(List.filled(n, 'abc'));
+        final top = viewerTop(placed.first);
+        final bottom = GlassesLayout.displayH - (viewerTop(placed.last) + GlassesLayout.fontHeight);
+        expect((top - bottom).abs(), lessThanOrEqualTo(1.5), reason: '$n ligne(s) : haut $top, bas $bottom');
       }
     });
 
-    test('la première ligne ne laisse plus que la partie haute du texte visible (régression « hello world »)', () {
-      // Ancien calcul : y = 8 pour la première ligne => boîte [8 - 35, 8] : 27 px sur 35 hors de l\'écran.
-      expect(8 - GlassesLayout.fontHeight, lessThan(0));
-      // Nouveau calcul : boîte entièrement à l\'écran.
-      expect(GlassesLayout.anchorY(0) - GlassesLayout.fontHeight, greaterThanOrEqualTo(0));
+    test('chaque ligne est centrée horizontalement d\'après sa largeur', () {
+      for (final text in ['Hi', 'Hello world', 'Allez plus vite']) {
+        final line = GlassesLayout.place([text]).single;
+        final width = GlassesFontMetrics.textWidth(text);
+        final left = viewerLeft(line);
+        final right = GlassesLayout.displayW - left - width;
+        expect((left - right).abs(), lessThanOrEqualTo(1.5), reason: '$text : gauche $left, droite $right');
+      }
+    });
+
+    test('une ligne courte est ancrée plus loin du bord qu\'une ligne longue', () {
+      final short = GlassesLayout.place(['Hi']).single;
+      final long = GlassesLayout.place(['Hello world']).single;
+      expect(viewerLeft(short), greaterThan(viewerLeft(long)));
+    });
+
+    test('rien ne dépasse les marges, même avec 6 lignes pleines', () {
+      final lines = wrapGlassesText(List.filled(40, 'WW').join(' '));
+      for (final line in GlassesLayout.place(lines)) {
+        final width = GlassesFontMetrics.textWidth(line.text);
+        expect(viewerLeft(line), greaterThanOrEqualTo(GlassesLayout.margin - 1));
+        expect(viewerLeft(line) + width, lessThanOrEqualTo(GlassesLayout.displayW - GlassesLayout.margin + 1));
+        expect(viewerTop(line), greaterThanOrEqualTo(GlassesLayout.margin - 1));
+        expect(viewerTop(line) + GlassesLayout.fontHeight, lessThanOrEqualTo(GlassesLayout.displayH - GlassesLayout.margin + 1));
+      }
+    });
+
+    test('régression « hello world » : la boîte de texte est entièrement à l\'écran', () {
+      final line = GlassesLayout.place(['hello world']).single;
+      // Boîte dans le repère de l'afficheur (rotation 4) : [y - hauteur, y].
+      expect(line.y - GlassesLayout.fontHeight, greaterThanOrEqualTo(0));
+      expect(line.y, lessThanOrEqualTo(GlassesLayout.displayH));
     });
 
     test('les lignes ne se chevauchent pas', () {
-      expect(GlassesLayout.linePitch, greaterThanOrEqualTo(GlassesLayout.fontHeight));
+      final placed = GlassesLayout.place(['a', 'b', 'c']);
+      expect(viewerTop(placed[1]) - viewerTop(placed[0]), greaterThanOrEqualTo(GlassesLayout.fontHeight));
     });
   });
 }

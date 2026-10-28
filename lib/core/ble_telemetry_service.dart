@@ -709,7 +709,7 @@ class BleTelemetryService {
   /// Anti-rafale : un nouveau message trop proche du précédent (< 500 ms) est ignoré.
   static const Duration _minMessageGap = Duration(milliseconds: 500);
 
-  /// Affiche [lines] (déjà en ASCII, au plus 6 lignes de 14 caractères, police 2 de 35 px). Retourne `false` si les
+  /// Affiche [lines] (déjà en ASCII, au plus 6 lignes, police 2 de 35 px). Retourne `false` si les
   /// lunettes ne sont pas prêtes.
   Future<bool> showMessage(List<String> lines, Duration duration) async {
     final deviceId = connectedDeviceId;
@@ -730,15 +730,17 @@ class BleTelemetryService {
 
     await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionHold]));
     await enqueueCommand(deviceId, _buildFrame(_cmdClear, []));
-    for (var i = 0; i < lines.length; i++) {
+    // Bloc centré sur l'afficheur : positions calculées d'après le nombre de lignes et la largeur
+    // estimée de chacune (aucune coordonnée en dur).
+    for (final line in GlassesLayout.place(lines)) {
       await enqueueCommand(
         deviceId,
         _buildTextCommand(
-          x: GlassesLayout.anchorX,
-          y: GlassesLayout.anchorY(i),
+          x: line.x,
+          y: line.y,
           fontId: GlassesLayout.fontId,
           color: _kColorWhite,
-          text: lines[i],
+          text: line.text,
         ),
       );
     }
