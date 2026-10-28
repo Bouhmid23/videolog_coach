@@ -623,7 +623,8 @@ class BleTelemetryService {
     required int kcal,
     int? cadence,
   }) async {
-    if (!_displaySessionActive || !_canSendData) return;
+    // Un message du coach est affiché : le tableau de bord ne l'efface pas avant la fin.
+    if (!_displaySessionActive || !_canSendData || _messageActive) return;
 
     final distKm = distanceMiles * 1.60934;
     final distStr = '${distKm.toStringAsFixed(2)} km';
@@ -690,6 +691,58 @@ class BleTelemetryService {
 
     // ── Fin rendu atomique ────────────────────────────────────────────────
     await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionFlush]));
+  }
+
+  // ─── Message du coach ─────────────────────────────────────────────────────
+  //
+  // Affiché à la place du tableau de bord pendant [duration] (5 s), puis le tableau de bord
+  // reprend au prochain rafraîchissement. Rien n'est affiché si les lunettes ne sont pas prêtes
+  // (non connectées ou session arrêtée) : le message est alors ignoré.
+  bool _messageActive = false;
+  DateTime? _messageShownAt;
+  Timer? _messageTimer;
+
+  bool get isMessageActive => _messageActive;
+
+  /// Anti-rafale : un nouveau message trop proche du précédent (< 500 ms) est ignoré.
+  static const Duration _minMessageGap = Duration(milliseconds: 500);
+
+  /// Affiche [lines] (déjà en ASCII, au plus 8 lignes de 17 caractères). Retourne `false` si les
+  /// lunettes ne sont pas prêtes.
+  Future<bool> showMessage(List<String> lines, Duration duration) async {
+    final deviceId = connectedDeviceId;
+    if (deviceId == null || !_displaySessionActive || !_canSendData) {
+      debugPrint('🕶️ Message ignoré : lunettes non prêtes');
+      return false;
+    }
+    if (lines.isEmpty) return false;
+    final now = DateTime.now();
+    if (_messageShownAt != null &&
+        now.difference(_messageShownAt!) < _minMessageGap) {
+      return false;
+    }
+    _messageShownAt = now;
+    _messageActive = true;
+    _messageTimer?.cancel();
+    _messageTimer = Timer(duration, () => _messageActive = false);
+
+    final lineHeight = (_kFontCharH[_kFontBig] ?? 24) + 4;
+    await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionHold]));
+    await enqueueCommand(deviceId, _buildFrame(_cmdClear, []));
+    for (var i = 0; i < lines.length; i++) {
+      await enqueueCommand(
+        deviceId,
+        _buildTextCommand(
+          x: 250,
+          y: 8 + i * lineHeight,
+          fontId: _kFontBig,
+          color: _kColorWhite,
+          text: lines[i],
+        ),
+      );
+    }
+    await enqueueCommand(deviceId, _buildFrame(_cmdHoldFlush, [_actionFlush]));
+    return true;
   }
 
   // ─── §3.1 Construction trames binaires ───────────────────────────────────
@@ -787,6 +840,7 @@ class BleTelemetryService {
   }
 
   Future<void> dispose() async {
+    _messageTimer?.cancel();
     await stopScan();
     await disconnect();
     for (final c in [

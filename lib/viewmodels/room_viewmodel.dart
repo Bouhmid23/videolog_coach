@@ -13,6 +13,7 @@ import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
 import '../data/ball_marker.dart';
+import '../data/glasses_message.dart';
 import '../data/remote_posture.dart';
 import '../data/remote_telemetry.dart';
 import '../data/telemetry_codec.dart';
@@ -282,6 +283,12 @@ class RoomViewModel extends ChangeNotifier {
           return;
         }
 
+        // Message du coach pour les lunettes Engo : JSON sur le topic `engo_message`.
+        if (event.topic == 'engo_message') {
+          _handleGlassesMessage(event.data);
+          return;
+        }
+
         // Chemin rapide temps réel : paquet binaire compact sur le topic posture.
         /*if (event.topic == 'posture') {
           final posture = RemotePosture.tryParseBinary(event.data);
@@ -308,6 +315,23 @@ class RoomViewModel extends ChangeNotifier {
           debugPrint('Failed to decode data: $err');
         }
       });
+  }
+
+  /// Relaie un message du coach aux lunettes Engo (affichage de 5 s, puis le tableau de bord reprend).
+  void _handleGlassesMessage(Object? data) {
+    if (!_role.isTrainee) return;
+
+    final message = GlassesMessage.tryParse(data);
+    if (message == null) return; // Message invalide : ignoré sans erreur.
+
+    final lines = wrapGlassesText(toGlassesAscii(message.text));
+    unawaited(
+      bleService.showMessage(lines, message.ttl).then((shown) {
+        if (!shown) return;
+        // Le tableau de bord se redessine au prochain tour de télémétrie après la fin du message.
+        Timer(message.ttl, () => _lastGlassesDisplayTime = null);
+      }),
+    );
   }
 
   /// Le sportif dessine les ballons du coach sur sa propre vidéo.
