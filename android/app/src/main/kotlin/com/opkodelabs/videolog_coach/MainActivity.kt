@@ -3,7 +3,11 @@ package com.opkodelabs.videolog_coach
 import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -12,6 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "videolog/pip"
+        const val BEEP_CHANNEL = "videolog/beep"
         val DEFAULT_RATIO = Rational(9, 16)
     }
 
@@ -21,6 +26,16 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // Petit bip à l'arrivée d'un message du coach pour les lunettes.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BEEP_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "beep") {
+                    result.success(playBeep())
+                } else {
+                    result.notImplemented()
+                }
+            }
 
         pipChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         pipChannel?.setMethodCallHandler { call, result ->
@@ -62,6 +77,18 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         pipChannel?.invokeMethod("pipModeChanged", isInPictureInPictureMode)
+    }
+
+    // Bip court (120 ms) sur le flux notification : suit le volume des notifications du téléphone.
+    private fun playBeep(): Boolean {
+        return try {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+            Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 500)
+            true
+        } catch (e: RuntimeException) {
+            false
+        }
     }
 
     // Android impose un ratio entre 1:2.39 et 2.39:1.

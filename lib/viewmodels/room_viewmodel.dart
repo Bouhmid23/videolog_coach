@@ -9,6 +9,7 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/auth_service.dart';
+import '../core/beep_service.dart';
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
@@ -328,6 +329,7 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(
       bleService.showMessage(lines, message.ttl).then((shown) {
         if (!shown) return;
+        unawaited(BeepService.beep()); // petit bip : le sportif regarde ses lunettes
         // Le tableau de bord se redessine au prochain tour de télémétrie après la fin du message.
         Timer(message.ttl, () => _lastGlassesDisplayTime = null);
       }),
