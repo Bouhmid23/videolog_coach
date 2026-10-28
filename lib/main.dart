@@ -1,6 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:intl/intl.dart';
@@ -14,21 +13,10 @@ import 'firebase_options.dart';
 import 'router.dart';
 
 void main() async {
-  // `setLoggingLevel()` du SDK LiveKit règle le niveau d'un logger *non-root*
-  // ('livekit'). `package:logging` lève une UnsupportedError dans ce cas tant
-  // que le mode hiérarchique n'est pas activé. Les enregistrements continuent
-  // de remonter jusqu'au root : l'écoute ci-dessous reste donc complète.
-  hierarchicalLoggingEnabled = true;
-
   final format = DateFormat('HH:mm:ss');
   Logger.root.level = Level.FINEST;
   Logger.root.onRecord.listen((record) {
-    // Le nom du logger permet de filtrer dans logcat :
-    //   adb logcat -d | grep -i -E "livekit|webrtc|flutter"
-    debugPrint(
-      '${format.format(record.time)} [${record.level.name}] '
-      '${record.loggerName}: ${record.message}',
-    );
+    debugPrint('${format.format(record.time)} [${record.level.name}]: ${record.message}');
   });
 
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,12 +36,6 @@ void main() async {
   await LiveKitClient.initialize(
     bypassVoiceProcessing: lkPlatformIsMobile(),
   );
-
-  // Logs verbeux du SDK LiveKit (signal, ICE, reconnexion) dans logcat.
-  if (kDebugMode) {
-    setLoggingLevel(LoggerLevel.kFINEST);
-  }
-
   runApp(const MyApp());
 }
 

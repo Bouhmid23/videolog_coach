@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart'
-    show ChangeNotifier, ValueListenable, debugPrint, kDebugMode, VoidCallback;
+import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint, VoidCallback;
 import 'package:geolocator/geolocator.dart';
 import 'package:livekit_client/livekit_client.dart';
 
@@ -12,9 +11,6 @@ import '../core/auth_service.dart';
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
-import '../core/room_connection_gate.dart';
-import '../data/ball_marker.dart';
-import '../data/participant_display_name.dart';
 import '../data/remote_posture.dart';
 import '../data/remote_telemetry.dart';
 import '../data/telemetry_codec.dart';
@@ -22,7 +18,6 @@ import '../data/user_role.dart';
 import '../presentation/widgets/participant_info.dart';
 import '../utils.dart';
 import 'controls_viewmodel.dart';
-import 'marker_controller.dart';
 import 'pose_detection_viewmodel.dart';
 
 class RoomViewModel extends ChangeNotifier {
@@ -31,9 +26,6 @@ class RoomViewModel extends ChangeNotifier {
   final BleSensorService sensorService = BleSensorService();
   final PoseDetectionViewModel poseViewModel = PoseDetectionViewModel();
   late final ControlsViewModel controlsViewModel;
-
-  /// Ballons envoyés par le coach (topic LiveKit `marker`).
-  final MarkerController markers = MarkerController();
 
   // ── Callbacks ──
   VoidCallback? _onDisconnected;
@@ -44,13 +36,6 @@ class RoomViewModel extends ChangeNotifier {
 
   // ── Role ──
   UserRole _role = UserRole.trainee;
-
-  // ── Sortie d'appel ──
-  /// Évite de notifier deux fois la sortie (événement SDK + bouton Quitter).
-  bool _closing = false;
-
-  /// Protection contre un double appui sur « Quitter ».
-  bool _quitting = false;
 
   // ── Telemetry ──
   Timer? _telemetryTimer;
@@ -99,7 +84,6 @@ class RoomViewModel extends ChangeNotifier {
   double get totalDistanceMiles => _totalDistanceMiles;
   bool get showPosePip => _showPosePip;
   bool get showPosture => _showPosture;
-  ValueListenable<List<BallMarker>> get markerListenable => markers.listenable;
   double get poseSmoothingAlpha => poseViewModel.smoothingAlpha;
   String? get selectedParticipantIdentity => _selectedParticipantIdentity;
   bool get showSideSheet => _showSideSheet;
@@ -172,23 +156,8 @@ class RoomViewModel extends ChangeNotifier {
     receivedAt: DateTime.now(),
   );
 
-  /// Le flux affiché en plein écran (la « grande » vidéo).
-  ///
-  /// Le sportif garde toujours **sa propre caméra** en grand : l'arrivée d'un
-  /// participant distant (coach, autre sportif) ne doit pas réorganiser la
-  /// mise en page, ces flux passent dans la galerie. Le coach mobile reste
-  /// observateur : il voit le flux distant le plus récent.
   ParticipantTrack? get primaryTrack {
-    if (_role.isTrainee) {
-      for (final track in _participantTracks) {
-        if (track.participant is LocalParticipant &&
-            track.type == ParticipantTrackType.kUserMedia) {
-          return track;
-        }
-      }
-    }
-
-    // Coach (observateur) : flux du dernier participant distant arrivé.
+    // Le flux principal est celui du dernier participant distant arrivé.
     // S'il n'y a personne d'autre, on affiche le participant local.
     ParticipantTrack? latestRemote;
     for (final track in _participantTracks) {
@@ -232,7 +201,7 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(WakelockPlus.enable());
 
     CallForegroundService.setOnEndCall(() {
-      unawaited(forceQuit());
+      unawaited(room.disconnect());
     });
     final firebaseName = AuthService.instance.displayName;
     unawaited(CallForegroundService.start(
@@ -258,10 +227,6 @@ class RoomViewModel extends ChangeNotifier {
     _setUpListeners();
     _sortParticipants();
 
-    // L'identité LiveKit est le UID Firebase : on partage le nom affiché pour
-    // que les autres clients ne voient pas l'identifiant.
-    unawaited(_publishProfile(room));
-
     await poseViewModel.init();
 
     _startTelemetry();
@@ -283,27 +248,8 @@ class RoomViewModel extends ChangeNotifier {
       ..on<RoomDisconnectedEvent>((event) {
         debugPrint('🔌 Room disconnected: reason=${event.reason}');
         _stopTelemetry();
-        markers.clear();
         poseViewModel.stop();
-        _notifyDisconnected();
-      })
-      ..on<RoomReconnectingEvent>((_) {
-        // Le SDK tente une reconnexion complète : on ne rappelle SURTOUT pas
-        // connect(), on laisse l'engine faire et on garde la main à
-        // l'utilisateur via le bandeau « Reconnexion » / « Quitter ».
-        debugPrint('🔄 Room reconnecting (reconnexion SDK en cours)');
-      })
-      ..on<RoomResumingEvent>((_) {
-        debugPrint('🔄 Room resuming (session conservée)');
-      })
-      ..on<RoomAttemptReconnectEvent>((event) {
-        debugPrint(
-          '🔄 Tentative ${event.attempt}/${event.maxAttemptsRetry} '
-          'dans ${event.nextRetryDelaysInMs} ms',
-        );
-      })
-      ..on<RoomReconnectedEvent>((_) {
-        debugPrint('✅ Room reconnected');
+        _onDisconnected?.call();
       })
       ..on<ParticipantEvent>((event) => _sortParticipants())
       ..on<LocalTrackPublishedEvent>((_) => _sortParticipants())
@@ -320,13 +266,6 @@ class RoomViewModel extends ChangeNotifier {
       ..on<DataReceivedEvent>((event) {
         final participant = event.participant;
         if (participant == null) return;
-
-        // Ballon du coach : JSON sur le topic `marker`, traité avant le
-        // décodage JSON générique.
-        if (event.topic == 'marker') {
-          _handleMarker(event.data);
-          return;
-        }
 
         // Chemin rapide temps réel : paquet binaire compact sur le topic posture.
         /*if (event.topic == 'posture') {
@@ -354,113 +293,6 @@ class RoomViewModel extends ChangeNotifier {
           debugPrint('Failed to decode data: $err');
         }
       });
-  }
-
-  /// Le token serveur ne contient que le UID Firebase : on publie le nom
-  /// affiché dans les metadata / attributes LiveKit pour que les autres
-  /// clients puissent l'afficher à la place de l'identifiant.
-  Future<void> _publishProfile(Room room) async {
-    final displayName = AuthService.instance.displayName.trim();
-    final local = room.localParticipant;
-    if (local == null || displayName.isEmpty) return;
-
-    try {
-      await local.setMetadata(buildDisplayNameMetadata(displayName));
-    } catch (error) {
-      debugPrint('⚠️ Nom non publié (metadata): $error');
-    }
-
-    try {
-      await local.setAttributes({kDisplayNameKey: displayName});
-    } catch (error) {
-      debugPrint('⚠️ Nom non publié (attributes): $error');
-    }
-  }
-
-  /// Le sportif dessine les ballons du coach sur sa propre vidéo ; le coach
-  /// n'affiche rien (le web gère son propre rendu).
-  void _handleMarker(Object? data) {
-    if (!_role.isTrainee) return;
-
-    final marker = BallMarker.tryParse(data, receivedAt: DateTime.now());
-    if (marker == null) return; // Message invalide : ignoré sans erreur.
-
-    markers.add(marker);
-  }
-
-  /// Injecte quatre ballons de test aux positions de contrôle (debug only).
-  ///
-  /// Lecture du résultat, ballon par ballon :
-  /// - centre juste mais bords de plus en plus faux → ratio/fit ;
-  /// - gauche et droite échangées → miroir ;
-  /// - décalage constant en hauteur → l'overlay ne couvre pas la vidéo.
-  void injectDebugMarkers() {
-    if (!kDebugMode || !_role.isTrainee) return;
-
-    final now = DateTime.now();
-    const probes = <(String, double, double)>[
-      ('centre', 0.5, 0.5),
-      ('haut-gauche', 0.1, 0.1),
-      ('haut-droite', 0.9, 0.1),
-      ('bas-centre', 0.5, 0.9),
-    ];
-
-    for (final (label, x, y) in probes) {
-      markers.add(
-        BallMarker(
-          id: 'debug-$label',
-          x: x,
-          y: y,
-          ttl: const Duration(seconds: 10),
-          receivedAt: now,
-        ),
-      );
-    }
-
-    debugPrint(
-      '🧪 [BALLON] 4 ballons de test injectés : centre (0.5, 0.5), '
-      'haut-gauche (0.1, 0.1), haut-droite (0.9, 0.1), '
-      'bas-centre (0.5, 0.9)',
-    );
-  }
-
-  /// Notifie la sortie d'appel une seule fois, que ce soit l'événement SDK
-  /// ou le bouton « Quitter » qui déclenche la fermeture.
-  void _notifyDisconnected() {
-    if (_closing) return;
-    _closing = true;
-    _onDisconnected?.call();
-  }
-
-  /// Quitte de force, y compris en état « reconnecting ».
-  ///
-  /// Ne dépend pas de `RoomDisconnectedEvent` : `disconnect()` puis
-  /// `dispose()` sont exécutés directement (avec délai maximal), puis la Room
-  /// est retirée de la porte de connexion. Un appel concurrent à `connect()`
-  /// ne pourra donc pas réutiliser cette Room.
-  Future<void> forceQuit() async {
-    if (_quitting) return;
-    _quitting = true;
-
-    final room = _room;
-    _room = null;
-    debugPrint(
-      '⏏️ Quitter forcé (état=${room?.connectionState.name ?? 'sans room'})',
-    );
-
-    _stopTelemetry();
-    _stopGps();
-    markers.clear();
-    poseViewModel.stop();
-
-    // Navigation immédiate : on n'attend pas l'événement SDK, qui peut ne
-    // jamais arriver quand la Room est bloquée en reconnexion.
-    _notifyDisconnected();
-
-    if (room == null) return;
-    room.removeListener(_onRoomDidUpdate);
-    RoomConnectionGate.instance.untrack(room);
-    await RoomConnectionGate.instance.destroy(room);
   }
 
   void _onRoomDidUpdate() => _sortParticipants();
@@ -779,7 +611,6 @@ class RoomViewModel extends ChangeNotifier {
             telemetry: localTelemetry,
             poseListenable: poseViewModel.frameNotifier,
             showPosture: _showPosture,
-            markers: _role.isTrainee ? markerListenable : null,
           ));
         }
       }
@@ -806,15 +637,9 @@ class RoomViewModel extends ChangeNotifier {
     unawaited(sensorService.dispose());
     poseViewModel.dispose();
     controlsViewModel.dispose();
-    markers.dispose();
-    final room = _room;
-    _room = null;
-    room?.removeListener(_onRoomDidUpdate);
-    if (room != null) {
-      RoomConnectionGate.instance.untrack(room);
-      unawaited(RoomConnectionGate.instance.destroy(room));
-    }
+    _room?.removeListener(_onRoomDidUpdate);
     unawaited(_listener?.dispose());
+    unawaited(_room?.dispose());
     super.dispose();
   }
 }
