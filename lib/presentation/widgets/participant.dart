@@ -9,6 +9,7 @@ import 'dart:async';
 
 import '../../core/recording_controller.dart';
 import '../../data/ball_marker.dart';
+import '../../data/frame_geometry.dart';
 import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
@@ -205,7 +206,23 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
 
   /// Résolution de l'image caméra, nécessaire pour reprojeter les positions
   /// normalisées (ballons du coach) exactement comme le squelette.
+  ///
+  /// Priorité à la taille des images de pose : c'est celle du squelette, déjà alignée sur
+  /// l'image affichée (portrait). Les dimensions publiées par LiveKit sont toujours annoncées
+  /// en paysage (640×480) : elles ne servent qu'en repli, remises dans le sens de l'écran.
   Size? get _videoFrameSize {
+    final poseSize = widget.poseListenable?.value?.frameSize;
+    if (poseSize != null && !poseSize.isEmpty) return poseSize;
+
+    final published = _publishedFrameSize();
+    if (published == null) return null;
+    return orientFrameToScreen(
+      published,
+      portraitScreen: MediaQuery.of(context).orientation == Orientation.portrait,
+    );
+  }
+
+  Size? _publishedFrameSize() {
     final dimensions = videoPublication?.dimensions;
     if (dimensions != null &&
         dimensions.width > 0 &&
@@ -220,9 +237,6 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
         return Size(requested.width.toDouble(), requested.height.toDouble());
       }
     }
-
-    final poseSize = widget.poseListenable?.value?.frameSize;
-    if (poseSize != null && !poseSize.isEmpty) return poseSize;
 
     if (track == null) return null;
     try {
@@ -377,11 +391,22 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
             !isScreenShare &&
             widget.markers != null)
           Positioned.fill(
-            child: MarkerOverlay(
-              markers: widget.markers!,
-              frameSize: _videoFrameSize,
-              mirrorX: _mirrorVideo,
-            ),
+            // Reconstruit à chaque pose : la taille d'image du squelette arrive après le premier
+            // rendu, et le ballon doit s'y aligner dès qu'elle est connue.
+            child: widget.poseListenable == null
+                ? MarkerOverlay(
+                    markers: widget.markers!,
+                    frameSize: _videoFrameSize,
+                    mirrorX: _mirrorVideo,
+                  )
+                : ValueListenableBuilder<PoseFrame?>(
+                    valueListenable: widget.poseListenable!,
+                    builder: (context, _, __) => MarkerOverlay(
+                      markers: widget.markers!,
+                      frameSize: _videoFrameSize,
+                      mirrorX: _mirrorVideo,
+                    ),
+                  ),
           ),
 
         // 3. Barre d'identite et valeurs du participant principal
