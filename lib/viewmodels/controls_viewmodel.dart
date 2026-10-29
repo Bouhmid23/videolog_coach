@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show ChangeNotifier, VoidCallback, kIsWeb, debugPrint;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -44,6 +45,9 @@ class ControlsViewModel extends ChangeNotifier {
   bool get isMuted => _participant?.isMuted ?? true;
   bool get isCameraEnabled => _participant?.isCameraEnabled() ?? false;
 
+  bool _lastMuted = true;
+  bool _lastCameraEnabled = false;
+
   // ── Lifecycle ──
   void init({
     required LocalParticipant participant,
@@ -58,6 +62,8 @@ class ControlsViewModel extends ChangeNotifier {
     _bleService = bleService;
     _sensorService = sensorService;
     _speakerphoneOn = Hardware.instance.speakerOn ?? false;
+    _lastMuted = participant.isMuted;
+    _lastCameraEnabled = participant.isCameraEnabled();
 
     participant.addListener(_onParticipantChanged);
 
@@ -68,32 +74,69 @@ class ControlsViewModel extends ChangeNotifier {
 
     _bleConnectionStatusSub = _bleService!.connectionStatusStream.listen((status) {
       final wasConnected = _bleGlassesConnected;
-      _bleGlassesConnected = status.phase == BleConnectionPhase.ready;
-      notifyListeners();
-      if (_bleGlassesConnected && !wasConnected) {
+      final isReady = status.phase == BleConnectionPhase.ready;
+      final isDisconnected =
+          status.phase == BleConnectionPhase.disconnected ||
+          status.phase == BleConnectionPhase.disconnecting ||
+          status.phase == BleConnectionPhase.failed ||
+          status.phase == BleConnectionPhase.idle;
+      var changed = false;
+      if (_bleGlassesConnected != isReady) {
+        _bleGlassesConnected = isReady;
+        changed = true;
+      }
+      if ((!isReady || isDisconnected) && _bleBattery != null) {
+        _bleBattery = null;
+        changed = true;
+      }
+      if (changed) {
+        notifyListeners();
+      }
+      if (isReady && !wasConnected) {
         onBleConnected?.call();
-      } else if (!_bleGlassesConnected && wasConnected) {
+      } else if (!isReady && wasConnected) {
         onBleDisconnected?.call();
       }
     });
 
     _bleMetricsSub = _bleService!.metricsStream.listen((metrics) {
+      if (metrics.battery == null || _bleBattery == metrics.battery) return;
       _bleBattery = metrics.battery;
       notifyListeners();
     });
 
     _sensorHrmStatusSub = _sensorService!.hrmStatusStream.listen((s) {
+      if (_sensorHrConnected == s.isConnected) return;
+      final wasConnected = _sensorHrConnected;
       _sensorHrConnected = s.isConnected;
+      if (_sensorHrConnected && !wasConnected) {
+        unawaited(HapticFeedback.mediumImpact());
+      }
       notifyListeners();
     });
 
     _sensorCscStatusSub = _sensorService!.cscStatusStream.listen((s) {
+      if (_sensorCadenceConnected == s.isConnected) return;
+      final wasConnected = _sensorCadenceConnected;
       _sensorCadenceConnected = s.isConnected;
+      if (_sensorCadenceConnected && !wasConnected) {
+        unawaited(HapticFeedback.mediumImpact());
+      }
       notifyListeners();
     });
   }
 
-  void _onParticipantChanged() => notifyListeners();
+  void _onParticipantChanged() {
+    final p = _participant;
+    if (p == null) return;
+    final muted = p.isMuted;
+    final cam = p.isCameraEnabled();
+    if (muted != _lastMuted || cam != _lastCameraEnabled) {
+      _lastMuted = muted;
+      _lastCameraEnabled = cam;
+      notifyListeners();
+    }
+  }
 
   void _loadDevices(List<MediaDevice> devices) {
     _audioInputs = devices.where((d) => d.kind == 'audioinput').toList();
@@ -205,6 +248,9 @@ class ControlsViewModel extends ChangeNotifier {
   }
 
   Future<void> disconnectBleDevice() async {
+    _bleBattery = null;
+    _bleGlassesConnected = false;
+    notifyListeners();
     await _bleService?.disconnect();
   }
 

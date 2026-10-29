@@ -1,17 +1,26 @@
 import 'dart:async';
-import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:livekit_client/livekit_client.dart';
 import '../../core/ble_sensor_service.dart';
 import '../../core/ble_telemetry_service.dart';
+import '../../core/recording_controller.dart';
 import '../../exts.dart';
 import '../../theme.dart';
 import '../../viewmodels/controls_viewmodel.dart';
 import '../utils/ui_utils.dart';
+import 'controls/ble_sheet_content.dart';
+import 'controls/glasses_icon.dart';
+import 'controls/posture_smoothing_dialog.dart';
+import 'controls/sensor_sheet_content.dart';
+import 'recording_controls.dart';
+
+export 'controls/ble_sheet_content.dart';
+export 'controls/glasses_icon.dart';
+export 'controls/posture_smoothing_dialog.dart';
+export 'controls/sensor_sheet_content.dart';
 
 class ControlsWidget extends StatefulWidget {
   final Room room;
@@ -26,6 +35,7 @@ class ControlsWidget extends StatefulWidget {
   final VoidCallback? onTogglePosture;
   final double postureSmoothingAlpha;
   final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
+  final RecordingController? recordingController;
 
   const ControlsWidget(
     this.room,
@@ -39,6 +49,7 @@ class ControlsWidget extends StatefulWidget {
     this.onTogglePosture,
     this.postureSmoothingAlpha = 1.0,
     this.onSetPostureSmoothingAlpha,
+    this.recordingController,
     super.key,
   });
 
@@ -46,26 +57,18 @@ class ControlsWidget extends StatefulWidget {
   State<StatefulWidget> createState() => _ControlsWidgetState();
 }
 
-class _ControlsWidgetState extends State<ControlsWidget>
-    with SingleTickerProviderStateMixin {
+class _ControlsWidgetState extends State<ControlsWidget> {
   ControlsViewModel get _vm => widget.controlsViewModel;
-  late AnimationController _pulseController;
 
   @override
   void initState() {
     super.initState();
     _vm.addListener(_onViewModelChanged);
-
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2000),
-    )..repeat(reverse: true);
   }
 
   @override
   void dispose() {
     _vm.removeListener(_onViewModelChanged);
-    _pulseController.dispose();
     super.dispose();
   }
 
@@ -80,16 +83,14 @@ class _ControlsWidgetState extends State<ControlsWidget>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _BleSheetContent(
+      builder: (_) => BleSheetContent(
         bleService: widget.bleService,
         onConnect: (deviceId) async {
           await _vm.connectBleDevice(deviceId);
-          widget.onBleConnected();
           if (mounted) setState(() {});
         },
         onDisconnect: () async {
           await _vm.disconnectBleDevice();
-          widget.onBleDisconnected();
           if (mounted) setState(() {});
         },
         onToggleDisplay: _vm.toggleDisplaySession,
@@ -105,14 +106,7 @@ class _ControlsWidgetState extends State<ControlsWidget>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.4,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, _) =>
-            _SensorSheetContent(sensorService: widget.sensorService),
-      ),
+      builder: (_) => SensorSheetContent(sensorService: widget.sensorService),
     );
     await _vm.closeSensorSheet();
   }
@@ -120,57 +114,55 @@ class _ControlsWidgetState extends State<ControlsWidget>
   Future<void> _openPostureSmoothingDialog() async {
     final onChange = widget.onSetPostureSmoothingAlpha;
     if (onChange == null) return;
-    var pendingAlpha = widget.postureSmoothingAlpha;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Lissage de la posture'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                pendingAlpha >= 1.0
-                    ? '1,00 · points bruts, sans lissage'
-                    : '${pendingAlpha.toStringAsFixed(2)} · lissage appliqué',
-              ),
-              Slider(
-                value: pendingAlpha,
-                min: 0,
-                max: 1,
-                divisions: 20,
-                label: pendingAlpha.toStringAsFixed(2),
-                onChanged: (value) => setDialogState(() {
-                  pendingAlpha = value;
-                }),
-              ),
-              const Text(
-                'Le réglage est mémorisé sur cet appareil. '
-                'À 1,00, image et worldLandmarks sont envoyés sans lissage.',
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Annuler'),
-            ),
-            FilledButton(
-              onPressed: () {
-                unawaited(onChange(pendingAlpha));
-                Navigator.of(dialogContext).pop();
-              },
-              child: const Text('Appliquer'),
-            ),
-          ],
-        ),
-      ),
+    await PostureSmoothingDialog.show(
+      context,
+      initialAlpha: widget.postureSmoothingAlpha,
+      onApply: onChange,
     );
   }
 
   void _onTapDisconnect() async {
     final result = await context.showDisconnectDialog();
     if (result == true) await widget.room.disconnect();
+  }
+
+  Widget _buildCircularBlurContainer({
+    required Widget child,
+    bool isActive = false,
+    Widget? badge,
+  }) {
+    final circle = Container(
+      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        // Enhanced outdoor/sunlight support: deeper contrast background and crisp border
+        color: LKColors.lkDarkBlue.withValues(alpha: 0.92),
+        border: Border.all(
+          color: isActive
+              ? LKColors.primary
+              : Colors.white.withValues(alpha: 0.35),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: child,
+    );
+
+    if (badge == null) return circle;
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        circle,
+        badge,
+      ],
+    );
   }
 
   Widget _buildControlButton({
@@ -191,7 +183,7 @@ class _ControlsWidgetState extends State<ControlsWidget>
       child: Tooltip(
         message: tooltip,
         decoration: BoxDecoration(
-          color: LKColors.surfaceElevated,
+          color: LKColors.lkDarkBlue,
           borderRadius: UIUtils.borderRadiusAllSM,
           border: Border.all(color: LKColors.border, width: 0.5),
         ),
@@ -202,26 +194,28 @@ class _ControlsWidgetState extends State<ControlsWidget>
         ),
         padding: UIUtils.paddingHorizontalSM.add(UIUtils.paddingVerticalSM),
         margin: UIUtils.paddingXS,
-        child: IconButton(
-          onPressed: onPressed,
-          icon: badge != null
-              ? Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    iconChild,
-                    Positioned.fill(child: badge),
-                  ],
-                )
-              : iconChild,
-          tooltip: tooltip,
-          style: IconButton.styleFrom(
-            foregroundColor: LKColors.textPrimary,
-            backgroundColor: Colors.transparent,
-            hoverColor: LKColors.primary.withValues(alpha: 0.1),
-            disabledForegroundColor: LKColors.textHint,
-            padding: UIUtils.paddingSM,
-            shape: RoundedRectangleBorder(
-              borderRadius: UIUtils.borderRadiusAllSM,
+        child: _buildCircularBlurContainer(
+          isActive: isActive,
+          badge: badge,
+          child: IconButton(
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            onPressed: onPressed == null
+                ? null
+                : () {
+                    unawaited(HapticFeedback.lightImpact());
+                    onPressed();
+                  },
+            icon: iconChild,
+            tooltip: tooltip,
+            style: IconButton.styleFrom(
+              minimumSize: const Size(48, 48),
+              tapTargetSize: MaterialTapTargetSize.padded,
+              foregroundColor: LKColors.textPrimary,
+              backgroundColor: Colors.transparent,
+              hoverColor: LKColors.primary.withValues(alpha: 0.2),
+              disabledForegroundColor: LKColors.textHint,
+              padding: UIUtils.paddingSM,
+              shape: const CircleBorder(),
             ),
           ),
         ),
@@ -236,16 +230,22 @@ class _ControlsWidgetState extends State<ControlsWidget>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
-          color: LKColors.success.withValues(alpha: 0.15),
+          color: LKColors.success.withValues(alpha: 0.85),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: LKColors.success.withValues(alpha: 0.3)),
+          border: Border.all(color: Colors.white, width: 0.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 3,
+            ),
+          ],
         ),
         child: Text(
           '$battery%',
-          style: TextStyle(
-            fontSize: 9,
-            color: LKColors.success,
-            fontWeight: FontWeight.bold,
+          style: const TextStyle(
+            fontSize: 8.5,
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
           ),
         ),
       ),
@@ -254,8 +254,8 @@ class _ControlsWidgetState extends State<ControlsWidget>
 
   Widget _buildSensorBadge() {
     return Positioned(
-      bottom: 0,
-      right: 0,
+      bottom: 2,
+      right: 2,
       child: Container(
         width: 8,
         height: 8,
@@ -274,135 +274,248 @@ class _ControlsWidgetState extends State<ControlsWidget>
     );
   }
 
+  Widget _buildRecBadge({String label = 'REC', Color color = LKColors.danger}) {
+    return Positioned(
+      bottom: -2,
+      right: -2,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.22),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withValues(alpha: 0.55)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 8,
+            color: color,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecordingButton(
+    BuildContext context,
+    RecordingController controller,
+  ) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final isActive = controller.isRecording;
+        final isPending = controller.isPending;
+        final canControl = controller.canControl;
+        if (!canControl && !isActive && !isPending && !controller.loading) {
+          return const SizedBox.shrink();
+        }
+
+        if (controller.loading || (isPending && !controller.pendingTimedOut)) {
+          final label = controller.loading
+              ? controller.operationLabel
+              : controller.pendingLabel;
+          return _buildControlButton(
+            icon: Icons.fiber_manual_record_rounded,
+            iconWidget: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.2,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  isPending ? LKColors.warning : LKColors.textSecondary,
+                ),
+              ),
+            ),
+            onPressed: controller.error != null
+                ? () => RecordingControls.showErrorDialog(context, controller)
+                : null,
+            tooltip: label,
+            badge: _buildRecBadge(label: '…', color: LKColors.warning),
+          );
+        }
+
+        if (controller.pendingTimedOut ||
+            (canControl && controller.state == null)) {
+          return _buildControlButton(
+            icon: Icons.refresh_rounded,
+            iconColor: LKColors.warning,
+            onPressed: () => unawaited(controller.load()),
+            tooltip: controller.pendingTimedOut
+                ? "Vérifier l'état de l'enregistrement auprès du serveur"
+                : 'État d\'enregistrement indisponible · Réessayer',
+            badge: _buildRecBadge(label: '!', color: LKColors.warning),
+          );
+        }
+
+        if (isActive) {
+          return _buildControlButton(
+            icon: canControl
+                ? Icons.stop_circle_rounded
+                : Icons.fiber_manual_record_rounded,
+            iconColor: LKColors.danger,
+            isActive: true,
+            badge: _buildRecBadge(),
+            tooltip: canControl
+                ? 'Arrêter l\'enregistrement'
+                : 'Enregistrement en cours',
+            onPressed: canControl
+                ? () =>
+                      RecordingControls.stopWithFeedback(context, controller)
+                : null,
+          );
+        }
+
+        if (!canControl) return const SizedBox.shrink();
+
+        final hasFailed = controller.state?.status == 'failed';
+        final hasError = controller.error != null;
+
+        return _buildCircularBlurContainer(
+          badge: (hasFailed || hasError)
+              ? _buildRecBadge(label: '!', color: LKColors.danger)
+              : null,
+          child: PopupMenuButton<String>(
+            tooltip: 'Démarrer l\'enregistrement',
+            offset: const Offset(0, -140),
+            color: LKColors.lkDarkBlue,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: UIUtils.borderRadiusAllMD,
+            ),
+            icon: const Icon(
+              Icons.fiber_manual_record_rounded,
+              size: 24,
+              color: LKColors.danger,
+            ),
+            onSelected: (value) {
+              if (value == '__error__') {
+                RecordingControls.showErrorDialog(context, controller);
+                return;
+              }
+              if (value == '__failed__') {
+                RecordingControls.showServerFailureDialog(context, controller);
+                return;
+              }
+              unawaited(
+                RecordingControls.startWithFeedback(context, controller, value),
+              );
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'grid',
+                child: ListTile(
+                  leading: Icon(Icons.grid_view_rounded, size: 20),
+                  title: Text('Grille'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'speaker',
+                child: ListTile(
+                  leading: Icon(Icons.record_voice_over_rounded, size: 20),
+                  title: Text('Intervenant actif'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'single-speaker',
+                child: ListTile(
+                  leading: Icon(Icons.person_rounded, size: 20),
+                  title: Text('Intervenant unique'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              if (hasFailed)
+                const PopupMenuItem(
+                  value: '__failed__',
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.error_outline_rounded,
+                      size: 20,
+                      color: LKColors.danger,
+                    ),
+                    title: Text('Voir la raison de l\'échec'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              if (hasError)
+                const PopupMenuItem(
+                  value: '__error__',
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.info_outline_rounded,
+                      size: 20,
+                      color: LKColors.warning,
+                    ),
+                    title: Text('Diagnostic d\'enregistrement'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      //borderRadius: UIUtils.borderRadiusAllSM,
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          width: double.infinity,
-          padding: UIUtils.paddingVerticalSM.add(UIUtils.paddingHorizontalMD),
-          decoration: BoxDecoration(
-            color: LKColors.surface.withValues(alpha: 0.85),
-            borderRadius: UIUtils.noBorderRadius,
-            border: Border.all(
-              color: LKColors.border.withValues(alpha: 0.3),
-              width: 0.5,
-            ),
-            boxShadow: UIUtils.shadowMD,
-          ),
-          child: Wrap(
-            alignment: WrapAlignment.spaceEvenly,
-            spacing: 2,
-            runSpacing: 2,
-            children: [
-              // ── Microphone ──
-              if (widget.participant.isMicrophoneEnabled())
-                if (lkPlatformIs(PlatformType.android))
-                  _buildControlButton(
-                    icon: Icons.mic_rounded,
-                    onPressed: _vm.disableAudio,
-                    tooltip: 'Désactiver le microphone',
-                    iconColor: LKColors.textPrimary,
-                  )
-                else
-                  PopupMenuButton<MediaDevice>(
-                    icon: UIUtils.textPrimaryIcon(Icons.mic_rounded, size: 24),
-                    offset: const Offset(0, -90),
-                    tooltip: 'Options microphone',
-                    itemBuilder: (BuildContext context) {
-                      return [
-                        PopupMenuItem<MediaDevice>(
-                          value: null,
-                          onTap: _vm.toggleMicrophone,
-                          child: ListTile(
-                            leading: Icon(
-                              Icons.mic_off_rounded,
-                              color: LKColors.danger,
-                            ),
-                            title: Text(
-                              'Désactiver le microphone',
-                              style: UIUtils.labelMedium(context),
-                            ),
-                            contentPadding: UIUtils.paddingHorizontalSM,
-                          ),
-                        ),
-                        if (_vm.audioInputs != null)
-                          ..._vm.audioInputs!.map((device) {
-                            return PopupMenuItem<MediaDevice>(
-                              value: device,
-                              child: ListTile(
-                                leading:
-                                    device.deviceId ==
-                                        widget.room.selectedAudioInputDeviceId
-                                    ? Icon(
-                                        Icons.check_circle_rounded,
-                                        color: LKColors.success,
-                                      )
-                                    : Icon(
-                                        Icons.radio_button_unchecked_rounded,
-                                        color: LKColors.textHint,
-                                      ),
-                                title: Text(
-                                  device.label,
-                                  style: UIUtils.labelMedium(context),
-                                ),
-                                contentPadding: UIUtils.paddingHorizontalSM,
-                              ),
-                              onTap: () => _vm.selectAudioInput(device),
-                            );
-                          }),
-                      ];
-                    },
-                    shape: RoundedRectangleBorder(
-                      borderRadius: UIUtils.borderRadiusAllMD,
-                    ),
-                    color: LKColors.surfaceElevated,
-                    surfaceTintColor: Colors.transparent,
-                    elevation: 4,
-                    shadowColor: Colors.black.withValues(alpha: 0.3),
-                  )
-              else
-                _buildControlButton(
-                  icon: Icons.mic_off_rounded,
-                  onPressed: _vm.enableAudio,
-                  tooltip: 'Activer le microphone',
-                  iconColor: LKColors.danger,
-                ),
-
-              // ── Audio output (desktop) ──
-              if (!lkPlatformIsMobile())
-                PopupMenuButton<MediaDevice>(
-                  icon: UIUtils.textPrimaryIcon(
-                    Icons.volume_up_rounded,
-                    size: 24,
-                  ),
-                  tooltip: 'Sélectionner la sortie audio',
+    return Container(
+      width: double.infinity,
+      color: Colors.transparent,
+      padding: UIUtils.paddingVerticalSM.add(UIUtils.paddingHorizontalMD),
+      child: Wrap(
+        alignment: WrapAlignment.spaceEvenly,
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          // ── Microphone ──
+          if (widget.participant.isMicrophoneEnabled())
+            if (lkPlatformIs(PlatformType.android))
+              _buildControlButton(
+                icon: Icons.mic_rounded,
+                onPressed: _vm.disableAudio,
+                tooltip: 'Désactiver le microphone',
+                iconColor: LKColors.textPrimary,
+              )
+            else
+              _buildCircularBlurContainer(
+                child: PopupMenuButton<MediaDevice>(
+                  icon: UIUtils.textPrimaryIcon(Icons.mic_rounded, size: 24),
+                  offset: const Offset(0, -90),
+                  tooltip: 'Options microphone',
                   itemBuilder: (BuildContext context) {
                     return [
                       PopupMenuItem<MediaDevice>(
                         value: null,
+                        onTap: _vm.toggleMicrophone,
                         child: ListTile(
                           leading: Icon(
-                            Icons.speaker_rounded,
-                            color: LKColors.textSecondary,
+                            Icons.mic_off_rounded,
+                            color: LKColors.danger,
                           ),
                           title: Text(
-                            'Sélectionner la sortie audio',
+                            'Désactiver le microphone',
                             style: UIUtils.labelMedium(context),
                           ),
                           contentPadding: UIUtils.paddingHorizontalSM,
                         ),
                       ),
-                      if (_vm.audioOutputs != null)
-                        ..._vm.audioOutputs!.map((device) {
+                      if (_vm.audioInputs != null)
+                        ..._vm.audioInputs!.map((device) {
                           return PopupMenuItem<MediaDevice>(
                             value: device,
                             child: ListTile(
                               leading:
                                   device.deviceId ==
-                                      widget.room.selectedAudioOutputDeviceId
+                                      widget.room.selectedAudioInputDeviceId
                                   ? Icon(
                                       Icons.check_circle_rounded,
                                       color: LKColors.success,
@@ -417,7 +530,7 @@ class _ControlsWidgetState extends State<ControlsWidget>
                               ),
                               contentPadding: UIUtils.paddingHorizontalSM,
                             ),
-                            onTap: () => _vm.selectAudioOutput(device),
+                            onTap: () => _vm.selectAudioInput(device),
                           );
                         }),
                     ];
@@ -425,11 +538,81 @@ class _ControlsWidgetState extends State<ControlsWidget>
                   shape: RoundedRectangleBorder(
                     borderRadius: UIUtils.borderRadiusAllMD,
                   ),
-                  color: LKColors.surfaceElevated,
+                  color: LKColors.lkDarkBlue,
                   surfaceTintColor: Colors.transparent,
                   elevation: 4,
                   shadowColor: Colors.black.withValues(alpha: 0.3),
                 ),
+              )
+          else
+            _buildControlButton(
+              icon: Icons.mic_off_rounded,
+              onPressed: _vm.enableAudio,
+              tooltip: 'Activer le microphone',
+              iconColor: LKColors.danger,
+            ),
+
+          // ── Audio output (desktop) ──
+          if (!lkPlatformIsMobile())
+            _buildCircularBlurContainer(
+              child: PopupMenuButton<MediaDevice>(
+                icon: UIUtils.textPrimaryIcon(
+                  Icons.volume_up_rounded,
+                  size: 24,
+                ),
+                tooltip: 'Sélectionner la sortie audio',
+                itemBuilder: (BuildContext context) {
+                  return [
+                    PopupMenuItem<MediaDevice>(
+                      value: null,
+                      child: ListTile(
+                        leading: Icon(
+                          Icons.speaker_rounded,
+                          color: LKColors.textSecondary,
+                        ),
+                        title: Text(
+                          'Sélectionner la sortie audio',
+                          style: UIUtils.labelMedium(context),
+                        ),
+                        contentPadding: UIUtils.paddingHorizontalSM,
+                      ),
+                    ),
+                    if (_vm.audioOutputs != null)
+                      ..._vm.audioOutputs!.map((device) {
+                        return PopupMenuItem<MediaDevice>(
+                          value: device,
+                          child: ListTile(
+                            leading:
+                                device.deviceId ==
+                                    widget.room.selectedAudioOutputDeviceId
+                                ? Icon(
+                                    Icons.check_circle_rounded,
+                                    color: LKColors.success,
+                                  )
+                                : Icon(
+                                    Icons.radio_button_unchecked_rounded,
+                                    color: LKColors.textHint,
+                                  ),
+                            title: Text(
+                              device.label,
+                              style: UIUtils.labelMedium(context),
+                            ),
+                            contentPadding: UIUtils.paddingHorizontalSM,
+                          ),
+                          onTap: () => _vm.selectAudioOutput(device),
+                        );
+                      }),
+                  ];
+                },
+                shape: RoundedRectangleBorder(
+                  borderRadius: UIUtils.borderRadiusAllMD,
+                ),
+                color: LKColors.lkDarkBlue,
+                surfaceTintColor: Colors.transparent,
+                elevation: 4,
+                shadowColor: Colors.black.withValues(alpha: 0.3),
+              ),
+            ),
 
               // ── Speakerphone ──
               if (!kIsWeb && lkPlatformIsMobile())
@@ -471,7 +654,7 @@ class _ControlsWidgetState extends State<ControlsWidget>
               // ── BLE glasses ──
               _buildControlButton(
                 icon: Icons.visibility_rounded,
-                iconWidget: _GlassesIcon(
+                iconWidget: GlassesIcon(
                   size: 24,
                   color: _vm.bleGlassesConnected
                       ? LKColors.success
@@ -481,7 +664,7 @@ class _ControlsWidgetState extends State<ControlsWidget>
                 tooltip: _vm.bleGlassesConnected
                     ? 'Lunettes Engo connectées'
                     : 'Connecter les lunettes Engo',
-                badge: _vm.bleBattery != null
+                badge: (_vm.bleGlassesConnected && _vm.bleBattery != null)
                     ? _buildBleBadge(_vm.bleBattery!)
                     : null,
                 isActive: _vm.bleGlassesConnected,
@@ -526,6 +709,10 @@ class _ControlsWidgetState extends State<ControlsWidget>
                   tooltip: 'Régler le lissage de la posture',
                 ),
 
+              // ── Recording (Egress) ──
+              if (widget.recordingController != null)
+                _buildRecordingButton(context, widget.recordingController!),
+
               // ── Disconnect ──
               _buildControlButton(
                 icon: Icons.call_end_rounded,
@@ -535,941 +722,7 @@ class _ControlsWidgetState extends State<ControlsWidget>
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── BLE Glasses Bottom Sheet ─────────────────────────────────────────────────
-class _BleSheetContent extends StatefulWidget {
-  final BleTelemetryService bleService;
-  final Future<void> Function(String deviceId) onConnect;
-  final Future<void> Function() onDisconnect;
-  final Future<void> Function() onToggleDisplay;
-
-  const _BleSheetContent({
-    required this.bleService,
-    required this.onConnect,
-    required this.onDisconnect,
-    required this.onToggleDisplay,
-  });
-
-  @override
-  State<_BleSheetContent> createState() => _BleSheetContentState();
-}
-
-class _BleSheetContentState extends State<_BleSheetContent> {
-  StreamSubscription<BleConnectionStatus>? _statusSub;
-  StreamSubscription<List<DiscoveredDevice>>? _devicesSub;
-  BleConnectionStatus _status = BleConnectionStatus.idle();
-  List<DiscoveredDevice> _devices = const [];
-
-  @override
-  void initState() {
-    super.initState();
-    _status = widget.bleService.connectionStatus;
-    _statusSub = widget.bleService.connectionStatusStream.listen((s) {
-      if (!mounted) return;
-      setState(() => _status = s);
-    });
-    _devicesSub = widget.bleService.devicesStream.listen((d) {
-      if (!mounted) return;
-      setState(() => _devices = d);
-    });
-  }
-
-  @override
-  void dispose() {
-    unawaited(_statusSub?.cancel());
-    unawaited(_devicesSub?.cancel());
-    super.dispose();
-  }
-
-  String? get _connectedDeviceId => widget.bleService.connectedDeviceId;
-  bool get _isDisplaySessionActive => widget.bleService.isDisplaySessionActive;
-  bool get _isBusy =>
-      _status.isBusy || _status.phase == BleConnectionPhase.ready;
-  List<DiscoveredDevice> get _engoDevices =>
-      _devices.where(widget.bleService.isEngoDevice).toList();
-
-  IconData _phaseIcon(BleConnectionPhase phase) {
-    switch (phase) {
-      case BleConnectionPhase.ready:
-        return Icons.check_circle_rounded;
-      case BleConnectionPhase.failed:
-        return Icons.error_outline_rounded;
-      case BleConnectionPhase.disconnected:
-        return Icons.link_off_rounded;
-      default:
-        return Icons.visibility_rounded;
-    }
-  }
-
-  Color _phaseColor(BleConnectionPhase phase) {
-    switch (phase) {
-      case BleConnectionPhase.ready:
-        return LKColors.success;
-      case BleConnectionPhase.failed:
-        return LKColors.danger;
-      case BleConnectionPhase.disconnected:
-        return LKColors.textHint;
-      default:
-        return LKColors.warning;
-    }
-  }
-
-  String _statusLabel(BleConnectionPhase phase) {
-    switch (phase) {
-      case BleConnectionPhase.idle:
-        return 'Prêt';
-      case BleConnectionPhase.connecting:
-        return 'Connexion en cours...';
-      case BleConnectionPhase.connected:
-        return 'Connexion établie';
-      case BleConnectionPhase.initializing:
-        return 'Initialisation...';
-      case BleConnectionPhase.ready:
-        return 'Connecté ✓';
-      case BleConnectionPhase.disconnecting:
-        return 'Déconnexion...';
-      case BleConnectionPhase.disconnected:
-        return 'Déconnecté';
-      case BleConnectionPhase.failed:
-        return 'Échec de connexion';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final status = _status;
-    final hasActiveStatus =
-        status.phase != BleConnectionPhase.idle &&
-        status.phase != BleConnectionPhase.disconnected;
-
-    return SafeArea(
-      child: Container(
-        margin: UIUtils.paddingHorizontalLG.add(UIUtils.paddingVerticalLG),
-        child: ClipRRect(
-          borderRadius: UIUtils.borderRadiusAllLG,
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-              padding: UIUtils.paddingLG,
-              decoration: BoxDecoration(
-                color: LKColors.surfaceElevated,
-                borderRadius: UIUtils.borderRadiusAllLG,
-                border: Border.all(color: LKColors.border, width: 0.5),
-                boxShadow: UIUtils.shadowXL,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      _GlassesIcon(size: 24, color: LKColors.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Lunettes Engo',
-                        style: UIUtils.titleMedium(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Connectez vos lunettes Engo ActiveLook pour afficher la télémétrie.',
-                    style: UIUtils.bodySmall(
-                      context,
-                    ).copyWith(color: LKColors.textHint),
-                  ),
-                  const SizedBox(height: 12),
-                  if (hasActiveStatus) _buildStatusCard(status),
-                  if (hasActiveStatus) const SizedBox(height: 12),
-                  Flexible(child: _buildDeviceList(status)),
-                  if (_connectedDeviceId != null) ...[
-                    const SizedBox(height: 8),
-                    _buildSessionSection(),
-                  ],
-                  const SizedBox(height: 16),
-                  _buildActionRow(),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusCard(BleConnectionStatus status) {
-    final phase = status.phase;
-    final isProgress =
-        phase == BleConnectionPhase.connecting ||
-        phase == BleConnectionPhase.initializing ||
-        phase == BleConnectionPhase.disconnecting;
-    final sessionMsg =
-        phase == BleConnectionPhase.ready && status.message.isNotEmpty
-        ? status.message
-        : null;
-
-    return AnimatedContainer(
-      duration: UIUtils.animationDuration,
-      width: double.infinity,
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: _phaseColor(phase).withValues(alpha: 0.08),
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(color: _phaseColor(phase).withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            height: 20,
-            child: isProgress
-                ? SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        _phaseColor(phase),
-                      ),
-                    ),
-                  )
-                : Icon(_phaseIcon(phase), size: 18, color: _phaseColor(phase)),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _statusLabel(phase),
-                  style: TextStyle(
-                    color: _phaseColor(phase),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-                if (sessionMsg != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    sessionMsg,
-                    style: TextStyle(
-                      color: _phaseColor(phase).withValues(alpha: 0.8),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-                if (status.message.isNotEmpty &&
-                    phase != BleConnectionPhase.ready &&
-                    !isProgress) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    status.message,
-                    style: TextStyle(color: LKColors.textHint, fontSize: 12),
-                  ),
-                ],
-                if (status.error != null && status.error!.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    status.error!,
-                    style: TextStyle(color: LKColors.danger, fontSize: 11),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDeviceList(BleConnectionStatus status) {
-    final engoDevices = _engoDevices;
-    if (engoDevices.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _GlassesIcon(size: 30, color: LKColors.textHint),
-            const SizedBox(height: 8),
-            Text(
-              'Recherche de lunettes Engo...',
-              style: UIUtils.bodySmall(context),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      shrinkWrap: true,
-      itemCount: engoDevices.length,
-      itemBuilder: (context, i) {
-        final device = engoDevices[i];
-        final name = device.name.isEmpty
-            ? 'Inconnu (${device.id})'
-            : device.name;
-        final isConnected = _connectedDeviceId == device.id;
-        final isConnectingThis =
-            status.deviceId == device.id &&
-            (status.phase == BleConnectionPhase.connecting ||
-                status.phase == BleConnectionPhase.connected ||
-                status.phase == BleConnectionPhase.initializing);
-
-        return AnimatedPadding(
-          duration: UIUtils.animationDuration,
-          padding: UIUtils.paddingVerticalSM,
-          child: Card(
-            color: LKColors.surface,
-            surfaceTintColor: Colors.transparent,
-            elevation: 0,
-            margin: EdgeInsets.zero,
-            shape: RoundedRectangleBorder(
-              borderRadius: UIUtils.borderRadiusAllMD,
-              side: BorderSide(color: LKColors.border, width: 0.5),
-            ),
-            child: ListTile(
-              title: Text(name, style: UIUtils.labelMedium(context)),
-              subtitle: Text(
-                'RSSI ${device.rssi}',
-                style: UIUtils.bodySmall(context),
-              ),
-              trailing: isConnected
-                  ? Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: LKColors.success.withValues(alpha: 0.1),
-                        borderRadius: UIUtils.borderRadiusAllSM,
-                      ),
-                      child: Text(
-                        'Connecté',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: LKColors.success,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    )
-                  : isConnectingThis
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          LKColors.primary,
-                        ),
-                      ),
-                    )
-                  : OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: UIUtils.borderRadiusAllSM,
-                        ),
-                        side: BorderSide(color: LKColors.border, width: 0.5),
-                      ),
-                      onPressed: _isBusy
-                          ? null
-                          : () => widget.onConnect(device.id),
-                      child: Text(
-                        'Connecter',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: _isBusy
-                              ? LKColors.textHint
-                              : LKColors.textPrimary,
-                        ),
-                      ),
-                    ),
-            ),
-          ),
         );
-      },
-    );
-  }
-
-  Widget _buildSessionSection() {
-    return AnimatedContainer(
-      duration: UIUtils.animationDuration,
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: LKColors.surface.withValues(alpha: 0.5),
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            _isDisplaySessionActive
-                ? Icons.stop_circle_rounded
-                : Icons.play_circle_fill_rounded,
-            color: _isDisplaySessionActive ? LKColors.danger : LKColors.success,
-            size: 20,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              _isDisplaySessionActive ? 'Session en cours' : 'Session arrêtée',
-              style: UIUtils.labelMedium(context),
-            ),
-          ),
-          const SizedBox(width: 10),
-          ElevatedButton.icon(
-            icon: Icon(
-              _isDisplaySessionActive
-                  ? Icons.stop_rounded
-                  : Icons.play_arrow_rounded,
-              size: 16,
-            ),
-            onPressed: widget.onToggleDisplay,
-            label: Text(
-              _isDisplaySessionActive ? 'Arrêter' : 'Démarrer',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-            style: ElevatedButton.styleFrom(
-              padding: UIUtils.paddingHorizontalMD.add(
-                UIUtils.paddingVerticalSM,
-              ),
-              backgroundColor: _isDisplaySessionActive
-                  ? LKColors.danger
-                  : LKColors.success,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: UIUtils.borderRadiusAllSM,
-              ),
-              elevation: 0,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionRow() {
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: () => widget.onDisconnect(),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: LKColors.textPrimary,
-              padding: UIUtils.paddingVerticalSM,
-              shape: RoundedRectangleBorder(
-                borderRadius: UIUtils.borderRadiusAllSM,
-              ),
-              side: BorderSide(color: LKColors.border, width: 0.5),
-            ),
-            child: Text('Déconnecter', style: UIUtils.labelMedium(context)),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: FilledButton(
-            onPressed: () => Navigator.pop(context),
-            style: FilledButton.styleFrom(
-              backgroundColor: LKColors.primary,
-              foregroundColor: Colors.white,
-              padding: UIUtils.paddingVerticalSM,
-              shape: RoundedRectangleBorder(
-                borderRadius: UIUtils.borderRadiusAllSM,
-              ),
-            ),
-            child: Text(
-              'Fermer',
-              style: UIUtils.labelMedium(context).copyWith(color: Colors.white),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 }
 
-// ─── Sensor Bottom Sheet ────────────────────────────────────────────────────
-class _SensorSheetContent extends StatefulWidget {
-  final BleSensorService sensorService;
-  const _SensorSheetContent({required this.sensorService});
-  @override
-  State<_SensorSheetContent> createState() => _SensorSheetContentState();
-}
-
-class _SensorSheetContentState extends State<_SensorSheetContent> {
-  StreamSubscription<List<DiscoveredDevice>>? _devicesSub;
-  StreamSubscription<SensorStatus>? _hrmStatusSub;
-  StreamSubscription<SensorStatus>? _cscStatusSub;
-  List<DiscoveredDevice> _devices = [];
-  SensorStatus _hrmStatus = const SensorStatus(
-    type: SensorType.hrm,
-    state: SensorConnectionState.disconnected,
-  );
-  SensorStatus _cscStatus = const SensorStatus(
-    type: SensorType.cadence,
-    state: SensorConnectionState.disconnected,
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    _hrmStatus = widget.sensorService.hrmStatus;
-    _cscStatus = widget.sensorService.cscStatus;
-    _devices = widget.sensorService.discoveredDevices;
-    _devicesSub = widget.sensorService.devicesStream.listen((d) {
-      if (!mounted) return;
-      setState(() => _devices = d);
-    });
-    _hrmStatusSub = widget.sensorService.hrmStatusStream.listen((s) {
-      if (!mounted) return;
-      setState(() => _hrmStatus = s);
-    });
-    _cscStatusSub = widget.sensorService.cscStatusStream.listen((s) {
-      if (!mounted) return;
-      setState(() => _cscStatus = s);
-    });
-  }
-
-  @override
-  void dispose() {
-    unawaited(_devicesSub?.cancel());
-    unawaited(_hrmStatusSub?.cancel());
-    unawaited(_cscStatusSub?.cancel());
-    super.dispose();
-  }
-
-  List<DiscoveredDevice> _devicesForType(SensorType type) => _devices
-      .where((d) => widget.sensorService.classifyDevice(d) == type)
-      .toList();
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Container(
-        margin: UIUtils.paddingHorizontalLG.add(UIUtils.paddingVerticalLG),
-        child: ClipRRect(
-          borderRadius: UIUtils.borderRadiusAllLG,
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-              padding: UIUtils.paddingLG,
-              decoration: BoxDecoration(
-                color: LKColors.surfaceElevated,
-                borderRadius: UIUtils.borderRadiusAllLG,
-                border: Border.all(color: LKColors.border, width: 0.5),
-                boxShadow: UIUtils.shadowXL,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.favorite_rounded,
-                        color: LKColors.danger,
-                        size: 24,
-                      ),
-                      const SizedBox(width: 8),
-                      Icon(
-                        Icons.speed_rounded,
-                        color: LKColors.secondary,
-                        size: 24,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Capteurs Sport',
-                        style: UIUtils.titleMedium(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Connectez un capteur cardiaque et/ou de cadence.',
-                    style: UIUtils.bodySmall(
-                      context,
-                    ).copyWith(color: LKColors.textHint),
-                  ),
-                  const SizedBox(height: 16),
-                  Flexible(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildHrmSection(),
-                          const SizedBox(height: 16),
-                          _buildCscSection(),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: LKColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: UIUtils.paddingVerticalSM,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: UIUtils.borderRadiusAllSM,
-                        ),
-                      ),
-                      child: Text(
-                        'Fermer',
-                        style: UIUtils.labelMedium(
-                          context,
-                        ).copyWith(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHrmSection() {
-    final devices = _devicesForType(SensorType.hrm);
-    return _SensorCard(
-      title: 'Fréquence Cardiaque',
-      icon: Icons.favorite_rounded,
-      iconColor: LKColors.danger,
-      status: _hrmStatus,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_hrmStatus.isConnected)
-            _buildConnectedBanner(
-              deviceId: _hrmStatus.deviceId,
-              battery: _hrmStatus.battery,
-              onDisconnect: () => widget.sensorService.disconnectHrm(),
-            )
-          else if (_hrmStatus.isBusy)
-            Padding(
-              padding: UIUtils.paddingVerticalSM,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: LKColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text('Connexion...', style: UIUtils.bodySmall(context)),
-                ],
-              ),
-            )
-          else if (devices.isEmpty)
-            Padding(
-              padding: UIUtils.paddingVerticalSM,
-              child: Center(
-                child: Text(
-                  'Aucun capteur HRM trouvé',
-                  style: UIUtils.bodySmall(
-                    context,
-                  ).copyWith(color: LKColors.textHint),
-                ),
-              ),
-            )
-          else
-            ...devices.map(
-              (d) => _buildDeviceTile(
-                device: d,
-                sensorType: SensorType.hrm,
-                onConnect: () => widget.sensorService.connectHrm(d.id),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCscSection() {
-    final devices = _devicesForType(SensorType.cadence);
-    return _SensorCard(
-      title: 'Cadence',
-      icon: Icons.speed_rounded,
-      iconColor: LKColors.secondary,
-      status: _cscStatus,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_cscStatus.isConnected)
-            _buildConnectedBanner(
-              deviceId: _cscStatus.deviceId,
-              battery: _cscStatus.battery,
-              onDisconnect: () => widget.sensorService.disconnectCadence(),
-            )
-          else if (_cscStatus.isBusy)
-            Padding(
-              padding: UIUtils.paddingVerticalSM,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: LKColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text('Connexion...', style: UIUtils.bodySmall(context)),
-                ],
-              ),
-            )
-          else if (devices.isEmpty)
-            Padding(
-              padding: UIUtils.paddingVerticalSM,
-              child: Center(
-                child: Text(
-                  'Aucun capteur cadence trouvé',
-                  style: UIUtils.bodySmall(
-                    context,
-                  ).copyWith(color: LKColors.textHint),
-                ),
-              ),
-            )
-          else
-            ...devices.map(
-              (d) => _buildDeviceTile(
-                device: d,
-                sensorType: SensorType.cadence,
-                onConnect: () => widget.sensorService.connectCadence(d.id),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConnectedBanner({
-    String? deviceId,
-    int? battery,
-    required VoidCallback onDisconnect,
-  }) {
-    final displayId = deviceId != null && deviceId.length > 8
-        ? deviceId.substring(0, 8)
-        : deviceId ?? '\u2014';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: LKColors.success.withValues(alpha: 0.08),
-        borderRadius: UIUtils.borderRadiusAllSM,
-        border: Border.all(color: LKColors.success.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.bluetooth_connected_rounded,
-            size: 16,
-            color: LKColors.success,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  displayId,
-                  style: UIUtils.labelMedium(context).copyWith(fontSize: 11),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (battery != null)
-                  Text(
-                    'Batterie: $battery%',
-                    style: UIUtils.bodySmall(
-                      context,
-                    ).copyWith(fontSize: 10, color: LKColors.textHint),
-                  ),
-              ],
-            ),
-          ),
-          TextButton(
-            onPressed: onDisconnect,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              visualDensity: VisualDensity.compact,
-            ),
-            child: Text(
-              'Déconnecter',
-              style: TextStyle(fontSize: 11, color: LKColors.danger),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDeviceTile({
-    required DiscoveredDevice device,
-    required SensorType sensorType,
-    required VoidCallback onConnect,
-  }) {
-    final name = device.name.isEmpty
-        ? 'Inconnu (${device.id.substring(0, math.min(8, device.id.length))})'
-        : device.name;
-    return AnimatedPadding(
-      duration: UIUtils.animationDuration,
-      padding: UIUtils.paddingVerticalSM,
-      child: ListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(
-          sensorType == SensorType.hrm
-              ? Icons.favorite_rounded
-              : Icons.speed_rounded,
-          size: 18,
-          color: sensorType == SensorType.hrm
-              ? LKColors.danger
-              : LKColors.secondary,
-        ),
-        title: Text(name, style: UIUtils.bodySmall(context)),
-        subtitle: Text(
-          'RSSI ${device.rssi}',
-          style: UIUtils.bodySmall(
-            context,
-          ).copyWith(color: LKColors.textHint, fontSize: 10),
-        ),
-        trailing: OutlinedButton(
-          onPressed: onConnect,
-          style: OutlinedButton.styleFrom(
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            shape: RoundedRectangleBorder(
-              borderRadius: UIUtils.borderRadiusAllSM,
-            ),
-            side: BorderSide(color: LKColors.border, width: 0.5),
-          ),
-          child: Text(
-            'Connecter',
-            style: TextStyle(fontSize: 11, color: LKColors.textPrimary),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Sensor Card widget ─────────────────────────────────────────────────────
-class _SensorCard extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final Color iconColor;
-  final SensorStatus status;
-  final Widget child;
-
-  const _SensorCard({
-    required this.title,
-    required this.icon,
-    required this.iconColor,
-    required this.status,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isConnected = status.isConnected;
-    return Container(
-      width: double.infinity,
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: isConnected
-            ? LKColors.success.withValues(alpha: 0.04)
-            : LKColors.surface.withValues(alpha: 0.3),
-        borderRadius: UIUtils.borderRadiusAllMD,
-        border: Border.all(
-          color: isConnected
-              ? LKColors.success.withValues(alpha: 0.3)
-              : LKColors.border.withValues(alpha: 0.5),
-          width: 0.5,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                icon,
-                size: 18,
-                color: isConnected ? LKColors.success : iconColor,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: isConnected ? LKColors.success : LKColors.textPrimary,
-                ),
-              ),
-              const Spacer(),
-              if (isConnected)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: LKColors.success.withValues(alpha: 0.15),
-                    borderRadius: UIUtils.borderRadiusAllSM,
-                  ),
-                  child: Text(
-                    'CONNECTÉ',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: LKColors.success,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _GlassesIcon extends StatelessWidget {
-  const _GlassesIcon({required this.size, required this.color});
-
-  final double size;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.asset(
-      'images/glasses-svgrepo.png',
-      width: size,
-      height: size,
-      color: color,
-      colorBlendMode: BlendMode.srcIn,
-    );
-  }
-}

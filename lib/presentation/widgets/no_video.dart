@@ -1,15 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../theme.dart';
-import '../utils/ui_utils.dart';
 
-/// Widget affichant un état "pas de vidéo" avec un design moderne et ergonomique.
-///
-/// Peut afficher différents états :
-/// - No video (caméra éteinte)
-/// - Video muted (vidéo désactivée)
-/// - Video disabled (vidéo non disponible)
-/// - Loading (chargement en cours)
+/// Widget affichant un état "pas de vidéo" moderne avec avatar du participant,
+/// badge d'information et fond sombre adapté aux sessions de coaching.
 class NoVideoWidget extends StatelessWidget {
   final NoVideoState state;
   final String? participantName;
@@ -26,82 +20,70 @@ class NoVideoWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact =
+            constraints.maxHeight < 140 || constraints.maxWidth < 140;
+
+        return Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            color: LKColors.lkDarkBlue,
+          ),
+          child: Center(
+            child:
+            _buildAvatar(isCompact),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAvatar(bool isCompact) {
+    final size = isCompact ? 38.0 : 76.0;
+
     return Container(
+      width: size,
+      height: size,
       decoration: BoxDecoration(
+        shape: BoxShape.circle,
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            LKColors.surfaceElevated,
-            LKColors.surface,
+            LKColors.border.withValues(alpha: 0.35),
+            LKColors.lkDarkBlue.withValues(alpha: 0.8),
           ],
         ),
+        border: Border.all(
+          color: LKColors.textHint.withValues(alpha: 0.5),
+          width: isCompact ? 1.2 : 2.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: isCompact ? 4 : 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (showIcon) _buildIcon(state),
-            if (showIcon && showLabel) SizedBox(height: UIUtils.sm),
-            if (showLabel) _buildLabel(context, state),
-            if (participantName != null && showLabel)
-              Padding(
-                padding: EdgeInsets.only(top: UIUtils.xs),
-                child: Text(
-                  participantName!,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: LKColors.textHint,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-              ),
-          ],
+        child: Icon(
+          _getIcon(state),
+          color: _getIconColor(state),
+          size: isCompact ? 18 : 36,
         ),
       ),
-    );
-  }
-
-  Widget _buildIcon(NoVideoState state) {
-    final icon = _getIcon(state);
-    final color = _getIconColor(state);
-    
-    return Icon(
-      icon,
-      color: color,
-      size: 48,
-      shadows: [
-        Shadow(
-          color: color.withValues(alpha: 0.3),
-          blurRadius: 8,
-          offset: const Offset(0, 2),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLabel(BuildContext context, NoVideoState state) {
-    final label = _getLabel(state);
-    
-    return Text(
-      label,
-      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-        color: LKColors.textSecondary,
-        fontWeight: FontWeight.w500,
-      ),
-      textAlign: TextAlign.center,
     );
   }
 
   IconData _getIcon(NoVideoState state) {
     switch (state) {
       case NoVideoState.noVideo:
-        return Icons.videocam_off_rounded;
       case NoVideoState.videoMuted:
-        return Icons.volume_off_rounded;
       case NoVideoState.videoDisabled:
-        return Icons.no_photography_rounded;
+        return Icons.videocam_off_rounded;
       case NoVideoState.loading:
         return Icons.hourglass_empty_rounded;
       case NoVideoState.error:
@@ -116,7 +98,7 @@ class NoVideoWidget extends StatelessWidget {
       case NoVideoState.noVideo:
       case NoVideoState.videoMuted:
       case NoVideoState.videoDisabled:
-        return LKColors.textSecondary;
+        return LKColors.textHint;
       case NoVideoState.loading:
         return LKColors.secondary;
       case NoVideoState.error:
@@ -126,22 +108,6 @@ class NoVideoWidget extends StatelessWidget {
     }
   }
 
-  String _getLabel(NoVideoState state) {
-    switch (state) {
-      case NoVideoState.noVideo:
-        return 'Pas de vidéo';
-      case NoVideoState.videoMuted:
-        return 'Vidéo désactivée';
-      case NoVideoState.videoDisabled:
-        return 'Vidéo non disponible';
-      case NoVideoState.loading:
-        return 'Chargement...';
-      case NoVideoState.error:
-        return 'Erreur vidéo';
-      case NoVideoState.screenShare:
-        return 'Partage d\'écran';
-    }
-  }
 }
 
 /// États possibles pour le widget NoVideo

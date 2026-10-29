@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/foundation.dart'
-    show ChangeNotifier, ValueListenable, debugPrint, VoidCallback;
+    show
+        ChangeNotifier,
+        ValueListenable,
+        ValueNotifier,
+        debugPrint,
+        VoidCallback;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart';
 import 'package:livekit_client/livekit_client.dart';
-
 import 'package:wakelock_plus/wakelock_plus.dart';
-
 import '../core/auth_service.dart';
 import '../core/beep_service.dart';
 import '../core/ble_sensor_service.dart';
@@ -30,13 +33,14 @@ class RoomViewModel extends ChangeNotifier {
   final BleTelemetryService bleService = BleTelemetryService();
   final BleSensorService sensorService = BleSensorService();
   final PoseDetectionViewModel poseViewModel = PoseDetectionViewModel();
-  late final ControlsViewModel controlsViewModel;
+  final ControlsViewModel controlsViewModel = ControlsViewModel();
 
   /// Ballons envoyés par le coach (topic LiveKit `marker`).
   final MarkerController markers = MarkerController();
 
-  // ── Callbacks ──
+  // ── Callbacks & lifecycle ──
   VoidCallback? _onDisconnected;
+  bool _disposed = false;
 
   // ── Room references ──
   Room? _room;
@@ -67,19 +71,21 @@ class RoomViewModel extends ChangeNotifier {
   StreamSubscription<SportMetrics>? _bleMetricsSub;
   SportMetrics? _bleMetrics;
 
-  // ── Participants ──
+  // ── Participants & granular notifiers ──
   List<ParticipantTrack> _participantTracks = [];
   final Map<String, RemotePosture> _remotePostures = {};
   final Map<String, RemoteTelemetry> _remoteTelemetry = {};
+  final Map<String, ValueNotifier<RemoteTelemetry?>> _telemetryNotifiers = {};
+  final ValueNotifier<bool> _showPostureNotifier = ValueNotifier<bool>(true);
 
   // ── Posture visibility per remote participant ──
   final Set<String> _hiddenPostures = {};
 
   // ── Posture PIP & SideSheet ──
   bool _showPosePip = true;
-  bool _showPosture = true;
   String? _selectedParticipantIdentity;
   bool _showSideSheet = false;
+  ({String identity, ParticipantTrackType type})? _selectedPrimaryTrack;
 
   // ── Getters ──
   Room? get room => _room;
@@ -90,29 +96,58 @@ class RoomViewModel extends ChangeNotifier {
   int? get sensorCadence => _sensorCadence;
   SportMetrics? get bleMetrics => _bleMetrics;
   double get totalDistanceMiles => _totalDistanceMiles;
+  double get totalDistanceKm => _totalDistanceMiles * 1.60934;
   bool get showPosePip => _showPosePip;
-  bool get showPosture => _showPosture;
+  bool get showPosture => _showPostureNotifier.value;
+  ValueListenable<bool> get showPostureListenable => _showPostureNotifier;
   ValueListenable<List<BallMarker>> get markerListenable => markers.listenable;
   double get poseSmoothingAlpha => poseViewModel.smoothingAlpha;
   String? get selectedParticipantIdentity => _selectedParticipantIdentity;
   bool get showSideSheet => _showSideSheet;
 
+  ValueNotifier<RemoteTelemetry?> _telemetryNotifierFor(String identity) {
+    return _telemetryNotifiers.putIfAbsent(
+      identity,
+      () => ValueNotifier<RemoteTelemetry?>(_remoteTelemetry[identity]),
+    );
+  }
+
+  ValueListenable<RemoteTelemetry?> telemetryListenableFor(String identity) =>
+      _telemetryNotifierFor(identity);
+
+  void _setTelemetryFor(String identity, RemoteTelemetry telemetry) {
+    final notifier = _telemetryNotifierFor(identity);
+    if (!telemetry.equalValues(notifier.value)) {
+      notifier.value = telemetry;
+    }
+    for (final track in _participantTracks) {
+      if (track.type == ParticipantTrackType.kUserMedia &&
+          track.participant.identity == identity) {
+        track.telemetry = telemetry;
+      }
+    }
+  }
+
+  void _notifySafe() {
+    if (!_disposed) notifyListeners();
+  }
+
   void togglePosePip() {
     _showPosePip = !_showPosePip;
-    notifyListeners();
+    _notifySafe();
   }
 
   void togglePosture() {
-    _showPosture = !_showPosture;
+    unawaited(HapticFeedback.lightImpact());
+    final next = !_showPostureNotifier.value;
+    _showPostureNotifier.value = next;
     for (final track in _participantTracks) {
-      track.showPosture = _showPosture;
+      track.showPosture = next;
     }
-    notifyListeners();
   }
 
   Future<void> setPoseSmoothingAlpha(double alpha) async {
     await poseViewModel.setSmoothingAlpha(alpha);
-    notifyListeners();
   }
 
   void selectParticipant(String? identity) {
@@ -122,12 +157,23 @@ class RoomViewModel extends ChangeNotifier {
       _selectedParticipantIdentity = identity;
       _showSideSheet = identity != null;
     }
-    notifyListeners();
+    _notifySafe();
+  }
+
+  void setPrimaryTrack(ParticipantTrack track) {
+    final selected = (
+      identity: track.participant.identity,
+      type: track.type,
+    );
+    if (_selectedPrimaryTrack == selected) return;
+    _selectedPrimaryTrack = selected;
+    _notifySafe();
   }
 
   void closeSideSheet() {
+    if (!_showSideSheet) return;
     _showSideSheet = false;
-    notifyListeners();
+    _notifySafe();
   }
 
   void togglePostureVisibility(String participantIdentity) {
@@ -166,29 +212,26 @@ class RoomViewModel extends ChangeNotifier {
   );
 
   ParticipantTrack? get primaryTrack {
-    // Le flux principal est celui du dernier participant distant arrivé.
-    // S'il n'y a personne d'autre, on affiche le participant local.
-    ParticipantTrack? latestRemote;
-    for (final track in _participantTracks) {
-      if (track.type != ParticipantTrackType.kUserMedia ||
-          track.participant is! RemoteParticipant) {
-        continue;
-      }
-      if (latestRemote == null ||
-          track.participant.joinedAt.isAfter(
-            latestRemote.participant.joinedAt,
-          )) {
-        latestRemote = track;
+    // 1. Si un flux a été explicitement sélectionné par clic et est toujours présent :
+    final selected = _selectedPrimaryTrack;
+    if (selected != null) {
+      for (final track in _participantTracks) {
+        if (track.participant.identity == selected.identity &&
+            track.type == selected.type) {
+          return track;
+        }
       }
     }
-    if (latestRemote != null) return latestRemote;
 
+    // 2. Par défaut, le flux principal est celui du participant local (caméra).
     for (final track in _participantTracks) {
       if (track.participant is LocalParticipant &&
           track.type == ParticipantTrackType.kUserMedia) {
         return track;
       }
     }
+
+    // 3. Repli s'il n'y a pas de flux caméra local disponible.
     return _participantTracks.isNotEmpty ? _participantTracks.first : null;
   }
 
@@ -201,6 +244,7 @@ class RoomViewModel extends ChangeNotifier {
   // ── Init ──
   Future<void> init(Room room, EventsListener<RoomEvent> listener,
       {UserRole role = UserRole.trainee, VoidCallback? onDisconnected}) async {
+    if (_disposed) return;
     _room = room;
     _listener = listener;
     _role = role;
@@ -222,7 +266,6 @@ class RoomViewModel extends ChangeNotifier {
             ),
     ));
 
-    controlsViewModel = ControlsViewModel();
     controlsViewModel.init(
       participant: room.localParticipant!,
       room: room,
@@ -232,11 +275,11 @@ class RoomViewModel extends ChangeNotifier {
       onBleDisconnected: onBleDisconnected,
     );
 
-    room.addListener(_onRoomDidUpdate);
     _setUpListeners();
     _sortParticipants();
 
     await poseViewModel.init();
+    if (_disposed) return;
 
     _startTelemetry();
     // Le coach est observateur : il ne publie pas de posture.
@@ -244,8 +287,9 @@ class RoomViewModel extends ChangeNotifier {
       poseViewModel.start(room);
       _updatePoseDestinations();
     }
-    _startGps();
+    unawaited(_startGps());
     _startSensorListeners();
+    _notifySafe();
   }
 
   // ── Room event listeners ──
@@ -261,15 +305,23 @@ class RoomViewModel extends ChangeNotifier {
         poseViewModel.stop();
         _onDisconnected?.call();
       })
-      ..on<ParticipantEvent>((event) => _sortParticipants())
+      ..on<RoomReconnectingEvent>((_) => _notifySafe())
+      ..on<RoomReconnectedEvent>((_) => _notifySafe())
       ..on<LocalTrackPublishedEvent>((_) => _sortParticipants())
       ..on<LocalTrackUnpublishedEvent>((_) => _sortParticipants())
+      ..on<TrackPublishedEvent>((_) => _sortParticipants())
+      ..on<TrackUnpublishedEvent>((_) => _sortParticipants())
       ..on<TrackSubscribedEvent>((_) => _sortParticipants())
       ..on<TrackUnsubscribedEvent>((_) => _sortParticipants())
+      ..on<TrackMutedEvent>((_) => _sortParticipants())
+      ..on<TrackUnmutedEvent>((_) => _sortParticipants())
+      ..on<ActiveSpeakersChangedEvent>((_) => _sortParticipants())
       ..on<ParticipantConnectedEvent>((event) => _sortParticipants())
       ..on<ParticipantDisconnectedEvent>((event) {
-        _remotePostures.remove(event.participant.identity);
-        _remoteTelemetry.remove(event.participant.identity);
+        final identity = event.participant.identity;
+        _remotePostures.remove(identity);
+        _remoteTelemetry.remove(identity);
+        _telemetryNotifiers.remove(identity)?.dispose();
         _updatePoseDestinations();
         _sortParticipants();
       })
@@ -289,16 +341,6 @@ class RoomViewModel extends ChangeNotifier {
           _handleGlassesMessage(event.data);
           return;
         }
-
-        // Chemin rapide temps réel : paquet binaire compact sur le topic posture.
-        /*if (event.topic == 'posture') {
-          final posture = RemotePosture.tryParseBinary(event.data);
-          if (posture != null) {
-            _remotePostures[participant.identity] = posture;
-            _sortParticipants();
-            return;
-          }
-        }*/
 
         // Chemin rapide temps réel : paquet binaire compact sur le topic telemetry.
         if (event.topic == 'telemetry') {
@@ -325,6 +367,7 @@ class RoomViewModel extends ChangeNotifier {
     final message = GlassesMessage.tryParse(data);
     if (message == null) return; // Message invalide : ignoré sans erreur.
 
+    unawaited(HapticFeedback.mediumImpact());
     final lines = wrapGlassesText(toGlassesAscii(message.text));
     unawaited(
       bleService.showMessage(lines, message.ttl).then((shown) {
@@ -341,10 +384,9 @@ class RoomViewModel extends ChangeNotifier {
     if (!_role.isTrainee) return;
     final marker = BallMarker.tryParse(data, receivedAt: DateTime.now());
     if (marker == null) return; // Message invalide : ignoré sans erreur.
+    unawaited(HapticFeedback.lightImpact());
     markers.add(marker);
   }
-
-  void _onRoomDidUpdate() => _sortParticipants();
 
   // ── Telemetry ──
   void _startTelemetry() {
@@ -411,9 +453,8 @@ class RoomViewModel extends ChangeNotifier {
 
     final localIdentity = room.localParticipant?.identity;
     if (localIdentity != null) {
-      _refreshTrackTelemetry(localIdentity, localTelemetry);
+      _setTelemetryFor(localIdentity, localTelemetry);
     }
-    notifyListeners();
 
     _pushGlassesDisplay(heartRate);
   }
@@ -429,10 +470,16 @@ class RoomViewModel extends ChangeNotifier {
     }
     _lastGlassesDisplayTime = now;
 
-    // Use actual distance; calories only when a heart-rate sensor is present
+    // Use actual distance; calories estimated via Keytel formula when a heart-rate sensor is present
     final dist = _totalDistanceMiles;
     final kcal = heartRate != null
-        ? (heartRate * 0.05 * _simT / 60).round().clamp(0, 9999)
+        ? SportMetrics.estimateKcal(
+            bpm: heartRate.round(),
+            weightKg: 70,
+            ageYears: 30,
+            isMale: true,
+            durationSeconds: _simT.round(),
+          ).clamp(0, 9999)
         : 0;
 
     unawaited(
@@ -451,14 +498,17 @@ class RoomViewModel extends ChangeNotifier {
     _gpsSub?.cancel();
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (_disposed) return;
     if (!serviceEnabled) {
       debugPrint('⚠️ GPS: Location services are disabled');
       return;
     }
 
     LocationPermission permission = await Geolocator.checkPermission();
+    if (_disposed) return;
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
+      if (_disposed) return;
       if (permission == LocationPermission.denied) {
         debugPrint('⚠️ GPS: Location permission denied');
         return;
@@ -507,13 +557,21 @@ class RoomViewModel extends ChangeNotifier {
     _cscStatusSub?.cancel();
 
     _hrmSub = sensorService.heartRateStream.listen((bpm) {
+      if (_sensorHeartRate == bpm) return;
       _sensorHeartRate = bpm;
-      notifyListeners();
+      final localIdentity = _room?.localParticipant?.identity;
+      if (localIdentity != null) {
+        _setTelemetryFor(localIdentity, localTelemetry);
+      }
     });
 
     _cadenceSub = sensorService.cadenceStream.listen((rpm) {
+      if (_sensorCadence == rpm) return;
       _sensorCadence = rpm;
-      notifyListeners();
+      final localIdentity = _room?.localParticipant?.identity;
+      if (localIdentity != null) {
+        _setTelemetryFor(localIdentity, localTelemetry);
+      }
     });
 
     _hrmStatusSub = sensorService.hrmStatusStream.listen((status) {
@@ -527,17 +585,15 @@ class RoomViewModel extends ChangeNotifier {
 
   // ── BLE glasses ──
   void onBleConnected() {
+    unawaited(HapticFeedback.mediumImpact());
     _bleMetricsSub?.cancel();
     _bleMetricsSub = bleService.metricsStream.listen((data) {
       _bleMetrics = data;
-      notifyListeners();
     });
-    notifyListeners();
   }
 
   void onBleDisconnected() {
     _bleMetrics = null;
-    notifyListeners();
   }
 
   // ── Participant sorting ──
@@ -559,25 +615,18 @@ class RoomViewModel extends ChangeNotifier {
         }
         return;
       }
-
-      /*if (topic == 'posture' || map['type'] == 'posture') {
-        final posture = RemotePosture.tryParse(map);
-        if (posture != null) {
-          _remotePostures[participant.identity] = posture;
-          _sortParticipants();
-        }
-        return;
-      }*/
     } catch (error) {
       debugPrint('⚠️ Invalid incoming data: $error');
     }
   }
 
   void _updateRemoteTelemetry(String identity, RemoteTelemetry telemetry) {
+    final prevRole = _remoteTelemetry[identity]?.role;
     _remoteTelemetry[identity] = telemetry;
-    _refreshTrackTelemetry(identity, telemetry);
-    _updatePoseDestinations();
-    notifyListeners();
+    _setTelemetryFor(identity, telemetry);
+    if (prevRole != telemetry.role) {
+      _updatePoseDestinations();
+    }
   }
 
   /// Le squelette ne part qu'aux viewers (rôle coach) déjà identifiés.
@@ -591,22 +640,19 @@ class RoomViewModel extends ChangeNotifier {
     poseViewModel.setDestinationIdentities(coaches);
   }
 
-  void _refreshTrackTelemetry(String identity, RemoteTelemetry telemetry) {
-    for (final track in _participantTracks) {
-      if (track.type == ParticipantTrackType.kUserMedia &&
-          track.participant.identity == identity) {
-        track.telemetry = telemetry;
-      }
-    }
+  bool _isDisplayable(Participant p) {
+    if (p.kind == ParticipantKind.AGENT) return false;
+    if (p.kind != ParticipantKind.STANDARD) return false;
+    return p.permissions.canPublish;
   }
 
   void _sortParticipants() {
     final room = _room;
-    if (room == null) return;
+    if (room == null || _disposed) return;
 
     final activeIdentities = <String>{
       if (room.localParticipant != null) room.localParticipant!.identity,
-      ...room.remoteParticipants.values.map((p) => p.identity),
+      ...room.remoteParticipants.values.where(_isDisplayable).map((p) => p.identity),
     };
     _remotePostures.removeWhere(
       (identity, _) => !activeIdentities.contains(identity),
@@ -615,7 +661,9 @@ class RoomViewModel extends ChangeNotifier {
     final userMediaTracks = <ParticipantTrack>[];
     final screenTracks = <ParticipantTrack>[];
 
-    for (var participant in room.remoteParticipants.values) {
+    for (var participant
+    in room.remoteParticipants.values.where(_isDisplayable)) {
+      var hasUserMediaVideo = false;
       for (var t in participant.videoTrackPublications) {
         if (t.isScreenShare) {
           screenTracks.add(ParticipantTrack(
@@ -623,14 +671,21 @@ class RoomViewModel extends ChangeNotifier {
             type: ParticipantTrackType.kScreenShare,
           ));
         } else {
+          hasUserMediaVideo = true;
           userMediaTracks.add(ParticipantTrack(
             participant: participant,
-            //posture: _remotePostures[participant.identity],
             telemetry: _remoteTelemetry[participant.identity],
-            //showPosture: _showPosePip && isPostureVisible(participant.identity),
-            //onTogglePosture: () => togglePostureVisibility(participant.identity),
+            telemetryListenable: _telemetryNotifierFor(participant.identity),
           ));
         }
+      }
+      if (!hasUserMediaVideo) {
+        userMediaTracks.add(ParticipantTrack(
+          participant: participant,
+          type: ParticipantTrackType.kUserMedia,
+          telemetry: _remoteTelemetry[participant.identity],
+          telemetryListenable: _telemetryNotifierFor(participant.identity),
+        ));
       }
     }
 
@@ -645,34 +700,101 @@ class RoomViewModel extends ChangeNotifier {
           b.participant.joinedAt.millisecondsSinceEpoch;
     });
 
-    final localTracks = room.localParticipant?.videoTrackPublications;
-    if (localTracks != null) {
+    final localParticipant = room.localParticipant;
+    if (localParticipant != null) {
+      final localTracks = localParticipant.videoTrackPublications;
+      final localTel = localTelemetry;
+      final localTelNotifier = _telemetryNotifierFor(localParticipant.identity);
+      if (!localTel.equalValues(localTelNotifier.value)) {
+        localTelNotifier.value = localTel;
+      }
+      var hasLocalUserMedia = false;
       for (var t in localTracks) {
         if (t.isScreenShare) {
           screenTracks.add(ParticipantTrack(
-            participant: room.localParticipant!,
+            participant: localParticipant,
             type: ParticipantTrackType.kScreenShare,
           ));
         } else {
+          hasLocalUserMedia = true;
           userMediaTracks.add(ParticipantTrack(
-            participant: room.localParticipant!,
-            //posture: poseViewModel.currentPosture,
-            telemetry: localTelemetry,
+            participant: localParticipant,
+            telemetry: localTel,
+            telemetryListenable: localTelNotifier,
             poseListenable: poseViewModel.frameNotifier,
             markers: _role.isTrainee ? markerListenable : null,
-            showPosture: _showPosture,
+            showPosture: _showPostureNotifier.value,
+            showPostureListenable: _showPostureNotifier,
           ));
         }
       }
+      if (!hasLocalUserMedia) {
+        userMediaTracks.add(ParticipantTrack(
+          participant: localParticipant,
+          type: ParticipantTrackType.kUserMedia,
+          telemetry: localTel,
+          telemetryListenable: localTelNotifier,
+          poseListenable: poseViewModel.frameNotifier,
+          markers: _role.isTrainee ? markerListenable : null,
+          showPosture: _showPostureNotifier.value,
+          showPostureListenable: _showPostureNotifier,
+        ));
+      }
     }
 
-    _participantTracks = [...screenTracks, ...userMediaTracks];
-    notifyListeners();
+    final nextTracks = [...screenTracks, ...userMediaTracks];
+    final previousTracks = _participantTracks;
+    _participantTracks = nextTracks;
+
+    var selectionCleared = false;
+    if (_selectedPrimaryTrack != null &&
+        !_participantTracks.any(
+          (t) =>
+              t.participant.identity == _selectedPrimaryTrack!.identity &&
+              t.type == _selectedPrimaryTrack!.type,
+        )) {
+      _selectedPrimaryTrack = null;
+      selectionCleared = true;
+    }
+
+    if (selectionCleared || !_sameTrackList(previousTracks, nextTracks)) {
+      _notifySafe();
+    }
+  }
+
+  static bool _sameTrackList(
+    List<ParticipantTrack> a,
+    List<ParticipantTrack> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].participant.identity != b[i].participant.identity ||
+          a[i].type != b[i].type) {
+        return false;
+      }
+      final aPub = a[i]
+          .participant
+          .videoTrackPublications
+          .where((e) => e.source == a[i].type.lkVideoSourceType)
+          .firstOrNull;
+      final bPub = b[i]
+          .participant
+          .videoTrackPublications
+          .where((e) => e.source == b[i].type.lkVideoSourceType)
+          .firstOrNull;
+      if (aPub?.sid != bPub?.sid ||
+          aPub?.muted != bPub?.muted ||
+          (aPub?.track != null) != (bPub?.track != null)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // ── Cleanup ──
   @override
   void dispose() {
+    _disposed = true;
     unawaited(WakelockPlus.disable());
     CallForegroundService.setOnEndCall(null);
     unawaited(CallForegroundService.stop());
@@ -688,7 +810,11 @@ class RoomViewModel extends ChangeNotifier {
     poseViewModel.dispose();
     controlsViewModel.dispose();
     markers.dispose();
-    _room?.removeListener(_onRoomDidUpdate);
+    for (final notifier in _telemetryNotifiers.values) {
+      notifier.dispose();
+    }
+    _telemetryNotifiers.clear();
+    _showPostureNotifier.dispose();
     unawaited(_listener?.dispose());
     unawaited(_room?.dispose());
     super.dispose();

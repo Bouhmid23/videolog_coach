@@ -14,7 +14,6 @@ import 'package:flutter/foundation.dart'
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -291,6 +290,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   /// Runtime evidence: prints detector image-z and MediaPipe metric world-z
   /// ranges so the on-device configuration/output can be checked in logcat.
   void _logRuntimeLandmarks(Pose pose) {
+    if (!kDebugMode) return;
     final now = DateTime.now();
     if (now.difference(_lastRuntimeLandmarkLog) < const Duration(seconds: 2)) {
       return;
@@ -318,6 +318,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   /// Moyennes capture/détection/publication et débits sur la dernière seconde.
   /// `publishData/s` doit être égal au débit de `seq`.
   void _logStats() {
+    if (!kDebugMode) return;
     final now = DateTime.now();
     final elapsed = now.difference(_statsWindowStart);
     if (elapsed < const Duration(seconds: 1)) return;

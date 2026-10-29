@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
@@ -9,6 +11,17 @@ plugins {
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Load key properties for release signing
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
+// Support CI environment variables for passwords
+val envStorePass = System.getenv("KEYSTORE_PASSWORD") ?: keystoreProperties["storePassword"]
+val envKeyPass = System.getenv("KEY_PASSWORD") ?: keystoreProperties["keyPassword"]
 
 android {
     namespace = "com.opkodelabs.videolog_coach"
@@ -41,11 +54,22 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystoreProperties.isNotEmpty() || envStorePass != null) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = envKeyPass as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = envStorePass as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (keystoreProperties.isNotEmpty() || envStorePass != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }

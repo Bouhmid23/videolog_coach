@@ -32,6 +32,19 @@ class RemoteTelemetry {
       altitude != null ||
       bearing != null;
 
+  /// Compare les valeurs affichables (sans `receivedAt`) pour éviter de
+  /// redessiner le HUD quand un tick répète les mêmes mesures.
+  bool equalValues(RemoteTelemetry? other) =>
+      other != null &&
+      heartRate == other.heartRate &&
+      cadence == other.cadence &&
+      speed == other.speed &&
+      lat == other.lat &&
+      lng == other.lng &&
+      altitude == other.altitude &&
+      bearing == other.bearing &&
+      role == other.role;
+
   factory RemoteTelemetry.fromJson(
     Map<String, dynamic> json, {
     DateTime? receivedAt,

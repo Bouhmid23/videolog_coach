@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
 
+import 'theme.dart';
+
 extension LKExampleExt on BuildContext {
   //
   Future<bool?> showPublishDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Publish'),
-      content: const Text('Would you like to publish your Camera & Mic ?'),
+      title: const Text('Publier'),
+      content: const Text('Voulez-vous activer votre caméra et votre microphone ?'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('NO'),
+          child: const Text('Annuler'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('YES'),
+          child: const Text('Publier'),
         ),
       ],
     ),
@@ -23,16 +25,16 @@ extension LKExampleExt on BuildContext {
   Future<bool?> showPlayAudioManuallyDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Play Audio'),
-      content: const Text('You need to manually activate audio PlayBack for iOS Safari !'),
+      title: const Text('Activer le son'),
+      content: const Text('Vous devez activer manuellement la lecture audio sur iOS Safari.'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Ignore'),
+          child: const Text('Ignorer'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Play Audio'),
+          child: const Text('Activer'),
         ),
       ],
     ),
@@ -41,16 +43,16 @@ extension LKExampleExt on BuildContext {
   Future<bool?> showUnPublishDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('UnPublish'),
-      content: const Text('Would you like to un-publish your Camera & Mic ?'),
+      title: const Text('Arrêter la publication'),
+      content: const Text('Voulez-vous couper votre caméra et votre microphone ?'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('NO'),
+          child: const Text('Annuler'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('YES'),
+          child: const Text('Couper'),
         ),
       ],
     ),
@@ -59,12 +61,12 @@ extension LKExampleExt on BuildContext {
   Future<void> showErrorDialog(dynamic exception) => showDialog<void>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Error'),
+      title: const Text('Erreur'),
       content: Text(exception.toString()),
       actions: [
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx),
-          child: const Text('OK'),
+          child: const Text('Fermer'),
         )
       ],
     ),
@@ -73,16 +75,20 @@ extension LKExampleExt on BuildContext {
   Future<bool?> showDisconnectDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Disconnect'),
-      content: const Text('Are you sure to disconnect?'),
+      title: const Text('Quitter la session'),
+      content: const Text('Voulez-vous vraiment quitter la session en cours ?'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
+          child: const Text('Annuler'),
         ),
-        TextButton(
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: LKColors.danger,
+            foregroundColor: Colors.white,
+          ),
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Disconnect'),
+          child: const Text('Quitter'),
         ),
       ],
     ),
@@ -91,16 +97,16 @@ extension LKExampleExt on BuildContext {
   Future<bool?> showReconnectDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Reconnect'),
-      content: const Text('This will force a reconnection'),
+      title: const Text('Reconnexion'),
+      content: const Text('Cela va forcer une reconnexion à la session.'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
+          child: const Text('Annuler'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Reconnect'),
+          child: const Text('Reconnecter'),
         ),
       ],
     ),
@@ -109,10 +115,10 @@ extension LKExampleExt on BuildContext {
   Future<void> showReconnectSuccessDialog() => showDialog<void>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Reconnect'),
-      content: const Text('Reconnection was successful.'),
+      title: const Text('Reconnexion'),
+      content: const Text('La reconnexion a réussi.'),
       actions: [
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('OK'),
         ),
@@ -123,42 +129,32 @@ extension LKExampleExt on BuildContext {
   Future<bool?> showSendDataDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Send data'),
-      content: const Text('This will send a sample data to all participants in the room'),
+      title: const Text('Envoyer des données'),
+      content: const Text('Cela enverra un message de test à tous les participants.'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
+          child: const Text('Annuler'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Send'),
+          child: const Text('Envoyer'),
         ),
       ],
     ),
   );
 
-  /*Future<bool?> showDataReceivedDialog(String data) => showDialog<bool>(
-    context: this,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Received data'),
-      content: Text(data),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('OK'),
-        ),
-      ],
-    ),
-  );*/
-
   Future<bool?> showRecordingStatusChangedDialog(bool isActiveRecording) => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(
-      title: const Text('Room recording reminder'),
-      content: Text(isActiveRecording ? 'Room recording is active.' : 'Room recording is stoped.'),
+      title: const Text('Enregistrement de la session'),
+      content: Text(
+        isActiveRecording
+            ? 'L\'enregistrement de la session est actif.'
+            : 'L\'enregistrement de la session est arrêté.',
+      ),
       actions: [
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
           child: const Text('OK'),
         ),

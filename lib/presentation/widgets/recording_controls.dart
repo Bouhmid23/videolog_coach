@@ -1,15 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 
 import '../../core/recording_controller.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
 
-/// Contrôle compact d'enregistrement Egress, intégré à la barre d'infos du
-/// participant local. Il remplace les indicateurs Wi‑Fi/E2EE de cette tuile.
+/// Indicateur (et contrôle optionnel) d'enregistrement Egress.
+/// Le bouton d'action principal est désormais placé dans `ControlsWidget` (`controls.dart`).
 class RecordingControls extends StatelessWidget {
-  const RecordingControls({required this.controller, super.key});
+  const RecordingControls({
+    required this.controller,
+    this.showActions = false,
+    super.key,
+  });
 
   final RecordingController controller;
+  final bool showActions;
 
   @override
   Widget build(BuildContext context) {
@@ -18,17 +26,18 @@ class RecordingControls extends StatelessWidget {
       builder: (context, _) {
         final isActive = controller.isRecording;
         final isPending = controller.isPending;
-        final visible =
-            controller.canControl ||
-            isActive ||
-            isPending ||
-            controller.loading;
+        final visible = showActions
+            ? (controller.canControl ||
+                  isActive ||
+                  isPending ||
+                  controller.loading)
+            : (isActive || isPending || controller.loading);
         if (!visible) return const SizedBox.shrink();
 
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (controller.error != null) ...[
+            if (showActions && controller.error != null) ...[
               _errorButton(context),
               SizedBox(width: UIUtils.xs),
             ],
@@ -54,7 +63,7 @@ class RecordingControls extends StatelessWidget {
                     ? LKColors.warning
                     : LKColors.textSecondary,
               ),
-              if (controller.pendingTimedOut)
+              if (showActions && controller.pendingTimedOut)
                 IconButton(
                   onPressed: () => controller.load(),
                   icon: const Icon(Icons.refresh_rounded, size: 18),
@@ -67,7 +76,7 @@ class RecordingControls extends StatelessWidget {
                     minHeight: 28,
                   ),
                 ),
-            ] else if (controller.state == null) ...[
+            ] else if (showActions && controller.state == null) ...[
               _RecordingPill(
                 label: 'État indisponible',
                 color: LKColors.warning,
@@ -87,9 +96,9 @@ class RecordingControls extends StatelessWidget {
                 color: LKColors.danger,
                 icon: Icons.fiber_manual_record_rounded,
               ),
-              if (controller.canControl)
+              if (showActions && controller.canControl)
                 IconButton(
-                  onPressed: () => _stop(context),
+                  onPressed: () => stopWithFeedback(context, controller),
                   icon: const Icon(Icons.stop_circle_rounded, size: 21),
                   color: LKColors.danger,
                   tooltip: 'Arrêter l\'enregistrement',
@@ -100,11 +109,11 @@ class RecordingControls extends StatelessWidget {
                     minHeight: 28,
                   ),
                 ),
-            ] else if (controller.canControl) ...[
+            ] else if (showActions && controller.canControl) ...[
               if (controller.state?.status == 'failed') ...[
                 _RecordingPill(label: 'Échec', color: LKColors.danger),
                 IconButton(
-                  onPressed: () => _showServerFailure(context),
+                  onPressed: () => showServerFailureDialog(context, controller),
                   icon: const Icon(Icons.error_outline_rounded, size: 17),
                   color: LKColors.danger,
                   tooltip: 'Voir la raison de l\'échec',
@@ -118,7 +127,8 @@ class RecordingControls extends StatelessWidget {
               ],
               PopupMenuButton<String>(
                 tooltip: 'Démarrer l\'enregistrement',
-                onSelected: (layout) => _start(context, layout),
+                onSelected: (layout) =>
+                    startWithFeedback(context, controller, layout),
                 color: LKColors.surfaceElevated,
                 itemBuilder: (context) => const [
                   PopupMenuItem(value: 'grid', child: Text('Grille')),
@@ -148,7 +158,12 @@ class RecordingControls extends StatelessWidget {
     );
   }
 
-  Future<void> _start(BuildContext context, String layout) async {
+  static Future<void> startWithFeedback(
+    BuildContext context,
+    RecordingController controller,
+    String layout,
+  ) async {
+    unawaited(HapticFeedback.mediumImpact());
     debugPrint(
       '[Recording UI] start requested layout=$layout '
       'canStart=${controller.canStart} canControl=${controller.canControl} '
@@ -186,10 +201,14 @@ class RecordingControls extends StatelessWidget {
       'status=${controller.state?.rawStatus} error=${controller.error} '
       'block=${controller.startBlockReason}',
     );
-    _showResult(context, message, isError: operationFailed);
+    _showResult(context, controller, message, isError: operationFailed);
   }
 
-  Future<void> _stop(BuildContext context) async {
+  static Future<void> stopWithFeedback(
+    BuildContext context,
+    RecordingController controller,
+  ) async {
+    unawaited(HapticFeedback.mediumImpact());
     debugPrint(
       '[Recording UI] stop requested canStop=${controller.canStop} '
       'canControl=${controller.canControl} loading=${controller.loading} '
@@ -224,10 +243,13 @@ class RecordingControls extends StatelessWidget {
       'status=${controller.state?.rawStatus} error=${controller.error} '
       'block=${controller.stopBlockReason}',
     );
-    _showResult(context, message, isError: operationFailed);
+    _showResult(context, controller, message, isError: operationFailed);
   }
 
-  void _showTransient(ScaffoldMessengerState messenger, String message) {
+  static void _showTransient(
+    ScaffoldMessengerState messenger,
+    String message,
+  ) {
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -240,8 +262,9 @@ class RecordingControls extends StatelessWidget {
       );
   }
 
-  void _showResult(
+  static void _showResult(
     BuildContext context,
+    RecordingController controller,
     String message, {
     required bool isError,
   }) {
@@ -258,7 +281,7 @@ class RecordingControls extends StatelessWidget {
               ? SnackBarAction(
                   label: 'Détails',
                   onPressed: () {
-                    if (context.mounted) _showError(context);
+                    if (context.mounted) showErrorDialog(context, controller);
                   },
                 )
               : null,
@@ -271,7 +294,7 @@ class RecordingControls extends StatelessWidget {
       message: controller.error!,
       preferBelow: false,
       child: IconButton(
-        onPressed: () => _showError(context),
+        onPressed: () => showErrorDialog(context, controller),
         icon: const Icon(Icons.error_outline_rounded, size: 17),
         color: LKColors.danger,
         padding: EdgeInsets.zero,
@@ -281,7 +304,10 @@ class RecordingControls extends StatelessWidget {
     );
   }
 
-  void _showError(BuildContext context) {
+  static void showErrorDialog(
+    BuildContext context,
+    RecordingController controller,
+  ) {
     final error = controller.error;
     if (error == null) return;
     final diagnostic = controller.pendingDiagnosticMessage;
@@ -311,7 +337,10 @@ class RecordingControls extends StatelessWidget {
     );
   }
 
-  void _showServerFailure(BuildContext context) {
+  static void showServerFailureDialog(
+    BuildContext context,
+    RecordingController controller,
+  ) {
     final detail = controller.state?.error;
     showDialog<void>(
       context: context,

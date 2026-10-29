@@ -24,7 +24,7 @@
 
     <application
         android:usesCleartextTraffic="true"
-        android:label="Videolog Coach"
+        android:label="Videolog OnAir"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

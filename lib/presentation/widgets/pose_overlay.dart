@@ -111,12 +111,14 @@ class _PoseOverlayState extends State<PoseOverlay>
           builder: (context, _) {
             final pose = _animation.currentPose;
             if (pose == null) return const SizedBox.shrink();
-            return CustomPaint(
-              painter: _PoseSkeletonPainter(
-                pose: pose,
-                frameSize: frame.frameSize,
-                fit: widget.fit,
-                mirrorX: widget.mirrorX,
+            return RepaintBoundary(
+              child: CustomPaint(
+                painter: _PoseSkeletonPainter(
+                  pose: pose,
+                  frameSize: frame.frameSize,
+                  fit: widget.fit,
+                  mirrorX: widget.mirrorX,
+                ),
               ),
             );
           },
@@ -140,6 +142,42 @@ class _PoseSkeletonPainter extends CustomPainter {
     for (final bone in HumanSkeletonBones.standardBones) ...[bone.from, bone.to],
   };
 
+  /// Table de couleur précalculée par `LandmarkType.index` (évite `name.startsWith` à 60 Hz).
+  static final List<Color> _landmarkColors = List<Color>.generate(
+    LandmarkType.values.length,
+    (index) {
+      final name = LandmarkType.values[index].name;
+      if (name.startsWith('left')) return LKColors.logoLight;
+      if (name.startsWith('right')) return LKColors.logoBlue;
+      return LKColors.primary;
+    },
+    growable: false,
+  );
+
+  // Objets Paint réutilisés à chaque frame (zéro allocation GC dans la boucle).
+  static final Paint _boneGlowPaint = Paint()
+    ..strokeCap = StrokeCap.round
+    ..isAntiAlias = true;
+  static final Paint _boneOutlinePaint = Paint()
+    ..color = const Color(0xB807111F)
+    ..strokeCap = StrokeCap.round
+    ..isAntiAlias = true;
+  static final Paint _boneMainPaint = Paint()
+    ..strokeCap = StrokeCap.round
+    ..isAntiAlias = true;
+  static final Paint _boneCorePaint = Paint()
+    ..strokeCap = StrokeCap.round
+    ..isAntiAlias = true;
+  static final Paint _jointHaloPaint = Paint()..isAntiAlias = true;
+  static final Paint _jointBackPaint = Paint()
+    ..color = const Color(0xD107111F)
+    ..isAntiAlias = true;
+  static final Paint _jointRingPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.6
+    ..isAntiAlias = true;
+  static final Paint _jointCenterPaint = Paint()..isAntiAlias = true;
+
   const _PoseSkeletonPainter({
     required this.pose,
     required this.frameSize,
@@ -162,6 +200,9 @@ class _PoseSkeletonPainter extends CustomPainter {
     );
     if (sourceRect.width <= 0 || sourceRect.height <= 0) return;
 
+    final scaleX = destinationRect.width / sourceRect.width;
+    final scaleY = destinationRect.height / sourceRect.height;
+
     final points = <LandmarkType, Offset>{};
     final confidence = <LandmarkType, double>{};
     for (final entry in pose.points.entries) {
@@ -173,10 +214,8 @@ class _PoseSkeletonPainter extends CustomPainter {
       final x = mirrorX ? frameSize.width - entry.value.dx : entry.value.dx;
       final y = entry.value.dy;
       points[entry.key] = Offset(
-        destinationRect.left +
-            (x - sourceRect.left) / sourceRect.width * destinationRect.width,
-        destinationRect.top +
-            (y - sourceRect.top) / sourceRect.height * destinationRect.height,
+        destinationRect.left + (x - sourceRect.left) * scaleX,
+        destinationRect.top + (y - sourceRect.top) * scaleY,
       );
       confidence[entry.key] = visibility;
     }
@@ -193,102 +232,54 @@ class _PoseSkeletonPainter extends CustomPainter {
 
       final visibility = (0.68 + strength * 0.32).clamp(0.0, 1.0).toDouble();
       final width = (2.25 + strength * 0.5) * bone.widthMultiplier;
-      final colorFrom = _colorForLandmark(bone.from);
-      final colorTo = _colorForLandmark(bone.to);
-      final colorShader = ui.Gradient.linear(from, to, [colorFrom, colorTo]);
-      canvas.drawLine(
-        from,
-        to,
-        Paint()
-          ..color = Color.lerp(
-            colorFrom,
-            colorTo,
-            0.5,
-          )!.withValues(alpha: 0.28 * visibility)
-          ..strokeWidth = width + 3.8
-          ..strokeCap = StrokeCap.round
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0)
-          ..isAntiAlias = true,
-      );
-      canvas.drawLine(
-        from,
-        to,
-        Paint()
-          ..color = const Color(0xFF07111F).withValues(alpha: 0.72)
-          ..strokeWidth = width + 1.8
-          ..strokeCap = StrokeCap.round
-          ..isAntiAlias = true,
-      );
-      canvas.drawLine(
-        from,
-        to,
-        Paint()
-          ..shader = colorShader
-          ..color = Colors.white.withValues(alpha: visibility)
-          ..strokeWidth = width
-          ..strokeCap = StrokeCap.round
-          ..isAntiAlias = true,
-      );
-      canvas.drawLine(
-        from,
-        to,
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.42 * visibility)
-          ..strokeWidth = math.max(0.7, width * 0.22)
-          ..strokeCap = StrokeCap.round
-          ..isAntiAlias = true,
-      );
+      final colorFrom = _landmarkColors[bone.from.index];
+      final colorTo = _landmarkColors[bone.to.index];
+      final midColor = Color.lerp(colorFrom, colorTo, 0.5)!;
+
+      _boneGlowPaint
+        ..color = midColor.withValues(alpha: 0.22 * visibility)
+        ..strokeWidth = width + 4.2;
+      canvas.drawLine(from, to, _boneGlowPaint);
+
+      _boneOutlinePaint.strokeWidth = width + 1.8;
+      canvas.drawLine(from, to, _boneOutlinePaint);
+
+      _boneMainPaint
+        ..shader = colorFrom == colorTo
+            ? null
+            : ui.Gradient.linear(from, to, [colorFrom, colorTo])
+        ..color = colorFrom.withValues(alpha: visibility)
+        ..strokeWidth = width;
+      canvas.drawLine(from, to, _boneMainPaint);
+
+      _boneCorePaint
+        ..color = Colors.white.withValues(alpha: 0.42 * visibility)
+        ..strokeWidth = math.max(0.7, width * 0.22);
+      canvas.drawLine(from, to, _boneCorePaint);
     }
 
     // Un repère par point visible : les 33 (corps, visage, mains, pieds). Les points de
     // détail sont dessinés plus petits que les articulations principales.
-    final joints = points.keys.toList();
-    for (final type in joints) {
-      final point = points[type];
+    for (final entry in points.entries) {
+      final type = entry.key;
+      final point = entry.value;
       final strength = confidence[type] ?? 0.0;
-      if (point == null || strength < 0.28) continue;
-      final color = _colorForLandmark(type);
+      if (strength < 0.28) continue;
+      final color = _landmarkColors[type.index];
       final scale = _mainJoints.contains(type) ? 1.0 : 0.6;
       final visibility = (0.72 + strength * 0.28).clamp(0.0, 1.0).toDouble();
-      canvas.drawCircle(
-        point,
-        6.0 * scale,
-        Paint()
-          ..color = color.withValues(alpha: 0.38 * visibility)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0)
-          ..isAntiAlias = true,
-      );
-      canvas.drawCircle(
-        point,
-        4.0 * scale,
-        Paint()
-          ..color = const Color(0xFF07111F).withValues(alpha: 0.82)
-          ..isAntiAlias = true,
-      );
-      canvas.drawCircle(
-        point,
-        3.25 * scale,
-        Paint()
-          ..color = color.withValues(alpha: 0.96 * visibility)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6
-          ..isAntiAlias = true,
-      );
-      canvas.drawCircle(
-        point,
-        1.35 * scale,
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.94 * visibility)
-          ..isAntiAlias = true,
-      );
-    }
-  }
 
-  Color _colorForLandmark(LandmarkType type) {
-    final name = type.name;
-    if (name.startsWith('left')) return LKColors.logoLight;
-    if (name.startsWith('right')) return LKColors.logoBlue;
-    return LKColors.primary;
+      _jointHaloPaint.color = color.withValues(alpha: 0.26 * visibility);
+      canvas.drawCircle(point, 6.2 * scale, _jointHaloPaint);
+
+      canvas.drawCircle(point, 4.0 * scale, _jointBackPaint);
+
+      _jointRingPaint.color = color.withValues(alpha: 0.96 * visibility);
+      canvas.drawCircle(point, 3.25 * scale, _jointRingPaint);
+
+      _jointCenterPaint.color = Colors.white.withValues(alpha: 0.94 * visibility);
+      canvas.drawCircle(point, 1.35 * scale, _jointCenterPaint);
+    }
   }
 
   @override

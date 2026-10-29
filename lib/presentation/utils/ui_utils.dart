@@ -25,60 +25,60 @@ class UIUtils {
   // ============================================================================
   
   /// Espacements standard basés sur un système de 4px
-  static  double xs = 4.0;   // Extra Small
-  static  double sm = 8.0;   // Small
-  static  double md = 12.0;  // Medium
-  static  double lg = 16.0;  // Large
-  static  double xl = 20.0;  // Extra Large
-  static  double xxl = 24.0; // Extra Extra Large
-  static  double xxxl = 32.0; // Extra Extra Extra Large
+  static const double xs = 4.0;   // Extra Small
+  static const double sm = 8.0;   // Small
+  static const double md = 12.0;  // Medium
+  static const double lg = 16.0;  // Large
+  static const double xl = 20.0;  // Extra Large
+  static const double xxl = 24.0; // Extra Extra Large
+  static const double xxxl = 32.0; // Extra Extra Extra Large
 
   /// Paddings standard
-  static  EdgeInsets paddingXS = EdgeInsets.all(xs);
-  static  EdgeInsets paddingSM = EdgeInsets.all(sm);
-  static  EdgeInsets paddingMD = EdgeInsets.all(md);
-  static  EdgeInsets paddingLG = EdgeInsets.all(lg);
-  static  EdgeInsets paddingXL = EdgeInsets.all(xl);
-  static  EdgeInsets paddingXXL = EdgeInsets.all(xxl);
+  static const EdgeInsets paddingXS = EdgeInsets.all(xs);
+  static const EdgeInsets paddingSM = EdgeInsets.all(sm);
+  static const EdgeInsets paddingMD = EdgeInsets.all(md);
+  static const EdgeInsets paddingLG = EdgeInsets.all(lg);
+  static const EdgeInsets paddingXL = EdgeInsets.all(xl);
+  static const EdgeInsets paddingXXL = EdgeInsets.all(xxl);
 
   /// Paddings horizontaux/verticaux
-  static  EdgeInsets paddingHorizontalSM = EdgeInsets.symmetric(horizontal: sm);
-  static  EdgeInsets paddingHorizontalMD = EdgeInsets.symmetric(horizontal: md);
-  static  EdgeInsets paddingHorizontalLG = EdgeInsets.symmetric(horizontal: lg);
-  static  EdgeInsets paddingHorizontalXL = EdgeInsets.symmetric(horizontal: xl);
-  static  EdgeInsets paddingHorizontalXXL = EdgeInsets.symmetric(horizontal: xxl);
-  static  EdgeInsets paddingVerticalXS = EdgeInsets.symmetric(vertical: xs);
-  static  EdgeInsets paddingVerticalSM = EdgeInsets.symmetric(vertical: sm);
-  static  EdgeInsets paddingVerticalMD = EdgeInsets.symmetric(vertical: md);
-  static  EdgeInsets paddingVerticalLG = EdgeInsets.symmetric(vertical: lg);
+  static const EdgeInsets paddingHorizontalSM = EdgeInsets.symmetric(horizontal: sm);
+  static const EdgeInsets paddingHorizontalMD = EdgeInsets.symmetric(horizontal: md);
+  static const EdgeInsets paddingHorizontalLG = EdgeInsets.symmetric(horizontal: lg);
+  static const EdgeInsets paddingHorizontalXL = EdgeInsets.symmetric(horizontal: xl);
+  static const EdgeInsets paddingHorizontalXXL = EdgeInsets.symmetric(horizontal: xxl);
+  static const EdgeInsets paddingVerticalXS = EdgeInsets.symmetric(vertical: xs);
+  static const EdgeInsets paddingVerticalSM = EdgeInsets.symmetric(vertical: sm);
+  static const EdgeInsets paddingVerticalMD = EdgeInsets.symmetric(vertical: md);
+  static const EdgeInsets paddingVerticalLG = EdgeInsets.symmetric(vertical: lg);
 
   // ============================================================================
   // BORDURES (Border Radius)
   // ============================================================================
   
   /// Rayons de bordure standard
-  static  double borderRadiusSM = 8.0;
-  static  double borderRadiusMD = 12.0;
-  static  double borderRadiusLG = 16.0;
-  static  double borderRadiusXL = 20.0;
-  static  double borderRadiusFull = 100.0; // Pour les cercles
+  static const double borderRadiusSM = 8.0;
+  static const double borderRadiusMD = 12.0;
+  static const double borderRadiusLG = 16.0;
+  static const double borderRadiusXL = 20.0;
+  static const double borderRadiusFull = 100.0; // Pour les cercles
 
   /// BorderRadius standard
-  static  BorderRadius noBorderRadius = BorderRadius.only(topLeft: Radius.circular(borderRadiusXL),topRight: Radius.circular(borderRadiusXL));
-  static  BorderRadius borderRadiusAllSM = BorderRadius.all(Radius.circular(borderRadiusSM));
-  static  BorderRadius borderRadiusAllMD = BorderRadius.all(Radius.circular(borderRadiusMD));
-  static  BorderRadius borderRadiusAllLG = BorderRadius.all(Radius.circular(borderRadiusLG));
-  static  BorderRadius borderRadiusAllXL = BorderRadius.all(Radius.circular(borderRadiusXL));
-  static  BorderRadius borderRadiusAllFull = BorderRadius.all(Radius.circular(borderRadiusFull));
+  static const BorderRadius noBorderRadius = BorderRadius.only(topLeft: Radius.circular(borderRadiusXL),topRight: Radius.circular(borderRadiusXL));
+  static const BorderRadius borderRadiusAllSM = BorderRadius.all(Radius.circular(borderRadiusSM));
+  static const BorderRadius borderRadiusAllMD = BorderRadius.all(Radius.circular(borderRadiusMD));
+  static const BorderRadius borderRadiusAllLG = BorderRadius.all(Radius.circular(borderRadiusLG));
+  static const BorderRadius borderRadiusAllXL = BorderRadius.all(Radius.circular(borderRadiusXL));
+  static const BorderRadius borderRadiusAllFull = BorderRadius.all(Radius.circular(borderRadiusFull));
 
   /// BorderRadius pour les cartes
-  static  BorderRadius cardBorderRadius = BorderRadius.all(Radius.circular(borderRadiusLG));
+  static const BorderRadius cardBorderRadius = BorderRadius.all(Radius.circular(borderRadiusLG));
 
   /// BorderRadius pour les boutons
-  static  BorderRadius buttonBorderRadius = BorderRadius.all(Radius.circular(borderRadiusMD));
+  static const BorderRadius buttonBorderRadius = BorderRadius.all(Radius.circular(borderRadiusMD));
 
   /// BorderRadius pour les champs de texte
-  static  BorderRadius inputBorderRadius = BorderRadius.all(Radius.circular(borderRadiusMD));
+  static const BorderRadius inputBorderRadius = BorderRadius.all(Radius.circular(borderRadiusMD));
 
   // ============================================================================
   // OMBRES (Elevation System)
@@ -274,37 +274,51 @@ class UIUtils {
     String? hintText,
     IconData? prefixIcon,
     IconData? suffixIcon,
+    VoidCallback? onSuffixIconTap,
+    String? suffixTooltip,
     Widget? suffix,
   }) => InputDecoration(
     labelText: labelText,
     hintText: hintText,
     prefixIcon: prefixIcon != null ? Icon(prefixIcon, color: LKColors.textSecondary, size: 20) : null,
-    suffixIcon: suffixIcon != null ? Icon(suffixIcon, color: LKColors.textSecondary, size: 20) : null,
+    suffixIcon: suffixIcon != null
+        ? (onSuffixIconTap != null
+              ? IconButton(
+                  icon: Icon(
+                    suffixIcon,
+                    color: LKColors.textSecondary,
+                    size: 20,
+                  ),
+                  tooltip: suffixTooltip,
+                  onPressed: onSuffixIconTap,
+                )
+              : Icon(suffixIcon, color: LKColors.textSecondary, size: 20))
+        : null,
     suffix: suffix,
     filled: true,
     fillColor: LKColors.surface,
-    labelStyle:  TextStyle(color: LKColors.textSecondary, fontSize: 12),
-    hintStyle:  TextStyle(color: LKColors.textHint, fontSize: 12),
+    labelStyle: const TextStyle(color: LKColors.textSecondary, fontSize: 12),
+    hintStyle: const TextStyle(color: LKColors.textHint, fontSize: 12),
     prefixIconColor: LKColors.textSecondary,
     suffixIconColor: LKColors.textSecondary,
-    contentPadding:  EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-    enabledBorder: OutlineInputBorder(
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    enabledBorder: const OutlineInputBorder(
       borderRadius: inputBorderRadius,
-      borderSide:  BorderSide(color: LKColors.border, width: 1),
+      borderSide: BorderSide(color: LKColors.border, width: 1),
     ),
-    focusedBorder: OutlineInputBorder(
+    focusedBorder: const OutlineInputBorder(
       borderRadius: inputBorderRadius,
-      borderSide:  BorderSide(color: LKColors.primary, width: 1.4),
+      borderSide: BorderSide(color: LKColors.primary, width: 1.4),
     ),
-    errorBorder: OutlineInputBorder(
+    errorBorder: const OutlineInputBorder(
       borderRadius: inputBorderRadius,
-      borderSide:  BorderSide(color: LKColors.danger, width: 1),
+      borderSide: BorderSide(color: LKColors.danger, width: 1),
     ),
-    focusedErrorBorder: OutlineInputBorder(
+    focusedErrorBorder: const OutlineInputBorder(
       borderRadius: inputBorderRadius,
-      borderSide:  BorderSide(color: LKColors.danger, width: 1.4),
+      borderSide: BorderSide(color: LKColors.danger, width: 1.4),
     ),
-    border: OutlineInputBorder(
+    border: const OutlineInputBorder(
       borderRadius: inputBorderRadius,
     ),
   );
@@ -314,30 +328,30 @@ class UIUtils {
   // ============================================================================
   
   /// Couleur pour les états de succès
-  static  Color successColor = LKColors.success;
+  static const Color successColor = LKColors.success;
   
   /// Couleur pour les avertissements
-  static  Color warningColor = LKColors.warning;
+  static const Color warningColor = LKColors.warning;
   
   /// Couleur pour les erreurs
-  static  Color errorColor = LKColors.danger;
+  static const Color errorColor = LKColors.danger;
   
   /// Couleur pour les informations
-  static  Color infoColor = LKColors.primary;
+  static const Color infoColor = LKColors.primary;
 
   // ============================================================================
   // ANIMATIONS
   // ============================================================================
   
   /// Durée standard pour les animations
-  static  Duration animationDuration = Duration(milliseconds: 300);
-  static  Duration animationDurationSlow = Duration(milliseconds: 500);
-  static  Duration animationDurationFast = Duration(milliseconds: 200);
+  static const Duration animationDuration = Duration(milliseconds: 300);
+  static const Duration animationDurationSlow = Duration(milliseconds: 500);
+  static const Duration animationDurationFast = Duration(milliseconds: 200);
 
   /// Courbe d'animation standard
-  static  Curve animationCurve = Curves.easeOutCubic;
-  static  Curve animationCurveFast = Curves.easeOut;
-  static  Curve animationCurveBounce = Curves.easeOutBack;
+  static const Curve animationCurve = Curves.easeOutCubic;
+  static const Curve animationCurveFast = Curves.easeOut;
+  static const Curve animationCurveBounce = Curves.easeOutBack;
 
   // ============================================================================
   // UTILITAIRES DE COULEUR

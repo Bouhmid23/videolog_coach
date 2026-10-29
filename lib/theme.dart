@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 //
 // Flutter has a color profile issue so colors will look different
@@ -42,16 +41,19 @@ extension LKColors on Colors {
 class LiveKitTheme {
   const LiveKitTheme();
 
+  static const String fontFamily = 'TradeGothic';
+
   ThemeData buildThemeData(BuildContext ctx) {
-    final baseTextTheme =
-        GoogleFonts.montserratTextTheme(Theme.of(ctx).textTheme).apply(
-          displayColor: LKColors.textPrimary,
-          bodyColor: LKColors.textPrimary,
-          decorationColor: LKColors.textPrimary,
-        );
+    final baseTextTheme = Theme.of(ctx).textTheme.apply(
+      fontFamily: fontFamily,
+      displayColor: LKColors.textPrimary,
+      bodyColor: LKColors.textPrimary,
+      decorationColor: LKColors.textPrimary,
+    );
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: fontFamily,
       scaffoldBackgroundColor: LKColors.background,
       canvasColor: LKColors.background,
       cardColor: LKColors.surface,

@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
-
 import '../../core/api_service.dart';
 import '../../core/auth_service.dart';
 import '../../data/mobile_room.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
+import '../widgets/shimmer_skeleton.dart';
 
 class RoomsScreen extends StatefulWidget {
   const RoomsScreen({super.key});
@@ -16,7 +15,6 @@ class RoomsScreen extends StatefulWidget {
 }
 
 class _RoomsScreenState extends State<RoomsScreen> {
-  static final DateFormat _dateFormat = DateFormat('dd/MM HH:mm');
 
   List<MobileRoom> _rooms = const [];
   bool _loading = true;
@@ -73,14 +71,6 @@ class _RoomsScreenState extends State<RoomsScreen> {
     );
   }
 
-  String _relativeTime(DateTime date) {
-    final local = date.toLocal();
-    final diff = DateTime.now().difference(local);
-    if (diff.inMinutes < 1) return "à l'instant";
-    if (diff.inMinutes < 60) return 'il y a ${diff.inMinutes} min';
-    if (diff.inHours < 24) return 'il y a ${diff.inHours} h';
-    return 'le ${_dateFormat.format(local)}';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,11 +97,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
         shadowColor: Colors.transparent,
         actions: [
           IconButton(
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             onPressed: _loading ? null : () => _load(showSpinner: false),
             icon: UIUtils.textPrimaryIcon(Icons.refresh_rounded, size: 24),
             tooltip: 'Actualiser',
           ),
           IconButton(
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             onPressed: () => AuthService.instance.signOut(),
             icon: UIUtils.textPrimaryIcon(Icons.logout_rounded, size: 24),
             tooltip: 'Se déconnecter',
@@ -131,11 +123,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
 
   Widget _buildBody(BuildContext context) {
     if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(LKColors.primary),
-        ),
-      );
+      return const RoomsListSkeleton();
     }
 
     if (_error != null) {
@@ -397,7 +385,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
         : isLive
         ? LKColors.success
         : LKColors.primary;
-    final _ = isRecording
+    final stateLabel = isRecording
         ? 'Enregistrement'
         : room.isBusy
         ? room.recordingLabel
@@ -409,9 +397,6 @@ class _RoomsScreenState extends State<RoomsScreen> {
         : isLive
         ? Icons.sensors_rounded
         : Icons.videocam_rounded;
-    final updated = room.updatedAt == null
-        ? null
-        : 'Activité ${_relativeTime(room.updatedAt!)}';
 
     return Container(
       decoration: BoxDecoration(
@@ -444,9 +429,9 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    /*Container(
-                      width: 50,
-                      height: 50,
+                    Container(
+                      width: 48,
+                      height: 48,
                       decoration: BoxDecoration(
                         color: accent.withValues(alpha: 0.12),
                         borderRadius: UIUtils.borderRadiusAllLG,
@@ -456,10 +441,10 @@ class _RoomsScreenState extends State<RoomsScreen> {
                             ? Icons.fiber_manual_record_rounded
                             : Icons.videocam_rounded,
                         color: accent,
-                        size: 25,
+                        size: 24,
                       ),
                     ),
-                    SizedBox(width: UIUtils.md),*/
+                    SizedBox(width: UIUtils.md),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -473,7 +458,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          /*SizedBox(height: UIUtils.sm),
+                          SizedBox(height: UIUtils.sm),
                           Wrap(
                             spacing: UIUtils.sm,
                             runSpacing: UIUtils.xs,
@@ -486,22 +471,15 @@ class _RoomsScreenState extends State<RoomsScreen> {
                                 color: accent,
                                 emphasize: isLive || isRecording,
                               ),
-                              *//*_buildInfoPill(
+                              _buildInfoPill(
                                 context,
                                 icon: Icons.people_alt_rounded,
                                 label: room.participantCount == 0
                                     ? 'Aucun participant'
                                     : '${room.participantCount} participant${room.participantCount > 1 ? 's' : ''}',
-                              ),*//*
-                              if (room.canControlRecording)
-                                _buildInfoPill(
-                                  context,
-                                  icon: Icons.settings_remote_rounded,
-                                  label: 'Contrôle Egress',
-                                  color: LKColors.success,
-                                ),
+                              ),
                             ],
-                          ),*/
+                          ),
                         ],
                       ),
                     ),
@@ -509,7 +487,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
                 ),
                 SizedBox(height: UIUtils.md),
                 SizedBox(
-                  height: 46,
+                  height: 48,
                   child: FilledButton.icon(
                     onPressed: () => _openRoom(room),
                     icon: const Icon(Icons.login_rounded, size: 18),

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/auth_service.dart';
 import '../../theme.dart';
@@ -51,8 +50,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _busy = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('remember_me', _rememberMe);
+      await AuthService.instance.setRememberMe(_rememberMe);
       await AuthService.instance.signIn(email: email, password: password);
       if (mounted) context.go('/rooms');
     } catch (error) {
@@ -187,49 +185,62 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),*/
                                 SizedBox(height: UIUtils.xxl),
 
-                                // Email Field
-                                TextField(
-                                  controller: _emailCtrl,
-                                  keyboardType: TextInputType.emailAddress,
-                                  decoration: UIUtils.inputDecoration(
-                                    labelText: 'Email',
-                                    hintText: 'athlete@videolog.app',
-                                    prefixIcon: Icons.mail_outline_rounded,
-                                  ),
-                                  style: UIUtils.bodyLarge(context),
-                                  cursorColor: LKColors.primary,
-                                ),
-                                SizedBox(height: UIUtils.md),
+                                // Email & Password Fields (with Autofill)
+                                AutofillGroup(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      TextField(
+                                        controller: _emailCtrl,
+                                        keyboardType:
+                                            TextInputType.emailAddress,
+                                        textInputAction: TextInputAction.next,
+                                        autofillHints: const [
+                                          AutofillHints.email,
+                                          AutofillHints.username,
+                                        ],
+                                        decoration: UIUtils.inputDecoration(
+                                          labelText: 'Email',
+                                          hintText: 'athlete@videolog.app',
+                                          prefixIcon:
+                                              Icons.mail_outline_rounded,
+                                        ),
+                                        style: UIUtils.bodyLarge(context),
+                                        cursorColor: LKColors.primary,
+                                      ),
+                                      SizedBox(height: UIUtils.md),
 
-                                // Password Field
-                                TextField(
-                                  controller: _passwordCtrl,
-                                  obscureText: _obscurePassword,
-                                  decoration: UIUtils.inputDecoration(
-                                    labelText: 'Mot de passe',
-                                    hintText: 'Entrez votre mot de passe',
-                                    prefixIcon: Icons.lock_outline_rounded,
-                                    suffixIcon: _obscurePassword
-                                        ? Icons.visibility_outlined
-                                        : Icons.visibility_off_outlined,
-                                    /*suffix: IconButton(
-                                      icon: Icon(
-                                        _obscurePassword
-                                            ? Icons.visibility_outlined
-                                            : Icons.visibility_off_outlined,
-                                        color: LKColors.textSecondary,
-                                        size: 20,
+                                      TextField(
+                                        controller: _passwordCtrl,
+                                        obscureText: _obscurePassword,
+                                        textInputAction: TextInputAction.done,
+                                        autofillHints: const [
+                                          AutofillHints.password,
+                                        ],
+                                        onSubmitted: (_) {
+                                          if (!_busy) _login();
+                                        },
+                                        decoration: UIUtils.inputDecoration(
+                                          labelText: 'Mot de passe',
+                                          hintText: 'Entrez votre mot de passe',
+                                          prefixIcon:
+                                              Icons.lock_outline_rounded,
+                                          suffixIcon: _obscurePassword
+                                              ? Icons.visibility_outlined
+                                              : Icons.visibility_off_outlined,
+                                          suffixTooltip: _obscurePassword
+                                              ? 'Afficher le mot de passe'
+                                              : 'Masquer le mot de passe',
+                                          onSuffixIconTap: () => setState(
+                                            () => _obscurePassword =
+                                                !_obscurePassword,
+                                          ),
+                                        ),
+                                        style: UIUtils.bodyLarge(context),
+                                        cursorColor: LKColors.primary,
                                       ),
-                                      onPressed: () => setState(
-                                        () => _obscurePassword =
-                                            !_obscurePassword,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      visualDensity: VisualDensity.compact,
-                                    ),*/
+                                    ],
                                   ),
-                                  style: UIUtils.bodyLarge(context),
-                                  cursorColor: LKColors.primary,
                                 ),
                                 SizedBox(height: UIUtils.sm),
 

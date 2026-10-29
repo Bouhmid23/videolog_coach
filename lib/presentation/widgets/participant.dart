@@ -1,11 +1,12 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'dart:ui' as ui;
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:videolog_coach/presentation/widgets/participant_info.dart';
-import 'dart:async';
+
+import 'data_hud.dart';
+export 'data_hud.dart';
 
 import '../../core/recording_controller.dart';
 import '../../data/ball_marker.dart';
@@ -21,7 +22,7 @@ import 'no_video.dart';
 import 'pose_overlay.dart';
 import 'recording_controls.dart';
 
-/// Classe reprÃ©sentant une piste de participant avec ses donnÃ©es associÃ©es
+/// Classe représentant une piste de participant avec ses données associées
 abstract class ParticipantWidget extends StatefulWidget {
   static ParticipantWidget widgetFor(
     ParticipantTrack participantTrack, {
@@ -30,44 +31,45 @@ abstract class ParticipantWidget extends StatefulWidget {
     bool showDataHud = true,
     bool infoAtTop = false,
     RecordingController? recordingController,
+    VoidCallback? onTap,
   }) {
+    final key = ValueKey(
+      '${participantTrack.participant.identity}_${participantTrack.type.name}',
+    );
     if (participantTrack.participant is LocalParticipant) {
       return LocalParticipantWidget(
         participantTrack.participant as LocalParticipant,
         participantTrack.type,
         showStatsLayer,
-        //posture: participantTrack.posture,
+        key: key,
         telemetry: participantTrack.telemetry,
-        //pose: participantTrack.pose,
-        //poseFrameSize: participantTrack.poseFrameSize,
-        //avatarOnly: participantTrack.avatarOnly,
-        //showPosePip: participantTrack.showPosePip,
+        telemetryListenable: participantTrack.telemetryListenable,
         poseListenable: participantTrack.poseListenable,
         markers: participantTrack.markers,
         showPosture: participantTrack.showPosture,
+        showPostureListenable: participantTrack.showPostureListenable,
         poseAside: poseAside,
         showDataHud: showDataHud,
         infoAtTop: infoAtTop,
         recordingController: recordingController,
+        onTap: onTap,
       );
     } else if (participantTrack.participant is RemoteParticipant) {
       return RemoteParticipantWidget(
         participantTrack.participant as RemoteParticipant,
         participantTrack.type,
         showStatsLayer,
-        //posture: participantTrack.posture,
+        key: key,
         telemetry: participantTrack.telemetry,
-        //pose: participantTrack.pose,
-        //poseFrameSize: participantTrack.poseFrameSize,
-        //avatarOnly: participantTrack.avatarOnly,
-        //showPosePip: participantTrack.showPosePip,
+        telemetryListenable: participantTrack.telemetryListenable,
         poseListenable: participantTrack.poseListenable,
         markers: participantTrack.markers,
         showPosture: participantTrack.showPosture,
-        //onTogglePosture: participantTrack.onTogglePosture,
+        showPostureListenable: participantTrack.showPostureListenable,
         poseAside: poseAside,
         showDataHud: showDataHud,
         infoAtTop: infoAtTop,
+        onTap: onTap,
       );
     }
     throw UnimplementedError('Unknown participant type');
@@ -78,6 +80,7 @@ abstract class ParticipantWidget extends StatefulWidget {
   abstract final bool showStatsLayer;
   final RemotePosture? posture;
   final RemoteTelemetry? telemetry;
+  final ValueListenable<RemoteTelemetry?>? telemetryListenable;
   final ValueListenable<PoseFrame?>? poseListenable;
 
   /// Ballons du coach (topic LiveKit `marker`).
@@ -87,16 +90,19 @@ abstract class ParticipantWidget extends StatefulWidget {
   final bool avatarOnly;
   final bool showPosePip;
   final bool showPosture;
+  final ValueListenable<bool>? showPostureListenable;
   final bool poseAside;
   final bool showDataHud;
   final bool infoAtTop;
   final VoidCallback? onTogglePosture;
+  final VoidCallback? onTap;
   final VideoQuality quality;
   final RecordingController? recordingController;
 
   const ParticipantWidget({
     this.posture,
     this.telemetry,
+    this.telemetryListenable,
     this.markers,
     this.poseListenable,
     this.pose,
@@ -104,10 +110,12 @@ abstract class ParticipantWidget extends StatefulWidget {
     this.avatarOnly = false,
     this.showPosePip = true,
     this.showPosture = true,
+    this.showPostureListenable,
     this.poseAside = false,
     this.showDataHud = true,
     this.infoAtTop = false,
     this.onTogglePosture,
+    this.onTap,
     this.quality = VideoQuality.HIGH,
     this.recordingController,
     super.key,
@@ -129,6 +137,7 @@ class LocalParticipantWidget extends ParticipantWidget {
     this.showStatsLayer, {
     super.posture,
     super.telemetry,
+    super.telemetryListenable,
     super.poseListenable,
     super.markers,
     super.pose,
@@ -136,10 +145,12 @@ class LocalParticipantWidget extends ParticipantWidget {
     super.avatarOnly,
     super.showPosePip,
     super.showPosture,
+    super.showPostureListenable,
     super.poseAside,
     super.showDataHud,
     super.infoAtTop,
     super.recordingController,
+    super.onTap,
     super.key,
   });
 
@@ -162,6 +173,7 @@ class RemoteParticipantWidget extends ParticipantWidget {
     this.showStatsLayer, {
     super.posture,
     super.telemetry,
+    super.telemetryListenable,
     super.poseListenable,
     super.markers,
     super.pose,
@@ -169,10 +181,12 @@ class RemoteParticipantWidget extends ParticipantWidget {
     super.avatarOnly,
     super.showPosePip,
     super.showPosture,
+    super.showPostureListenable,
     super.onTogglePosture,
     super.poseAside,
     super.showDataHud,
     super.infoAtTop,
+    super.onTap,
     super.key,
   });
 
@@ -180,7 +194,7 @@ class RemoteParticipantWidget extends ParticipantWidget {
   State<StatefulWidget> createState() => _RemoteParticipantWidgetState();
 }
 
-/// Ã‰tat partagÃ© pour tous les widgets de participant
+/// État partagé pour tous les widgets de participant
 abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     extends State<T>
     with SingleTickerProviderStateMixin {
@@ -190,6 +204,14 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   TrackPublication? get videoPublication;
   TrackPublication? get audioPublication;
   bool get isScreenShare => widget.type == ParticipantTrackType.kScreenShare;
+
+  String? _activeVideoTrackSid;
+  bool? _videoMuted;
+  bool? _audioAvailable;
+  bool? _isSpeaking;
+  ConnectionQuality? _connectionQuality;
+  String? _participantName;
+  final ValueNotifier<Size?> _poseFrameSizeNotifier = ValueNotifier<Size?>(null);
 
   /// Le renderer LiveKit miroite la caméra frontale locale. Le squelette doit
   /// suivre exactement le même miroir pour rester aligné sur l'image affichée.
@@ -211,14 +233,15 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   /// l'image affichée (portrait). Les dimensions publiées par LiveKit sont toujours annoncées
   /// en paysage (640×480) : elles ne servent qu'en repli, remises dans le sens de l'écran.
   Size? get _videoFrameSize {
-    final poseSize = widget.poseListenable?.value?.frameSize;
+    final poseSize = _poseFrameSizeNotifier.value ??
+        widget.poseListenable?.value?.frameSize;
     if (poseSize != null && !poseSize.isEmpty) return poseSize;
 
     final published = _publishedFrameSize();
     if (published == null) return null;
     return orientFrameToScreen(
       published,
-      portraitScreen: MediaQuery.of(context).orientation == Orientation.portrait,
+      portraitScreen: MediaQuery.orientationOf(context) == Orientation.portrait,
     );
   }
 
@@ -252,8 +275,6 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     return null;
   }
 
-  EventsListener<ParticipantEvent>? _listener;
-
   // Animation pour l'apparition
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
@@ -262,8 +283,9 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   @override
   void initState() {
     super.initState();
-    _listener = widget.participant.createListener();
     widget.participant.addListener(_onParticipantChanged);
+    widget.poseListenable?.addListener(_onPoseFrameChanged);
+    _poseFrameSizeNotifier.value = widget.poseListenable?.value?.frameSize;
 
     // Initialiser les animations
     _animationController = AnimationController(
@@ -281,29 +303,75 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
       curve: Curves.easeIn,
     );
 
-    // DÃ©marrer l'animation
+    // Démarrer l'animation
     _animationController.forward();
 
-    _onParticipantChanged();
+    _syncSnapshot();
   }
 
   @override
   void dispose() {
     widget.participant.removeListener(_onParticipantChanged);
+    widget.poseListenable?.removeListener(_onPoseFrameChanged);
+    _poseFrameSizeNotifier.dispose();
     _animationController.dispose();
-    unawaited(_listener?.dispose());
     super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant T oldWidget) {
-    oldWidget.participant.removeListener(_onParticipantChanged);
-    widget.participant.addListener(_onParticipantChanged);
-    _onParticipantChanged();
+    if (oldWidget.participant != widget.participant) {
+      oldWidget.participant.removeListener(_onParticipantChanged);
+      widget.participant.addListener(_onParticipantChanged);
+    }
+    if (oldWidget.poseListenable != widget.poseListenable) {
+      oldWidget.poseListenable?.removeListener(_onPoseFrameChanged);
+      widget.poseListenable?.addListener(_onPoseFrameChanged);
+      _onPoseFrameChanged();
+    }
+    _syncSnapshot();
     super.didUpdateWidget(oldWidget);
   }
 
-  void _onParticipantChanged() => setState(() {});
+  void _onPoseFrameChanged() {
+    final size = widget.poseListenable?.value?.frameSize;
+    if (size != _poseFrameSizeNotifier.value) {
+      _poseFrameSizeNotifier.value = size;
+    }
+  }
+
+  bool _syncSnapshot() {
+    final nextVideoSid = videoPublication?.sid;
+    final nextVideoMuted = activeVideoTrack?.muted ?? videoPublication?.muted;
+    final nextAudioAvailable =
+        audioPublication?.muted == false &&
+        audioPublication?.subscribed == true;
+    final nextSpeaking = widget.participant.isSpeaking;
+    final nextQuality = widget.participant.connectionQuality;
+    final nextName = widget.participant.name;
+
+    final changed =
+        nextVideoSid != _activeVideoTrackSid ||
+        nextVideoMuted != _videoMuted ||
+        nextAudioAvailable != _audioAvailable ||
+        nextSpeaking != _isSpeaking ||
+        nextQuality != _connectionQuality ||
+        nextName != _participantName;
+
+    _activeVideoTrackSid = nextVideoSid;
+    _videoMuted = nextVideoMuted;
+    _audioAvailable = nextAudioAvailable;
+    _isSpeaking = nextSpeaking;
+    _connectionQuality = nextQuality;
+    _participantName = nextName;
+    return changed;
+  }
+
+  void _onParticipantChanged() {
+    if (_syncSnapshot() && mounted) {
+      setState(() {});
+    }
+  }
 
   List<Widget> extraWidgets(bool isScreenShare) => [];
 
@@ -353,71 +421,97 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     return Stack(
       children: [
         // 1. FLUX VIDEO PRINCIPAL
-        InkWell(
-          onTap: () => setState(() => _visible = !_visible),
-          borderRadius: UIUtils.borderRadiusAllLG,
-          hoverColor: Colors.transparent,
-          highlightColor: Colors.transparent,
-          child: activeVideoTrack != null && !activeVideoTrack!.muted
-              ? VideoTrackRenderer(
-                  renderMode: VideoRenderMode.auto,
-                  activeVideoTrack!,
-                  fit: VideoViewFit.cover,
-                )
-              : NoVideoWidget(
-                  state: isScreenShare
-                      ? NoVideoState.screenShare
-                      : (activeVideoTrack?.muted == true
+        Positioned.fill(
+          child: RepaintBoundary(
+            child: activeVideoTrack != null && !activeVideoTrack!.muted
+                ? VideoTrackRenderer(
+                    renderMode: VideoRenderMode.auto,
+                    activeVideoTrack!,
+                    fit: VideoViewFit.cover,
+                  )
+                : NoVideoWidget(
+                    state: isScreenShare
+                        ? NoVideoState.screenShare
+                        : (activeVideoTrack?.muted == true ||
+                                videoPublication?.muted == true
                             ? NoVideoState.videoMuted
-                            : NoVideoState.noVideo),
-                  participantName: widget.participant.name.isNotEmpty
-                      ? displayNameForIdentity(widget.participant.name)
-                      : null,
-                ),
+                            : NoVideoState.videoDisabled),
+                    participantName: widget.participant.name.isNotEmpty
+                        ? displayNameForIdentity(widget.participant.name)
+                        : displayNameForIdentity(widget.participant.identity),
+                  ),
+          ),
         ),
 
-        // 2. Squelette de posture (pose locale)
-        if (widget.showPosture && widget.poseListenable != null)
+        // 2. Squelette de posture (pose locale) — reconstruit uniquement l'overlay
+        if (widget.poseListenable != null)
           Positioned.fill(
-            child: ValueListenableBuilder<PoseFrame?>(
-              valueListenable: widget.poseListenable!,
-              builder: (context, frame, _) =>
-                  PoseOverlay(frame: frame, mirrorX: _mirrorVideo),
+            child: RepaintBoundary(
+              child: widget.showPostureListenable != null
+                  ? ValueListenableBuilder<bool>(
+                      valueListenable: widget.showPostureListenable!,
+                      builder: (context, showPosture, _) {
+                        if (!showPosture) return const SizedBox.shrink();
+                        return ValueListenableBuilder<PoseFrame?>(
+                          valueListenable: widget.poseListenable!,
+                          builder: (context, frame, _) =>
+                              PoseOverlay(frame: frame, mirrorX: _mirrorVideo),
+                        );
+                      },
+                    )
+                  : widget.showPosture
+                  ? ValueListenableBuilder<PoseFrame?>(
+                      valueListenable: widget.poseListenable!,
+                      builder: (context, frame, _) =>
+                          PoseOverlay(frame: frame, mirrorX: _mirrorVideo),
+                    )
+                  : const SizedBox.shrink(),
             ),
           ),
 
         // 3. Ballons du coach : uniquement sur la vidéo locale du sportif.
+        // N'écoute que les changements de taille de frame (pas chaque pose à 30 fps).
         if (widget.participant is LocalParticipant &&
             !isScreenShare &&
             widget.markers != null)
           Positioned.fill(
-            // Reconstruit à chaque pose : la taille d'image du squelette arrive après le premier
-            // rendu, et le ballon doit s'y aligner dès qu'elle est connue.
-            child: widget.poseListenable == null
-                ? MarkerOverlay(
-                    markers: widget.markers!,
-                    frameSize: _videoFrameSize,
-                    mirrorX: _mirrorVideo,
-                  )
-                : ValueListenableBuilder<PoseFrame?>(
-                    valueListenable: widget.poseListenable!,
-                    builder: (context, _, __) => MarkerOverlay(
-                      markers: widget.markers!,
-                      frameSize: _videoFrameSize,
-                      mirrorX: _mirrorVideo,
-                    ),
-                  ),
+            child: RepaintBoundary(
+              child: ValueListenableBuilder<Size?>(
+                valueListenable: _poseFrameSizeNotifier,
+                builder: (context, _, _) => MarkerOverlay(
+                  markers: widget.markers!,
+                  frameSize: _videoFrameSize,
+                  mirrorX: _mirrorVideo,
+                ),
+              ),
+            ),
           ),
 
-        // 3. Barre d'identite et valeurs du participant principal
+        // 4. Couche de détection du clic AU-DESSUS de VideoTrackRenderer
+        // (sur mobile, LocalVideoTrack embarque un GestureDetector interne dans
+        // livekit_client qui volerait sinon les clics placés en parent).
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onTap ?? () => setState(() => _visible = !_visible),
+          ),
+        ),
+
+        // 5. Barre d'identité et valeurs du participant principal
         Align(
           alignment: widget.infoAtTop
               ? Alignment.topCenter
               : Alignment.bottomCenter,
-          child: _buildParticipantInfo(isScreenShare),
+          child: widget.onTap != null && !widget.infoAtTop
+              ? GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onTap,
+                  child: _buildParticipantInfo(isScreenShare),
+                )
+              : _buildParticipantInfo(isScreenShare),
         ),
 
-        // 5. Widgets supplÃ©mentaires (pour les participants distants)
+        // 6. Widgets supplémentaires (pour les participants distants)
         ...extraWidgets(isScreenShare),
       ],
     );
@@ -436,6 +530,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
         titleContent: usePrimaryDataHud
             ? DataHud(
                 telemetry: widget.telemetry,
+                telemetryListenable: widget.telemetryListenable,
                 showValues: true,
                 transparent: true,
                 compact: true,
@@ -460,15 +555,15 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
       info = AnimatedBuilder(
         animation: controller,
         builder: (context, _) {
-          final showRecording =
-              controller.canControl ||
+          final showRecordingBadge =
               controller.isRecording ||
-              controller.isPending;
+              controller.isPending ||
+              controller.loading;
           return buildInfo(
-            trailing: showRecording
-                ? RecordingControls(controller: controller)
+            trailing: showRecordingBadge
+                ? RecordingControls(controller: controller, showActions: false)
                 : null,
-            showConnectionStatus: !showRecording,
+            showConnectionStatus: true,
           );
         },
       );
@@ -484,258 +579,6 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
 
     if (!widget.infoAtTop) return content;
     return SafeArea(bottom: false, child: content);
-  }
-}
-
-class DataHud extends StatefulWidget {
-  final RemoteTelemetry? telemetry;
-  final bool showValues;
-  final bool transparent;
-  final bool compact;
-  final bool showToggle;
-
-  const DataHud({
-    this.telemetry,
-    this.showValues = true,
-    this.transparent = false,
-    this.compact = false,
-    this.showToggle = true,
-    super.key,
-  });
-
-  @override
-  State<DataHud> createState() => _DataHudState();
-}
-
-class _DataHudState extends State<DataHud> {
-  bool _expanded = true;
-  static const double _compactWidth = 320;
-
-  List<(IconData, Color, String, String)> _buildItems() {
-    final items = <(IconData, Color, String, String)>[];
-    final telemetry = widget.telemetry;
-    if (telemetry == null) return items;
-
-    if (telemetry.hasHrm) {
-      items.add((
-        Icons.favorite_rounded,
-        LKColors.danger,
-        '${telemetry.heartRate} bpm',
-        '',
-      ));
-    }
-    if (telemetry.speed != null) {
-      items.add((
-        Icons.speed_rounded,
-        LKColors.warning,
-        '${telemetry.speed!.toStringAsFixed(1)} km/h',
-        '',
-      ));
-    }
-    if (telemetry.cadence != null) {
-      items.add((
-        Icons.pedal_bike_rounded,
-        LKColors.success,
-        '${telemetry.cadence!.toStringAsFixed(0)} rpm',
-        '',
-      ));
-    }
-    if (telemetry.altitude != null) {
-      items.add((
-        Icons.height_rounded,
-        LKColors.secondary,
-        '${telemetry.altitude!.toStringAsFixed(0)} m',
-        '',
-      ));
-    }
-    if (telemetry.bearing != null) {
-      items.add((
-      Icons.explore_rounded,
-      LKColors.warning,
-      '${telemetry.bearing!.toStringAsFixed(0)} deg',
-      '',
-      ));
-    }
-    if (telemetry.lat != null || telemetry.lng != null) {
-      items.add((
-        Icons.location_on_rounded,
-        LKColors.primary,
-        'Position',
-        '',
-      ));
-    }
-
-    return items;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = _buildItems();
-    if (items.isEmpty) {
-      if (!widget.transparent) return const SizedBox.shrink();
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(
-            Icons.sensors_off_rounded,
-            size: 13,
-            color: LKColors.textHint,
-          ),
-          const SizedBox(width: 5),
-          Text(
-            'Aucune donnée capteur',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: LKColors.textHint,
-              fontSize: 9,
-            ),
-          ),
-        ],
-      );
-    }
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = widget.compact || constraints.maxWidth < _compactWidth;
-        final content = Wrap(
-          spacing: compact ? UIUtils.xs : UIUtils.sm,
-          runSpacing: compact ? 0 : UIUtils.xs,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            for (final item in items)
-              _HudChip(
-                icon: item.$1,
-                color: item.$2,
-                text: widget.showValues ? item.$3 : item.$4,
-                compact: compact,
-                transparent: widget.transparent,
-              ),
-            if (widget.showToggle && !compact && !widget.transparent)
-              _HudChip(
-                icon: _expanded
-                    ? Icons.unfold_less_rounded
-                    : Icons.unfold_more_rounded,
-                color: LKColors.textSecondary,
-                text: _expanded ? 'Reduire' : 'Details',
-                showText: _expanded,
-                onTap: () => setState(() => _expanded = !_expanded),
-              ),
-          ],
-        );
-
-        if (widget.transparent) {
-          return Align(alignment: Alignment.centerLeft, child: content);
-        }
-
-        return Align(
-          alignment: Alignment.topLeft,
-          child: ClipRRect(
-            borderRadius: UIUtils.borderRadiusAllMD,
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: UIUtils.sm,
-                  vertical: UIUtils.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: LKColors.surface.withValues(alpha: 0.85),
-                  borderRadius: UIUtils.borderRadiusAllMD,
-                  border: Border.all(color: LKColors.border, width: 0.5),
-                  boxShadow: UIUtils.shadowSM,
-                ),
-                child: content,
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _HudChip extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String text;
-  final bool showText;
-  final bool compact;
-  final bool transparent;
-  final VoidCallback? onTap;
-
-  const _HudChip({
-    required this.icon,
-    required this.color,
-    required this.text,
-    this.showText = true,
-    this.compact = false,
-    this.transparent = false,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final chip = AnimatedContainer(
-      duration: UIUtils.animationDuration,
-      curve: UIUtils.animationCurve,
-      padding: EdgeInsets.symmetric(
-        horizontal: transparent
-            ? 2
-            : compact
-            ? UIUtils.xs + 2
-            : UIUtils.sm,
-        vertical: transparent
-            ? 1
-            : compact
-            ? UIUtils.xs - 1
-            : UIUtils.xs + 1,
-      ),
-      decoration: transparent
-          ? null
-          : BoxDecoration(
-              color: LKColors.surfaceElevated,
-              borderRadius: UIUtils.borderRadiusAllSM,
-              border: Border.all(
-                color: onTap != null
-                    ? LKColors.border.withValues(alpha: 0.8)
-                    : LKColors.border,
-                width: 0.3,
-              ),
-            ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: compact ? 13 : 12),
-          AnimatedSize(
-            duration: UIUtils.animationDuration,
-            curve: UIUtils.animationCurve,
-            child: !showText
-                ? const SizedBox(width: 0)
-                : Padding(
-                    padding: EdgeInsets.only(left: UIUtils.xs - 2),
-                    child: Text(
-                      text,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: transparent
-                            ? 11
-                            : compact
-                            ? 9
-                            : 10,
-                      ),
-                    ),
-                  ),
-          ),
-        ],
-      ),
-    );
-
-    if (onTap == null) return chip;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: UIUtils.borderRadiusAllSM,
-      child: chip,
-    );
   }
 }
 
@@ -762,7 +605,7 @@ class _LocalParticipantWidgetState
   AudioTrack? get activeAudioTrack => audioPublication?.track;
 }
 
-/// Ã‰tat pour un participant distant
+/// État pour un participant distant
 class _RemoteParticipantWidgetState
     extends _ParticipantWidgetState<RemoteParticipantWidget> {
   @override

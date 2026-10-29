@@ -27,18 +27,22 @@ class ParticipantTrack {
     required this.participant,
     this.type = ParticipantTrackType.kUserMedia,
     this.telemetry,
+    this.telemetryListenable,
     this.poseListenable,
     this.markers,
     this.showPosture = false,
+    this.showPostureListenable,
   });
   Participant participant;
   final ParticipantTrackType type;
   RemoteTelemetry? telemetry;
+  ValueListenable<RemoteTelemetry?>? telemetryListenable;
   ValueListenable<PoseFrame?>? poseListenable;
 
   /// Ballons du coach. Renseigné uniquement sur la vidéo locale du sportif.
   ValueListenable<List<BallMarker>>? markers;
   bool showPosture;
+  ValueListenable<bool>? showPostureListenable;
 }
 
 /// Widget affichant les informations d'un participant (nom, audio, qualité, etc.)
@@ -75,94 +79,84 @@ class ParticipantInfoWidget extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.black.withValues(alpha: 0.8),
-          Colors.black.withValues(alpha: 0.6),
-        ],
-      ),
-      borderRadius: isTop
-          ? BorderRadius.only(
-              bottomLeft: Radius.circular(UIUtils.borderRadiusLG),
-              bottomRight: Radius.circular(UIUtils.borderRadiusLG),
-            )
-          : BorderRadius.only(
-              topLeft: Radius.circular(UIUtils.borderRadiusLG),
-              topRight: Radius.circular(UIUtils.borderRadiusLG),
-            ),
-      border: Border.all(
-        color: Colors.white.withValues(alpha: 0.1),
-        width: 0.5,
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 8,
-          offset: const Offset(0, -2),
-          spreadRadius: 0,
-        ),
-      ],
-    ),
-    padding: EdgeInsets.symmetric(vertical: UIUtils.sm, horizontal: UIUtils.md),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        // Nom du participant
-        if (titleContent != null)
-          Flexible(
-            child: Padding(
-              padding: EdgeInsets.only(right: UIUtils.sm),
-              child: titleContent,
-            ),
-          )
-        else if (title != null)
-          Flexible(
-            child: Padding(
-              padding: EdgeInsets.only(right: UIUtils.sm),
-              child: Text(
-                title!,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 11,
-                ),
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.transparent,
+        borderRadius: isTop
+            ? BorderRadius.only(
+                bottomLeft: Radius.circular(UIUtils.borderRadiusLG),
+                bottomRight: Radius.circular(UIUtils.borderRadiusLG),
+              )
+            : BorderRadius.only(
+                topLeft: Radius.circular(UIUtils.borderRadiusLG),
+                topRight: Radius.circular(UIUtils.borderRadiusLG),
               ),
+      ),
+      padding: EdgeInsets.symmetric(
+        vertical: UIUtils.sm,
+        horizontal: UIUtils.md,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Nom du participant + télémétrie
+          Expanded(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (titleContent != null)
+                  Flexible(
+                    child: Padding(
+                      padding: EdgeInsets.only(right: UIUtils.sm),
+                      child: titleContent,
+                    ),
+                  ),
+              ],
             ),
           ),
 
-        // Icônes d'état
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Icône audio
-            _buildStatusIcon(
-              context,
-              audioAvailable ? Icons.mic : Icons.mic_off,
-              audioAvailable ? null : Colors.red,
-              !isScreenShare,
-              audioAvailable ? 'Audio activé' : 'Audio désactivé',
-            ),
-
-            if (trailing != null)
-              Padding(
-                padding: EdgeInsets.only(left: UIUtils.sm),
-                child: trailing,
+          // Icônes d'état
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icône audio
+              _buildStatusIcon(
+                context,
+                audioAvailable ? Icons.mic : Icons.mic_off,
+                audioAvailable ? null : Colors.red,
+                !isScreenShare,
+                audioAvailable ? 'Audio activé' : 'Audio désactivé',
               ),
+              if (trailing != null)
+                Padding(
+                  padding: EdgeInsets.only(left: UIUtils.xs),
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: LKColors.background.withValues(alpha: 0.35),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: trailing,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
-
-          ],
-        ),
-      ],
-    ),
-  );
-
-  /// Construit une icône d'état avec son tooltip
+  /// Construit une icône d'état avec son tooltip dans un conteneur circulaire
   Widget _buildStatusIcon(
     BuildContext context,
     IconData icon,
@@ -183,57 +177,22 @@ class ParticipantInfoWidget extends StatelessWidget {
       preferBelow: false,
       margin: EdgeInsets.all(UIUtils.xs),
       child: Padding(
-        padding: EdgeInsets.only(left: UIUtils.sm),
-        child: Icon(icon, color: color ?? Colors.white, size: 16),
+        padding: EdgeInsets.only(left: UIUtils.xs),
+        child: Container(
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: LKColors.background.withValues(alpha: 0.5),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: LKColors.border.withValues(alpha: 0.5),
+              width: 0.8,
+            ),
+          ),
+          child: Icon(icon, color: color ?? Colors.white, size: 16),
+        ),
       ),
     );
-  }
-
-  /// Retourne l'icône de connexion appropriée
-  IconData _getConnectionIcon(ConnectionQuality quality) {
-    switch (quality) {
-      case ConnectionQuality.excellent:
-        return Icons.wifi;
-      case ConnectionQuality.good:
-        return Icons.wifi_1_bar;
-      case ConnectionQuality.poor:
-        return Icons.wifi_off_outlined;
-      case ConnectionQuality.lost:
-        return Icons.signal_wifi_off;
-      case ConnectionQuality.unknown:
-        return Icons.help_outline;
-    }
-  }
-
-  /// Retourne la couleur de connexion appropriée
-  Color? _getConnectionColor(ConnectionQuality quality) {
-    switch (quality) {
-      case ConnectionQuality.excellent:
-        return Colors.green;
-      case ConnectionQuality.good:
-        return Colors.amber;
-      case ConnectionQuality.poor:
-        return Colors.red;
-      case ConnectionQuality.lost:
-        return Colors.redAccent;
-      case ConnectionQuality.unknown:
-        return Colors.grey;
-    }
-  }
-
-  /// Retourne le tooltip de connexion approprié
-  String _getConnectionTooltip(ConnectionQuality quality) {
-    switch (quality) {
-      case ConnectionQuality.excellent:
-        return 'Connexion excellente';
-      case ConnectionQuality.good:
-        return 'Connexion bonne';
-      case ConnectionQuality.poor:
-        return 'Connexion faible';
-      case ConnectionQuality.lost:
-        return 'Connexion perdue';
-      case ConnectionQuality.unknown:
-        return 'Connexion inconnue';
-    }
   }
 }
