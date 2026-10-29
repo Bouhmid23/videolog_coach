@@ -19,9 +19,18 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
-// Support CI environment variables for passwords
-val envStorePass = System.getenv("KEYSTORE_PASSWORD") ?: keystoreProperties["storePassword"]
-val envKeyPass = System.getenv("KEY_PASSWORD") ?: keystoreProperties["keyPassword"]
+// Support CI environment variables with fallback to key.properties
+val storePass = System.getenv("KEYSTORE_PASSWORD") ?: keystoreProperties.getProperty("storePassword")
+val keyPass = System.getenv("KEY_PASSWORD") ?: keystoreProperties.getProperty("keyPassword")
+val keyAliasProp = System.getenv("KEY_ALIAS") ?: keystoreProperties.getProperty("keyAlias") ?: "upload"
+val storeFilePath = System.getenv("KEYSTORE_FILE") ?: keystoreProperties.getProperty("storeFile") ?: "upload-keystore.jks"
+
+val resolvedKeystoreFile = storeFilePath?.let { file(it) }
+val isSigningConfigured = resolvedKeystoreFile != null &&
+    resolvedKeystoreFile.exists() &&
+    !storePass.isNullOrBlank() &&
+    !keyPass.isNullOrBlank() &&
+    !keyAliasProp.isNullOrBlank()
 
 android {
     namespace = "com.opkodelabs.videolog_coach"
@@ -56,18 +65,18 @@ android {
 
     signingConfigs {
         create("release") {
-            if (keystoreProperties.isNotEmpty() || envStorePass != null) {
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = envKeyPass as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = envStorePass as String
+            if (isSigningConfigured) {
+                keyAlias = keyAliasProp
+                keyPassword = keyPass
+                storeFile = resolvedKeystoreFile
+                storePassword = storePass
             }
         }
     }
 
     buildTypes {
         release {
-            if (keystoreProperties.isNotEmpty() || envStorePass != null) {
+            if (isSigningConfigured) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
