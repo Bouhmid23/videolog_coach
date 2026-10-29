@@ -30,6 +30,8 @@ class _PoseOverlayState extends State<PoseOverlay>
     with SingleTickerProviderStateMixin {
   late final PoseAnimationController _animation;
   DateTime? _lastCapturedAt;
+  final Map<LandmarkType, Offset> _pointsCache = {};
+  final Map<LandmarkType, double> _confidenceCache = {};
 
   @override
   void initState() {
@@ -60,16 +62,16 @@ class _PoseOverlayState extends State<PoseOverlay>
     // Décidé une fois par pose : un point légèrement hors du cadre (x ou y hors de [0, 1])
     // reste normalisé. Sinon il serait pris pour des pixels et tomberait dans le coin (0, 0).
     final pixels = PostureCodec.isPixelSpace(frame.pose.landmarks);
-    final points = <LandmarkType, Offset>{};
-    final confidence = <LandmarkType, double>{};
+    _pointsCache.clear();
+    _confidenceCache.clear();
     for (final landmark in frame.pose.landmarks) {
       if (landmark.visibility < 0.12) continue;
 
-      points[landmark.type] = Offset(
+      _pointsCache[landmark.type] = Offset(
         pixels ? landmark.x : landmark.x * frame.frameSize.width,
         pixels ? landmark.y : landmark.y * frame.frameSize.height,
       );
-      confidence[landmark.type] = landmark.visibility
+      _confidenceCache[landmark.type] = landmark.visibility
           .clamp(0.0, 1.0)
           .toDouble();
     }
@@ -85,7 +87,10 @@ class _PoseOverlayState extends State<PoseOverlay>
       milliseconds: interval.inMilliseconds.clamp(30, 120).toInt(),
     );
 
-    final pose = InterpolatedPose(points: points, confidence: confidence);
+    final pose = InterpolatedPose(
+      points: Map<LandmarkType, Offset>.of(_pointsCache),
+      confidence: Map<LandmarkType, double>.of(_confidenceCache),
+    );
     if (initial || _animation.currentPose == null) {
       _animation.jumpToPose(pose);
     } else {
@@ -154,7 +159,12 @@ class _PoseSkeletonPainter extends CustomPainter {
     growable: false,
   );
 
-  // Objets Paint réutilisés à chaque frame (zéro allocation GC dans la boucle).
+  // Objets Paint et structures réutilisés à chaque frame (zéro allocation GC dans la boucle).
+  static final List<Offset?> _pointsByIndex =
+      List<Offset?>.filled(LandmarkType.values.length, null);
+  static final List<double> _confidenceByIndex =
+      List<double>.filled(LandmarkType.values.length, 0.0);
+
   static final Paint _boneGlowPaint = Paint()
     ..strokeCap = StrokeCap.round
     ..isAntiAlias = true;
@@ -203,30 +213,36 @@ class _PoseSkeletonPainter extends CustomPainter {
     final scaleX = destinationRect.width / sourceRect.width;
     final scaleY = destinationRect.height / sourceRect.height;
 
-    final points = <LandmarkType, Offset>{};
-    final confidence = <LandmarkType, double>{};
+    // Réutilisation des tableaux indexés statiques (évite les allocations de Map à 60 fps).
+    _pointsByIndex.fillRange(0, _pointsByIndex.length, null);
+    _confidenceByIndex.fillRange(0, _confidenceByIndex.length, 0.0);
+
     for (final entry in pose.points.entries) {
       final visibility = (pose.confidence[entry.key] ?? 0.0)
           .clamp(0.0, 1.0)
           .toDouble();
       if (visibility < 0.12) continue;
 
+      final idx = entry.key.index;
       final x = mirrorX ? frameSize.width - entry.value.dx : entry.value.dx;
       final y = entry.value.dy;
-      points[entry.key] = Offset(
+      _pointsByIndex[idx] = Offset(
         destinationRect.left + (x - sourceRect.left) * scaleX,
         destinationRect.top + (y - sourceRect.top) * scaleY,
       );
-      confidence[entry.key] = visibility;
+      _confidenceByIndex[idx] = visibility;
     }
 
     for (final bone in _allBones) {
-      final from = points[bone.from];
-      final to = points[bone.to];
+      final from = _pointsByIndex[bone.from.index];
+      final to = _pointsByIndex[bone.to.index];
       if (from == null || to == null) continue;
 
       final strength = math
-          .min(confidence[bone.from] ?? 0.0, confidence[bone.to] ?? 0.0)
+          .min(
+            _confidenceByIndex[bone.from.index],
+            _confidenceByIndex[bone.to.index],
+          )
           .toDouble();
       if (strength < 0.18) continue;
 
@@ -260,12 +276,13 @@ class _PoseSkeletonPainter extends CustomPainter {
 
     // Un repère par point visible : les 33 (corps, visage, mains, pieds). Les points de
     // détail sont dessinés plus petits que les articulations principales.
-    for (final entry in points.entries) {
-      final type = entry.key;
-      final point = entry.value;
-      final strength = confidence[type] ?? 0.0;
+    for (var i = 0; i < LandmarkType.values.length; i++) {
+      final point = _pointsByIndex[i];
+      if (point == null) continue;
+      final strength = _confidenceByIndex[i];
       if (strength < 0.28) continue;
-      final color = _landmarkColors[type.index];
+      final type = LandmarkType.values[i];
+      final color = _landmarkColors[i];
       final scale = _mainJoints.contains(type) ? 1.0 : 0.6;
       final visibility = (0.72 + strength * 0.28).clamp(0.0, 1.0).toDouble();
 

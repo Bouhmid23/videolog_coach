@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show AppLifecycleState;
 import 'package:flutter/foundation.dart'
     show
         ChangeNotifier,
@@ -16,6 +17,7 @@ import '../core/beep_service.dart';
 import '../core/ble_sensor_service.dart';
 import '../core/ble_telemetry_service.dart';
 import '../core/call_foreground_service.dart';
+import '../core/pip_service.dart';
 import '../data/ball_marker.dart';
 import '../data/glasses_message.dart';
 import '../data/remote_posture.dart';
@@ -130,6 +132,16 @@ class RoomViewModel extends ChangeNotifier {
 
   void _notifySafe() {
     if (!_disposed) notifyListeners();
+  }
+
+  void onAppLifecycleStateChanged(AppLifecycleState state) {
+    final isBackground =
+        state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
+    if (isBackground && !PipService.isInPip.value) {
+      poseViewModel.pause();
+    } else if (state == AppLifecycleState.resumed) {
+      poseViewModel.resume();
+    }
   }
 
   void togglePosePip() {

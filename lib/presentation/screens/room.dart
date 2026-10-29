@@ -38,7 +38,7 @@ class RoomPage extends StatefulWidget {
   State<StatefulWidget> createState() => _RoomPageState();
 }
 
-class _RoomPageState extends State<RoomPage> {
+class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   late final RoomViewModel _vm;
   RecordingController? _recordingController;
   final ValueNotifier<bool> _showControls = ValueNotifier<bool>(true);
@@ -71,6 +71,7 @@ class _RoomPageState extends State<RoomPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _vm = RoomViewModel();
     _scheduleControlsAutoHide();
 
@@ -115,7 +116,14 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _vm.onAppLifecycleStateChanged(state);
+    super.didChangeAppLifecycleState(state);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controlsHideTimer?.cancel();
     unawaited(PipService.disableAutoEnter());
     _recordingController?.dispose();

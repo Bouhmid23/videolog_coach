@@ -13,7 +13,6 @@ import '../../data/ball_marker.dart';
 import '../../data/frame_geometry.dart';
 import '../../data/remote_posture.dart';
 import '../../data/remote_telemetry.dart';
-import '../../theme.dart';
 import '../../utils.dart';
 import '../../viewmodels/pose_detection_viewmodel.dart';
 import '../utils/ui_utils.dart';
@@ -208,7 +207,6 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
   String? _activeVideoTrackSid;
   bool? _videoMuted;
   bool? _audioAvailable;
-  bool? _isSpeaking;
   ConnectionQuality? _connectionQuality;
   String? _participantName;
   final ValueNotifier<Size?> _poseFrameSizeNotifier = ValueNotifier<Size?>(null);
@@ -346,7 +344,6 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     final nextAudioAvailable =
         audioPublication?.muted == false &&
         audioPublication?.subscribed == true;
-    final nextSpeaking = widget.participant.isSpeaking;
     final nextQuality = widget.participant.connectionQuality;
     final nextName = widget.participant.name;
 
@@ -354,14 +351,12 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
         nextVideoSid != _activeVideoTrackSid ||
         nextVideoMuted != _videoMuted ||
         nextAudioAvailable != _audioAvailable ||
-        nextSpeaking != _isSpeaking ||
         nextQuality != _connectionQuality ||
         nextName != _participantName;
 
     _activeVideoTrackSid = nextVideoSid;
     _videoMuted = nextVideoMuted;
     _audioAvailable = nextAudioAvailable;
-    _isSpeaking = nextSpeaking;
     _connectionQuality = nextQuality;
     _participantName = nextName;
     return changed;
@@ -382,25 +377,9 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
       child: FadeTransition(
         opacity: _opacityAnimation,
         child: Container(
-          foregroundDecoration: BoxDecoration(
-            border: widget.participant.isSpeaking && !isScreenShare
-                ? Border.all(width: 3, color: LKColors.primary)
-                : null,
-            borderRadius: BorderRadius.circular(UIUtils.borderRadiusLG),
-          ),
           decoration: BoxDecoration(
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(UIUtils.borderRadiusLG),
-            boxShadow: widget.participant.isSpeaking && !isScreenShare
-                ? [
-                    BoxShadow(
-                      color: LKColors.primary.withValues(alpha: 0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 0),
-                      spreadRadius: 2,
-                    ),
-                  ]
-                : null,
           ),
           clipBehavior: Clip.antiAlias,
           child: Column(

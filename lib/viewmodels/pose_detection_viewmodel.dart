@@ -197,6 +197,26 @@ class PoseDetectionViewModel extends ChangeNotifier {
     frameNotifier.value = null;
   }
 
+  static const int _targetFrameIntervalMicros = 33333; // ~30 fps max
+  bool _paused = false;
+
+  void pause() {
+    if (!_running || _paused) return;
+    _paused = true;
+    if (_hadPose) _publishLost(DateTime.now());
+    _hadPose = false;
+    frameNotifier.value = null;
+    debugPrint('⏸️ Pose detection paused (background)');
+  }
+
+  void resume() {
+    if (!_running || !_paused) return;
+    _paused = false;
+    _statsWindowStart = DateTime.now();
+    _seqAtLastStats = _seq;
+    debugPrint('▶️ Pose detection resumed (foreground)');
+  }
+
   // ---------------------------------------------------------------------------
   // Boucle capture -> détection -> publication
   // ---------------------------------------------------------------------------
@@ -206,6 +226,13 @@ class PoseDetectionViewModel extends ChangeNotifier {
     Future<_CapturedFrame?>? next;
 
     while (_running) {
+      if (_paused) {
+        next = null;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        continue;
+      }
+
+      final loopWatch = Stopwatch()..start();
       final track = _cameraTrack();
       if (track == null) {
         next = null;
@@ -217,7 +244,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
       // son timestamp de capture voyage avec ses octets.
       final frame = await (next ?? _capture(track));
       // Lance déjà la capture suivante, en parallèle de la détection.
-      next = _running ? _capture(track) : null;
+      next = (_running && !_paused) ? _capture(track) : null;
 
       if (frame == null) {
         _onLost(DateTime.now());
@@ -231,7 +258,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
           frame.bytes,
           frame.videoTimestampMs,
         );
-        if (!_running) break;
+        if (!_running || _paused) break;
         detectWatch.stop();
         final detectMicros = detectWatch.elapsedMicroseconds;
         _detectMicros += detectMicros;
@@ -282,8 +309,16 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
       _logStats();
 
-      // Rend la main à la boucle d'événements.
-      await Future<void>.delayed(Duration.zero);
+      // Plafonnement à 30 fps max pour préserver la batterie et éviter le thermal throttling.
+      loopWatch.stop();
+      final elapsedMicros = loopWatch.elapsedMicroseconds;
+      if (elapsedMicros < _targetFrameIntervalMicros) {
+        final remainingMicros = _targetFrameIntervalMicros - elapsedMicros;
+        await Future<void>.delayed(Duration(microseconds: remainingMicros));
+      } else {
+        // Rend la main à la boucle d'événements.
+        await Future<void>.delayed(Duration.zero);
+      }
     }
   }
 
