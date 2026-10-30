@@ -33,8 +33,15 @@ protocol PoseDetectorProtocol: AnyObject {
     func detectPose(imageData: Data) throws -> PoseResult
     func detectPose(filePath: String) throws -> PoseResult
     func processFrame(pixelBuffer: CVPixelBuffer) throws -> PoseResult
+    func detect(pixelBuffer: CVPixelBuffer, requestedTimestampMs: Int?) throws -> PoseResult
     func updateConfig(_ config: DetectorConfig)
     func dispose()
+}
+
+extension PoseDetectorProtocol {
+    func detect(pixelBuffer: CVPixelBuffer, requestedTimestampMs: Int?) throws -> PoseResult {
+        return try processFrame(pixelBuffer: pixelBuffer)
+    }
 }
 
 /// Landmark type following COCO 17-keypoint topology.

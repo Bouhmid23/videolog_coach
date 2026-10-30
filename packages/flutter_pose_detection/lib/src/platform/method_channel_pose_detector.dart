@@ -360,32 +360,40 @@ class MethodChannelPoseDetector extends PoseDetectorPlatform {
     _frameEventSubscription =
         _frameEventChannel.receiveBroadcastStream().listen(
       (dynamic event) {
+        final controller = _frameStreamController;
+        if (controller == null || controller.isClosed) return;
         if (event is Map) {
           final type = event['type'] as String?;
           switch (type) {
             case 'frame':
               final frameResult = FrameResult.fromJson(_convertMap(event));
-              _frameStreamController?.add(frameResult);
+              controller.add(frameResult);
               break;
             case 'error':
               final error = event['error'] as Map?;
               if (error != null) {
-                _frameStreamController?.addError(
+                controller.addError(
                   DetectionError.fromJson(_convertMap(error)),
                 );
               }
               break;
             case 'end':
-              _frameStreamController?.close();
+              controller.close();
               break;
           }
         }
       },
       onError: (error) {
-        _frameStreamController?.addError(error);
+        final controller = _frameStreamController;
+        if (controller != null && !controller.isClosed) {
+          controller.addError(error);
+        }
       },
       onDone: () {
-        _frameStreamController?.close();
+        final controller = _frameStreamController;
+        if (controller != null && !controller.isClosed) {
+          controller.close();
+        }
       },
     );
 
@@ -403,6 +411,143 @@ class MethodChannelPoseDetector extends PoseDetectorPlatform {
       _frameEventSubscription = null;
       await _frameStreamController?.close();
       _frameStreamController = null;
+    }
+  }
+
+  @override
+  Stream<FrameResult> startWebRtcDetection({
+    required String trackId,
+    int nominalFps = 30,
+    int throttledFps = 15,
+    bool enableAdaptiveThrottling = true,
+  }) {
+    _ensureInitialized();
+
+    // Close any existing stream
+    _frameStreamController?.close();
+    _frameEventSubscription?.cancel();
+
+    _frameStreamController = StreamController<FrameResult>.broadcast(
+      onCancel: () {
+        stopWebRtcDetection();
+      },
+    );
+
+    // Start native WebRTC zero-copy pipeline
+    _methodChannel.invokeMethod<Map<dynamic, dynamic>>('startWebRtcDetection', {
+      'trackId': trackId,
+      'nominalFps': nominalFps,
+      'throttledFps': throttledFps,
+      'enableAdaptiveThrottling': enableAdaptiveThrottling,
+    }).then((result) {
+      final controller = _frameStreamController;
+      if (controller == null || controller.isClosed) return;
+      if (result != null) {
+        final success = result['success'] as bool? ?? false;
+        if (!success) {
+          final error = result['error'] as Map<dynamic, dynamic>?;
+          if (error != null) {
+            controller.addError(
+              DetectionError.fromJson(_convertMap(error)),
+            );
+          } else {
+            controller.addError(
+              DetectionError.fromCode(DetectionErrorCode.unknown),
+            );
+          }
+        }
+      }
+    }).catchError((error) {
+      final controller = _frameStreamController;
+      if (controller == null || controller.isClosed) return;
+      if (error is PlatformException) {
+        controller.addError(_handlePlatformException(error));
+      } else {
+        controller.addError(error);
+      }
+    });
+
+    // Listen to event channel
+    _frameEventSubscription =
+        _frameEventChannel.receiveBroadcastStream().listen(
+      (dynamic event) {
+        final controller = _frameStreamController;
+        if (controller == null || controller.isClosed) return;
+        if (event is Map) {
+          final type = event['type'] as String?;
+          switch (type) {
+            case 'frame':
+              final frameResult = FrameResult.fromJson(_convertMap(event));
+              controller.add(frameResult);
+              break;
+            case 'error':
+              final error = event['error'] as Map?;
+              if (error != null) {
+                controller.addError(
+                  DetectionError.fromJson(_convertMap(error)),
+                );
+              }
+              break;
+            case 'end':
+              controller.close();
+              break;
+          }
+        }
+      },
+      onError: (error) {
+        final controller = _frameStreamController;
+        if (controller != null && !controller.isClosed) {
+          controller.addError(error);
+        }
+      },
+      onDone: () {
+        final controller = _frameStreamController;
+        if (controller != null && !controller.isClosed) {
+          controller.close();
+        }
+      },
+    );
+
+    return _frameStreamController!.stream;
+  }
+
+  @override
+  Future<void> stopWebRtcDetection() async {
+    try {
+      await _methodChannel.invokeMethod('stopWebRtcDetection');
+    } catch (_) {
+      // Ignore errors during stop
+    } finally {
+      await _frameEventSubscription?.cancel();
+      _frameEventSubscription = null;
+      await _frameStreamController?.close();
+      _frameStreamController = null;
+    }
+  }
+
+  @override
+  Future<void> setTargetFps(int fps) async {
+    _ensureInitialized();
+    try {
+      await _methodChannel.invokeMethod('setTargetFps', {'fps': fps});
+    } catch (_) {
+      // Ignore errors
+    }
+  }
+
+  @override
+  Future<void> setAdaptiveThrottling({
+    required bool enabled,
+    int lowFps = 15,
+  }) async {
+    _ensureInitialized();
+    try {
+      await _methodChannel.invokeMethod('setAdaptiveThrottling', {
+        'enabled': enabled,
+        'lowFps': lowFps,
+      });
+    } catch (_) {
+      // Ignore errors
     }
   }
 

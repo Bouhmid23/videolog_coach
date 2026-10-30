@@ -145,7 +145,7 @@ class MediaPipeNpuDetector(private val context: Context) : PoseDetectorInterface
     override fun detectPoseFromBitmap(bitmap: Bitmap): PoseResult =
         detectPoseFromBitmap(bitmap, SystemClock.elapsedRealtime())
 
-    private fun detectPoseFromBitmap(bitmap: Bitmap, requestedTimestampMs: Long): PoseResult {
+    override fun detectPoseFromBitmap(bitmap: Bitmap, requestedTimestampMs: Long): PoseResult {
         val landmarker = poseLandmarker
             ?: throw IllegalStateException("PoseLandmarker not initialized")
 

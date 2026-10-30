@@ -50,6 +50,58 @@ class PoseFrame {
   final DateTime capturedAt;
 }
 
+/// Détecteur de mouvement pour l'adaptation intelligente du framerate.
+/// Si la variation moyenne des articulations est faible pendant plusieurs frames,
+/// la posture est considérée comme statique (ex: gainage, repos, posture fixe).
+class _MotionDetector {
+  Pose? _lastPose;
+  int _staticFrameCount = 0;
+  static const int _staticThresholdFrames = 15; // ~0.5s - 1s
+  static const double _motionEpsilon = 0.015; // Seuil de déplacement normalisé
+
+  bool update(Pose? currentPose) {
+    if (currentPose == null || _lastPose == null) {
+      _lastPose = currentPose;
+      _staticFrameCount = 0;
+      return false;
+    }
+
+    final p1 = _lastPose!.landmarks;
+    final p2 = currentPose.landmarks;
+    _lastPose = currentPose;
+
+    if (p1.isEmpty || p2.isEmpty) return false;
+
+    double totalDelta = 0;
+    int count = 0;
+
+    for (int i = 0; i < math.min(p1.length, p2.length); i++) {
+      final lm1 = p1[i];
+      final lm2 = p2[i];
+      if (lm1.visibility > 0.5 && lm2.visibility > 0.5) {
+        final dx = lm1.x - lm2.x;
+        final dy = lm1.y - lm2.y;
+        totalDelta += math.sqrt(dx * dx + dy * dy);
+        count++;
+      }
+    }
+
+    final avgDelta = count > 0 ? (totalDelta / count) : 0.0;
+    if (avgDelta < _motionEpsilon) {
+      _staticFrameCount++;
+    } else {
+      _staticFrameCount = 0;
+    }
+
+    return _staticFrameCount >= _staticThresholdFrames;
+  }
+
+  void reset() {
+    _lastPose = null;
+    _staticFrameCount = 0;
+  }
+}
+
 /// Capture la caméra locale, détecte la pose (MediaPipe lite en mode VIDEO) et publie le squelette
 /// en binaire sur le topic `posture`. La dernière pose est aussi exposée via
 /// [frameNotifier] pour le rendu local du squelette.
@@ -118,6 +170,25 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   RemotePosture? _currentPosture;
 
+  // Pipeline natif zéro-copie et FPS adaptatif intelligent
+  StreamSubscription<FrameResult>? _webRtcSubscription;
+  final _MotionDetector _motionDetector = _MotionDetector();
+  bool _isNativePipelineActive = false;
+  bool _lastIsStatic = false;
+  bool _lastThermalThrottled = false;
+  bool _lastLowBattery = false;
+  int _currentTargetFps = 30;
+  double _nativeFps = 0.0;
+  DateTime? _lastNativeFrameReceivedAt;
+  DateTime? _lastNativeAttemptAt;
+  String? _lastFailedTrackId;
+
+  bool get isNativePipelineActive => _isNativePipelineActive;
+  bool get isThermalThrottled => _lastThermalThrottled;
+  bool get isLowBattery => _lastLowBattery;
+  int get currentTargetFps => _currentTargetFps;
+  double get nativeFps => _nativeFps;
+
   /// Dernière pose (coordonnées source + taille de frame) pour l'overlay local.
   final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(
     null,
@@ -183,6 +254,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   }
 
   void stop() {
+    _stopNativePipeline();
     if (_running && _hadPose) _publishLost(DateTime.now());
     _running = false;
     GravityService.instance.stop();
@@ -196,12 +268,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
     frameNotifier.value = null;
   }
 
-  static const int _targetFrameIntervalMicros = 33333; // ~30 fps max
   bool _paused = false;
 
   void pause() {
     if (!_running || _paused) return;
     _paused = true;
+    _stopNativePipeline();
     if (_hadPose) _publishLost(DateTime.now());
     _hadPose = false;
     frameNotifier.value = null;
@@ -213,15 +285,75 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _paused = false;
     _statsWindowStart = DateTime.now();
     _seqAtLastStats = _seq;
+    unawaited(_poseLoop());
     debugPrint('▶️ Pose detection resumed (foreground)');
   }
 
+  void _stopNativePipeline() {
+    _webRtcSubscription?.cancel();
+    _webRtcSubscription = null;
+    _lastNativeFrameReceivedAt = null;
+    _isNativePipelineActive = false;
+    _motionDetector.reset();
+    _poseDetector.stopWebRtcDetection().catchError((_) {});
+  }
+
   // ---------------------------------------------------------------------------
-  // Boucle capture -> détection -> publication
+  // Pipeline Zéro-Copie Natif & FPS Adaptatif Intelligent
   // ---------------------------------------------------------------------------
 
+  void _tryStartNativePipeline() {
+    final track = _cameraTrack();
+    if (track == null) return;
+    final trackId = track.mediaStreamTrack.id;
+    if (trackId == null || trackId.isEmpty) return;
+
+    // Si cette piste a déjà échoué récemment, temporiser 30s pour ne pas spammer
+    if (_lastFailedTrackId == trackId &&
+        _lastNativeAttemptAt != null &&
+        DateTime.now().difference(_lastNativeAttemptAt!) <
+            const Duration(seconds: 30)) {
+      return;
+    }
+
+    try {
+      debugPrint('🚀 [Native Pipeline] Tentative Zéro-Copie WebRTC sur track: $trackId');
+      _webRtcSubscription?.cancel();
+      _webRtcSubscription = _poseDetector
+          .startWebRtcDetection(
+            trackId: trackId,
+            nominalFps: 30,
+            throttledFps: 15,
+            enableAdaptiveThrottling: true,
+          )
+          .listen(
+            _handleNativeFrameResult,
+            onError: (error) {
+              debugPrint('⚠️ [Native Pipeline] Erreur stream natif: $error');
+              _lastFailedTrackId = trackId;
+              _stopNativePipeline();
+            },
+            onDone: () {
+              debugPrint('⏹️ [Native Pipeline] Pipeline natif terminé');
+              _isNativePipelineActive = false;
+              _webRtcSubscription = null;
+            },
+          );
+    } catch (e) {
+      debugPrint('⚠️ [Native Pipeline] Exception démarrage: $e');
+      _lastFailedTrackId = trackId;
+      _stopNativePipeline();
+    }
+  }
+
+  /// Superviseur résilient : garantit l'analyse continue, le dessin du squelette
+  /// et l'envoi des DataTracks LiveKit.
+  /// - Si le pipeline natif zéro-copie émet des frames (< 600ms), Dart ne fait aucune copie CPU/GPU.
+  /// - Si le flux natif tarde ou échoue, la capture de secours s'exécute immédiatement avec
+  ///   Dynamic Throttling (30 fps en mouvement, 15 fps statique ou batterie faible).
   Future<void> _poseLoop() async {
     if (kIsWeb) return;
+
     Future<_CapturedFrame?>? next;
 
     while (_running) {
@@ -229,6 +361,31 @@ class PoseDetectionViewModel extends ChangeNotifier {
         next = null;
         await Future<void>.delayed(const Duration(milliseconds: 200));
         continue;
+      }
+
+      final now = DateTime.now();
+      final hasRecentNativeFrames = _lastNativeFrameReceivedAt != null &&
+          now.difference(_lastNativeFrameReceivedAt!) <
+              const Duration(milliseconds: 600);
+
+      if (hasRecentNativeFrames) {
+        // Le flux natif zéro-copie alimente déjà l'overlay et LiveKit
+        _isNativePipelineActive = true;
+        next = null;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+
+      // Le pipeline natif n'émet pas : repli immédiat sur capture directe
+      _isNativePipelineActive = false;
+
+      // Tentative périodique de raccrocher le sink natif (toutes les 3 secondes)
+      if (_webRtcSubscription == null &&
+          (_lastNativeAttemptAt == null ||
+              now.difference(_lastNativeAttemptAt!) >
+                  const Duration(seconds: 3))) {
+        _lastNativeAttemptAt = now;
+        _tryStartNativePipeline();
       }
 
       final loopWatch = Stopwatch()..start();
@@ -239,11 +396,19 @@ class PoseDetectionViewModel extends ChangeNotifier {
         continue;
       }
 
-      // La frame courante a été capturée pendant la détection précédente ;
-      // son timestamp de capture voyage avec ses octets.
       final frame = await (next ?? _capture(track));
-      // Lance déjà la capture suivante, en parallèle de la détection.
-      next = (_running && !_paused) ? _capture(track) : null;
+      if (!_running || _paused) break;
+
+      // Si une frame native est arrivée pendant la capture, abandonner la capture concurrente
+      if (_lastNativeFrameReceivedAt != null &&
+          DateTime.now().difference(_lastNativeFrameReceivedAt!) <
+              const Duration(milliseconds: 600)) {
+        continue;
+      }
+
+      next = (_running && !_paused && !_isNativePipelineActive)
+          ? _capture(track)
+          : null;
 
       if (frame == null) {
         _onLost(DateTime.now());
@@ -266,8 +431,21 @@ class PoseDetectionViewModel extends ChangeNotifier {
         _inferSamples++;
 
         if (!result.hasPoses) {
+          _motionDetector.reset();
           _onLost(frame.capturedAt);
         } else {
+          final rawPose = result.firstPose!;
+
+          // Dynamic Throttling sur repli : 15 fps statique vs 30 fps dynamique
+          final isStatic = _motionDetector.update(rawPose);
+          if (isStatic != _lastIsStatic) {
+            _lastIsStatic = isStatic;
+            _currentTargetFps = isStatic ? 15 : 30;
+            debugPrint(
+              '🏃 [Fallback Throttling] Posture ${isStatic ? "STATIQUE (15 fps)" : "DYNAMIQUE (30 fps)"}',
+            );
+          }
+
           final size = result.imageWidth > 0 && result.imageHeight > 0
               ? Size(
                   result.imageWidth.toDouble(),
@@ -275,7 +453,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
                 )
               : _fallbackSize;
           _lastFrameSize = size;
-          final rawPose = result.firstPose!;
           final pose = _smoothing.smooth(rawPose);
           _logRuntimeLandmarks(pose);
           frameNotifier.value = PoseFrame(
@@ -308,17 +485,98 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
       _logStats();
 
-      // Plafonnement à 30 fps max pour préserver la batterie et éviter le thermal throttling.
       loopWatch.stop();
       final elapsedMicros = loopWatch.elapsedMicroseconds;
-      if (elapsedMicros < _targetFrameIntervalMicros) {
-        final remainingMicros = _targetFrameIntervalMicros - elapsedMicros;
+      final targetIntervalMicros = (1000000 / _currentTargetFps).round();
+      if (elapsedMicros < targetIntervalMicros) {
+        final remainingMicros = targetIntervalMicros - elapsedMicros;
         await Future<void>.delayed(Duration(microseconds: remainingMicros));
       } else {
-        // Rend la main à la boucle d'événements.
         await Future<void>.delayed(Duration.zero);
       }
     }
+  }
+
+  /// Traitement direct du résultat léger des 33 coordonnées normalisées envoyé par le natif.
+  /// Dart ne reçoit AUCUNE image bitmap/jpeg/rgba en mémoire : Zéro-Copie.
+  void _handleNativeFrameResult(FrameResult frameResult) {
+    if (!_running || _paused) return;
+
+    _lastNativeFrameReceivedAt = DateTime.now();
+    _isNativePipelineActive = true;
+    _lastFailedTrackId = null;
+
+    final result = frameResult.result;
+    final capturedAt =
+        DateTime.fromMicrosecondsSinceEpoch(frameResult.timestampUs);
+    _nativeFps = frameResult.fps;
+    _currentTargetFps = frameResult.targetFps ?? 30;
+
+    // Détection de l'état thermique et batterie (Dynamic Throttling)
+    if (frameResult.isThermalThrottled != _lastThermalThrottled ||
+        frameResult.isLowBattery != _lastLowBattery) {
+      _lastThermalThrottled = frameResult.isThermalThrottled;
+      _lastLowBattery = frameResult.isLowBattery;
+      debugPrint(
+        '⚡ [Dynamic Throttling] thermique=${frameResult.isThermalThrottled} '
+        'batterieFaible=${frameResult.isLowBattery} '
+        'niveau=${((frameResult.batteryLevel ?? 1.0) * 100).toInt()}% '
+        'cadenceCible=$_currentTargetFps fps',
+      );
+    }
+
+    if (!result.hasPoses) {
+      _motionDetector.reset();
+      _onLost(capturedAt);
+    } else {
+      final rawPose = result.firstPose!;
+
+      // FPS Adaptatif basé sur le mouvement (statique 15 fps vs mouvement 30 fps)
+      final isStatic = _motionDetector.update(rawPose);
+      if (isStatic != _lastIsStatic) {
+        _lastIsStatic = isStatic;
+        final targetFps = isStatic ? 15 : 30;
+        _poseDetector.setTargetFps(targetFps);
+        debugPrint(
+          '🏃 [Dynamic Throttling] Posture ${isStatic ? "STATIQUE (15 fps)" : "DYNAMIQUE (30 fps)"} -> setTargetFps($targetFps)',
+        );
+      }
+
+      final size = result.imageWidth > 0 && result.imageHeight > 0
+          ? Size(
+              result.imageWidth.toDouble(),
+              result.imageHeight.toDouble(),
+            )
+          : _fallbackSize;
+      _lastFrameSize = size;
+      final pose = _smoothing.smooth(rawPose);
+      _logRuntimeLandmarks(pose);
+      frameNotifier.value = PoseFrame(
+        pose: pose,
+        frameSize: size,
+        capturedAt: capturedAt,
+      );
+      final posture = _stabilizedPosture(
+        classifyPosture(rawPose, frameSize: size),
+      );
+      _hadPose = true;
+      _inferMicros += result.processingTimeMs * 1000;
+      _inferSamples++;
+      _detectMicros += result.processingTimeMs * 1000;
+      _detectSamples++;
+
+      _publish(
+        pose,
+        posture,
+        size,
+        capturedAt: capturedAt,
+        captureMicros: 0, // Zéro-copie : 0 ms de capture côté Dart !
+        detectMicros: result.processingTimeMs * 1000,
+        inferMicros: result.processingTimeMs * 1000,
+      );
+    }
+
+    _logStats();
   }
 
   /// Runtime evidence: prints detector image-z and MediaPipe metric world-z
@@ -365,15 +623,19 @@ class PoseDetectionViewModel extends ChangeNotifier {
         ? 'unknown'
         : '${size.width.toInt()}x${size.height.toInt()}';
 
+    final pipelineMode = _isNativePipelineActive ? 'zero-copy-native' : 'legacy-copy';
     debugPrint(
       '📊 pose ${seconds.toStringAsFixed(2)}s '
+      'pipeline=$pipelineMode '
       'model=lite resolution=$resolution '
       'device=$_deviceModel '
+      'fps=${_isNativePipelineActive ? _nativeFps.toStringAsFixed(1) : (_captureSamples / seconds).toStringAsFixed(1)} '
+      'targetFps=$_currentTargetFps '
+      'thermal=$_lastThermalThrottled lowBat=$_lastLowBattery '
       'capture=${averageMs(_captureMicros, _captureSamples).toStringAsFixed(1)}ms '
       'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
       'infer=${averageMs(_inferMicros, _inferSamples).toStringAsFixed(1)}ms '
       'publish=${averageMs(_publishMicros, _publishSamples).toStringAsFixed(1)}ms '
-      'capture=${(_captureSamples / seconds).toStringAsFixed(1)}fps '
       'publishData=${(_publishedSinceStats / seconds).toStringAsFixed(1)}/s '
       'seq=${((_seq - _seqAtLastStats) / seconds).toStringAsFixed(1)}/s',
     );

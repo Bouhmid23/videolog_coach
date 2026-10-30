@@ -22,6 +22,7 @@ Neural Engine acceleration on supported devices.
   s.dependency 'Flutter'
   # Même moteur que sur Android (PoseLandmarker) : landmarks image + worldLandmarks (mètres).
   s.dependency 'MediaPipeTasksVision', '~> 0.10.14'
+  s.dependency 'WebRTC-SDK', '150.7871.04'
   s.platform = :ios, '14.0'
   s.frameworks = 'Vision', 'CoreML', 'AVFoundation', 'Metal'
   s.static_framework = true

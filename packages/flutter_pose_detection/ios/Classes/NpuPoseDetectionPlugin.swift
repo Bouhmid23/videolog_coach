@@ -24,6 +24,7 @@ public class NpuPoseDetectionPlugin: NSObject, FlutterPlugin {
     private var frameCount: Int = 0
     private var fpsCalculator = FPSCalculator()
     private var videoProcessor: VideoProcessor?
+    private var webRtcPoseSink: WebRtcPoseSink?
 
     // MARK: - Channel Names
 
@@ -74,6 +75,14 @@ public class NpuPoseDetectionPlugin: NSObject, FlutterPlugin {
             handleStartCameraDetection(call, result: result)
         case "stopCameraDetection":
             handleStopCameraDetection(result: result)
+        case "startWebRtcDetection":
+            handleStartWebRtcDetection(call, result: result)
+        case "stopWebRtcDetection":
+            handleStopWebRtcDetection(result: result)
+        case "setTargetFps":
+            handleSetTargetFps(call, result: result)
+        case "setAdaptiveThrottling":
+            handleSetAdaptiveThrottling(call, result: result)
         case "analyzeVideo":
             handleAnalyzeVideo(call, result: result)
         case "cancelVideoAnalysis":
@@ -355,6 +364,86 @@ public class NpuPoseDetectionPlugin: NSObject, FlutterPlugin {
         result(["success": true])
     }
 
+    // MARK: - WebRTC Native Zero-Copy Pipeline & Dynamic Throttling
+
+    private func handleStartWebRtcDetection(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let detector = poseDetector else {
+            result(FlutterError(code: "notInitialized", message: "Detector not initialized", details: nil))
+            return
+        }
+
+        guard let args = call.arguments as? [String: Any],
+              let trackId = args["trackId"] as? String else {
+            result(FlutterError(code: "invalidArguments", message: "Missing trackId parameter", details: nil))
+            return
+        }
+
+        let nominalFps = args["nominalFps"] as? Int ?? 30
+        let throttledFps = args["throttledFps"] as? Int ?? 15
+        let enableAdaptiveThrottling = args["enableAdaptiveThrottling"] as? Bool ?? true
+
+        guard let videoTrack = WebRtcPoseSink.resolveVideoTrack(trackId: trackId) else {
+            result(FlutterError(code: "trackNotFound", message: "WebRTC RTCVideoTrack not found for trackId: \(trackId)", details: nil))
+            return
+        }
+
+        webRtcPoseSink?.stop()
+        let sink = WebRtcPoseSink(
+            detector: detector,
+            eventSink: frameEventSink,
+            nominalFps: nominalFps,
+            throttledFps: throttledFps,
+            adaptiveThrottlingEnabled: enableAdaptiveThrottling
+        )
+        sink.start(track: videoTrack)
+        webRtcPoseSink = sink
+        isStreamingActive = true
+
+        result([
+            "success": true,
+            "trackId": trackId,
+            "effectiveFps": sink.currentEffectiveFps
+        ])
+    }
+
+    private func handleStopWebRtcDetection(result: @escaping FlutterResult) {
+        webRtcPoseSink?.stop()
+        webRtcPoseSink = nil
+        isStreamingActive = false
+
+        frameEventSink?([
+            "type": "end",
+            "reason": "stopped"
+        ])
+        result(["success": true])
+    }
+
+    private func handleSetTargetFps(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let fps = args["fps"] as? Int else {
+            result(errorResponse(code: "invalidArguments", message: "Missing fps parameter"))
+            return
+        }
+
+        webRtcPoseSink?.updateTargetFps(fps)
+        result([
+            "success": true,
+            "effectiveFps": webRtcPoseSink?.currentEffectiveFps ?? fps
+        ])
+    }
+
+    private func handleSetAdaptiveThrottling(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let args = call.arguments as? [String: Any]
+        let enabled = args?["enabled"] as? Bool ?? true
+        let lowFps = args?["lowFps"] as? Int ?? 15
+
+        webRtcPoseSink?.setAdaptiveThrottling(enabled: enabled, lowFps: lowFps)
+        result([
+            "success": true,
+            "effectiveFps": webRtcPoseSink?.currentEffectiveFps ?? 30
+        ])
+    }
+
     /// Process a frame and send result through event channel.
     /// Called from Dart side when a camera frame is available.
     func processFrameForStream(planes: [[String: Any]], width: Int, height: Int, timestampUs: Int) {
@@ -493,6 +582,8 @@ public class NpuPoseDetectionPlugin: NSObject, FlutterPlugin {
     // MARK: - Dispose
 
     private func handleDispose(result: @escaping FlutterResult) {
+        webRtcPoseSink?.stop()
+        webRtcPoseSink = nil
         isStreamingActive = false
         videoProcessor?.cancel()
         videoProcessor = nil

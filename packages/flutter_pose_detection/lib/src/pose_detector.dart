@@ -233,6 +233,44 @@ class NpuPoseDetector {
     await _platform.stopCameraDetection();
   }
 
+  /// Start zero-copy native WebRTC pose detection directly on native VideoTrack sink.
+  ///
+  /// [trackId] is the WebRTC LocalVideoTrack id (from mediaStreamTrack.id).
+  /// [nominalFps] is the default target inference FPS (e.g. 30).
+  /// [throttledFps] is the reduced FPS when device is thermally throttled or battery is low (e.g. 15).
+  /// [enableAdaptiveThrottling] enables automatic thermal and low-battery throttling.
+  Stream<FrameResult> startWebRtcDetection({
+    required String trackId,
+    int nominalFps = 30,
+    int throttledFps = 15,
+    bool enableAdaptiveThrottling = true,
+  }) {
+    return _platform.startWebRtcDetection(
+      trackId: trackId,
+      nominalFps: nominalFps,
+      throttledFps: throttledFps,
+      enableAdaptiveThrottling: enableAdaptiveThrottling,
+    );
+  }
+
+  /// Stop zero-copy native WebRTC pose detection.
+  Future<void> stopWebRtcDetection() async {
+    await _platform.stopWebRtcDetection();
+  }
+
+  /// Dynamically update target FPS (e.g. motion-based adaptive throttling).
+  Future<void> setTargetFps(int fps) async {
+    await _platform.setTargetFps(fps);
+  }
+
+  /// Enable or disable adaptive throttling.
+  Future<void> setAdaptiveThrottling({
+    required bool enabled,
+    int lowFps = 15,
+  }) async {
+    await _platform.setAdaptiveThrottling(enabled: enabled, lowFps: lowFps);
+  }
+
   /// Analyze a video file for poses.
   ///
   /// Processes frames from the video at the specified interval.

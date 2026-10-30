@@ -100,6 +100,28 @@ abstract class PoseDetectorPlatform extends PlatformInterface {
   /// Stop camera detection stream.
   Future<void> stopCameraDetection();
 
+  /// Start zero-copy native WebRTC pose detection directly on native VideoTrack sink.
+  ///
+  /// [trackId] is the WebRTC LocalVideoTrack id (from mediaStreamTrack.id).
+  /// [nominalFps] is the default target inference FPS (e.g. 30).
+  /// [throttledFps] is the reduced FPS when device is thermally throttled or battery is low (e.g. 15).
+  /// [enableAdaptiveThrottling] enables automatic thermal and low-battery throttling.
+  Stream<FrameResult> startWebRtcDetection({
+    required String trackId,
+    int nominalFps = 30,
+    int throttledFps = 15,
+    bool enableAdaptiveThrottling = true,
+  });
+
+  /// Stop zero-copy native WebRTC pose detection.
+  Future<void> stopWebRtcDetection();
+
+  /// Dynamically update target FPS (e.g. motion-based adaptive throttling).
+  Future<void> setTargetFps(int fps);
+
+  /// Enable or disable adaptive throttling.
+  Future<void> setAdaptiveThrottling({required bool enabled, int lowFps = 15});
+
   /// Analyze a video file for poses.
   ///
   /// [videoPath] is the absolute path to the video file.

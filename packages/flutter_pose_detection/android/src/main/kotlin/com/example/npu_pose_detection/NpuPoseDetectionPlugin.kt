@@ -46,6 +46,7 @@ class NpuPoseDetectionPlugin : FlutterPlugin, MethodCallHandler, EventChannel.St
     private var frameCount = 0
     private val fpsCalculator = FPSCalculator()
     private var videoProcessor: VideoProcessor? = null
+    private var webRtcPoseSink: WebRtcPoseSink? = null
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -70,6 +71,10 @@ class NpuPoseDetectionPlugin : FlutterPlugin, MethodCallHandler, EventChannel.St
             "processFrame" -> handleProcessFrame(call, result)
             "startCameraDetection" -> handleStartCameraDetection(result)
             "stopCameraDetection" -> handleStopCameraDetection(result)
+            "startWebRtcDetection" -> handleStartWebRtcDetection(call, result)
+            "stopWebRtcDetection" -> handleStopWebRtcDetection(result)
+            "setTargetFps" -> handleSetTargetFps(call, result)
+            "setAdaptiveThrottling" -> handleSetAdaptiveThrottling(call, result)
             "analyzeVideo" -> handleAnalyzeVideo(call, result)
             "cancelVideoAnalysis" -> handleCancelVideoAnalysis(result)
             "updateConfig" -> handleUpdateConfig(call, result)
@@ -385,6 +390,89 @@ class NpuPoseDetectionPlugin : FlutterPlugin, MethodCallHandler, EventChannel.St
         result.success(mapOf("success" to true))
     }
 
+    // MARK: - WebRTC Native Zero-Copy Pipeline & Dynamic Throttling
+
+    private fun handleStartWebRtcDetection(call: MethodCall, result: Result) {
+        if (!isDetectorReady()) {
+            result.success(errorResponse("notInitialized", "Detector not initialized"))
+            return
+        }
+
+        val args = call.arguments as? Map<*, *>
+        val trackId = args?.get("trackId") as? String
+        if (trackId == null) {
+            result.error("invalidArguments", "Missing trackId parameter", null)
+            return
+        }
+
+        val nominalFps = (args["nominalFps"] as? Number)?.toInt() ?: 30
+        val throttledFps = (args["throttledFps"] as? Number)?.toInt() ?: 15
+        val enableAdaptiveThrottling = (args["enableAdaptiveThrottling"] as? Boolean) ?: true
+
+        val videoTrack = WebRtcPoseSink.resolveVideoTrack(trackId)
+        if (videoTrack == null) {
+            result.error("trackNotFound", "WebRTC VideoTrack not found for trackId: $trackId", null)
+            return
+        }
+
+        val detector = activeDetector ?: run {
+            result.error("notInitialized", "No active detector available", null)
+            return
+        }
+
+        webRtcPoseSink?.stop()
+        val sink = WebRtcPoseSink(
+            context = context,
+            detector = detector,
+            eventSink = frameEventSink,
+            nominalFps = nominalFps,
+            throttledFps = throttledFps,
+            adaptiveThrottlingEnabled = enableAdaptiveThrottling
+        )
+        sink.start(videoTrack)
+        webRtcPoseSink = sink
+        isStreamingActive = true
+
+        result.success(mapOf(
+            "success" to true,
+            "trackId" to trackId,
+            "effectiveFps" to sink.currentEffectiveFps
+        ))
+    }
+
+    private fun handleStopWebRtcDetection(result: Result) {
+        webRtcPoseSink?.stop()
+        webRtcPoseSink = null
+        isStreamingActive = false
+
+        frameEventSink?.success(mapOf(
+            "type" to "end",
+            "reason" to "stopped"
+        ))
+        result.success(mapOf("success" to true))
+    }
+
+    private fun handleSetTargetFps(call: MethodCall, result: Result) {
+        val args = call.arguments as? Map<*, *>
+        val fps = (args?.get("fps") as? Number)?.toInt() ?: 30
+        webRtcPoseSink?.updateTargetFps(fps)
+        result.success(mapOf(
+            "success" to true,
+            "effectiveFps" to (webRtcPoseSink?.currentEffectiveFps ?: fps)
+        ))
+    }
+
+    private fun handleSetAdaptiveThrottling(call: MethodCall, result: Result) {
+        val args = call.arguments as? Map<*, *>
+        val enabled = (args?.get("enabled") as? Boolean) ?: true
+        val lowFps = (args?.get("lowFps") as? Number)?.toInt() ?: 15
+        webRtcPoseSink?.setAdaptiveThrottling(enabled, lowFps)
+        result.success(mapOf(
+            "success" to true,
+            "effectiveFps" to (webRtcPoseSink?.currentEffectiveFps ?: 30)
+        ))
+    }
+
     // MARK: - Video Analysis
 
     private fun handleAnalyzeVideo(call: MethodCall, result: Result) {
@@ -491,6 +579,8 @@ class NpuPoseDetectionPlugin : FlutterPlugin, MethodCallHandler, EventChannel.St
     // MARK: - Dispose
 
     private fun handleDispose(result: Result) {
+        webRtcPoseSink?.stop()
+        webRtcPoseSink = null
         isStreamingActive = false
         videoProcessor?.cancel()
         videoProcessor = null
@@ -528,6 +618,8 @@ class NpuPoseDetectionPlugin : FlutterPlugin, MethodCallHandler, EventChannel.St
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        webRtcPoseSink?.stop()
+        webRtcPoseSink = null
         channel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         videoProgressChannel.setStreamHandler(null)

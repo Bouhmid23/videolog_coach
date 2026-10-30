@@ -38,6 +38,8 @@ interface PoseDetectorInterface {
      */
     fun detectPoseFromBitmap(bitmap: Bitmap): PoseResult
 
+    fun detectPoseFromBitmap(bitmap: Bitmap, timestampMs: Long): PoseResult = detectPoseFromBitmap(bitmap)
+
     /**
      * Release resources.
      */

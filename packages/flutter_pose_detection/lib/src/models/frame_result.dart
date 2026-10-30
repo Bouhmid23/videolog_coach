@@ -17,11 +17,27 @@ class FrameResult {
   /// Current frames per second (rolling average)
   final double fps;
 
+  /// Whether device is thermally throttled (MODERATE/SEVERE thermal state)
+  final bool isThermalThrottled;
+
+  /// Whether battery level is below low threshold (< 20% and not charging)
+  final bool isLowBattery;
+
+  /// Battery level as percentage [0.0 - 1.0]
+  final double? batteryLevel;
+
+  /// Current effective target FPS enforced by dynamic throttling
+  final int? targetFps;
+
   const FrameResult({
     required this.result,
     required this.frameNumber,
     required this.timestampUs,
     required this.fps,
+    this.isThermalThrottled = false,
+    this.isLowBattery = false,
+    this.batteryLevel,
+    this.targetFps,
   });
 
   /// Create from JSON map (platform channel)
@@ -31,6 +47,10 @@ class FrameResult {
       frameNumber: json['frameNumber'] as int,
       timestampUs: json['timestampUs'] as int,
       fps: (json['fps'] as num).toDouble(),
+      isThermalThrottled: json['isThermalThrottled'] as bool? ?? false,
+      isLowBattery: json['isLowBattery'] as bool? ?? false,
+      batteryLevel: (json['batteryLevel'] as num?)?.toDouble(),
+      targetFps: json['targetFps'] as int?,
     );
   }
 
@@ -40,6 +60,10 @@ class FrameResult {
         'frameNumber': frameNumber,
         'timestampUs': timestampUs,
         'fps': fps,
+        'isThermalThrottled': isThermalThrottled,
+        'isLowBattery': isLowBattery,
+        if (batteryLevel != null) 'batteryLevel': batteryLevel,
+        if (targetFps != null) 'targetFps': targetFps,
       };
 
   @override

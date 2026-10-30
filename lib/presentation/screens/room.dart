@@ -259,7 +259,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                       // ========================================================================
                       if (_gestureFeedbackMessage != null && !inPip)
                         Positioned(
-                          top: 54,
+                          top: 74,
                           left: 0,
                           right: 0,
                           child: Center(

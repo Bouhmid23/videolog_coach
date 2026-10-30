@@ -127,12 +127,32 @@ class MediaPipePoseDetector: PoseDetectorProtocol {
     }
 
     func processFrame(pixelBuffer: CVPixelBuffer) throws -> PoseResult {
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-            throw DetectorError.invalidImageFormat
+        return try detect(pixelBuffer: pixelBuffer, requestedTimestampMs: nil)
+    }
+
+    /// Zero-copy detection directly from CVPixelBuffer
+    func detect(pixelBuffer: CVPixelBuffer, requestedTimestampMs: Int?) throws -> PoseResult {
+        guard let landmarker = poseLandmarker else {
+            throw DetectorError.notInitialized
         }
-        return try detect(uiImage: UIImage(cgImage: cgImage), requestedTimestampMs: nil)
+
+        let startTime = CFAbsoluteTimeGetCurrent()
+        let image = try MPImage(pixelBuffer: pixelBuffer)
+        let timestamp = nextTimestamp(requestedTimestampMs)
+        let result = try landmarker.detect(videoFrame: image, timestampInMilliseconds: timestamp)
+        let processingTime = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        return PoseResult(
+            poses: convert(result),
+            processingTimeMs: processingTime,
+            accelerationMode: _accelerationMode,
+            timestamp: Date(),
+            imageWidth: width,
+            imageHeight: height
+        )
     }
 
     private func nextTimestamp(_ requested: Int?) -> Int {

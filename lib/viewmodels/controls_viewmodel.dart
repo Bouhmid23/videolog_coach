@@ -61,7 +61,7 @@ class ControlsViewModel extends ChangeNotifier {
     _room = room;
     _bleService = bleService;
     _sensorService = sensorService;
-    _speakerphoneOn = Hardware.instance.speakerOn ?? false;
+    _speakerphoneOn = AudioManager.instance.isSpeakerOutputPreferred;
     _lastMuted = participant.isMuted;
     _lastCameraEnabled = participant.isCameraEnabled();
 
@@ -188,7 +188,7 @@ class ControlsViewModel extends ChangeNotifier {
     final room = _room;
     if (room == null) return;
     _speakerphoneOn = !_speakerphoneOn;
-    await room.setSpeakerOn(_speakerphoneOn, forceSpeakerOutput: false);
+    await AudioManager.instance.setSpeakerOutputPreferred(_speakerphoneOn);
     notifyListeners();
   }
 
