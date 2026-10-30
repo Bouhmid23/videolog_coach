@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -13,10 +12,8 @@ import '../../viewmodels/controls_viewmodel.dart';
 import '../utils/ui_utils.dart';
 import 'controls/ble_sheet_content.dart';
 import 'controls/glasses_icon.dart';
-import 'controls/posture_smoothing_dialog.dart';
 import 'controls/sensor_sheet_content.dart';
 import 'recording_controls.dart';
-
 export 'controls/ble_sheet_content.dart';
 export 'controls/glasses_icon.dart';
 export 'controls/posture_smoothing_dialog.dart';
@@ -34,7 +31,7 @@ class ControlsWidget extends StatefulWidget {
   final bool showPosture;
   final VoidCallback? onTogglePosture;
   final double postureSmoothingAlpha;
-  final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
+  //final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
   final RecordingController? recordingController;
 
   const ControlsWidget(
@@ -47,8 +44,8 @@ class ControlsWidget extends StatefulWidget {
     required this.onBleDisconnected,
     this.showPosture = true,
     this.onTogglePosture,
-    this.postureSmoothingAlpha = 1.0,
-    this.onSetPostureSmoothingAlpha,
+    this.postureSmoothingAlpha = 0.5,
+    //this.onSetPostureSmoothingAlpha,
     this.recordingController,
     super.key,
   });
@@ -111,7 +108,7 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     await _vm.closeSensorSheet();
   }
 
-  Future<void> _openPostureSmoothingDialog() async {
+  /*Future<void> _openPostureSmoothingDialog() async {
     final onChange = widget.onSetPostureSmoothingAlpha;
     if (onChange == null) return;
     await PostureSmoothingDialog.show(
@@ -119,7 +116,7 @@ class _ControlsWidgetState extends State<ControlsWidget> {
       initialAlpha: widget.postureSmoothingAlpha,
       onApply: onChange,
     );
-  }
+  }*/
 
   void _onTapDisconnect() async {
     final result = await context.showDisconnectDialog();
@@ -618,15 +615,13 @@ class _ControlsWidgetState extends State<ControlsWidget> {
               if (!kIsWeb && lkPlatformIsMobile())
                 _buildControlButton(
                   icon: _vm.speakerphoneOn
-                      ? Icons.speaker_rounded
+                      ? Icons.volume_up
                       : Icons.headphones_rounded,
                   onPressed: _vm.toggleSpeakerphone,
                   tooltip: _vm.speakerphoneOn
                       ? 'Passer en haut-parleur'
                       : 'Passer en écouteur',
-                  iconColor: _vm.speakerphoneOn
-                      ? LKColors.secondary
-                      : LKColors.textPrimary,
+                  iconColor: LKColors.textPrimary,
                 ),
 
               // ── Camera ──
@@ -698,16 +693,16 @@ class _ControlsWidgetState extends State<ControlsWidget> {
                     ? 'Masquer la posture'
                     : 'Afficher la posture',
                 iconColor: widget.showPosture
-                    ? LKColors.success
+                    ? LKColors.primary
                     : LKColors.textSecondary,
                 isActive: widget.showPosture,
               ),
-              if (widget.onSetPostureSmoothingAlpha != null)
+              /*if (widget.onSetPostureSmoothingAlpha != null)
                 _buildControlButton(
                   icon: Icons.tune_rounded,
                   onPressed: _openPostureSmoothingDialog,
                   tooltip: 'Régler le lissage de la posture',
-                ),
+                ),*/
 
               // ── Recording (Egress) ──
               if (widget.recordingController != null)

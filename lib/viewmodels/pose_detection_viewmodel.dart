@@ -15,7 +15,6 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/gravity_service.dart';
 import '../core/posture_detection_service.dart';
@@ -62,15 +61,15 @@ class PoseFrame {
 ///  - capture JPEG gardée en mémoire et dimensions lues depuis le résultat ;
 ///  - paquet « pose perdue » pour que le web efface le squelette.
 class PoseDetectionViewModel extends ChangeNotifier {
-  static const String _smoothingAlphaPreference = 'pose_smoothing_alpha';
-  final PostureSmoothing _smoothing = PostureSmoothing(alpha: 1.0);
+  //static const String _smoothingAlphaPreference = 'pose_smoothing_alpha';
+  final PostureSmoothing _smoothing = PostureSmoothing(alpha: 0.5);
 
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
     // Le backend GPU MediaPipe est le plus rapide pour un flux caméra continu.
     // Le mode NPU/QNN vise l'autonomie mais est plus lent et nécessite des
     // bibliothèques QNN supplémentaires non embarquées dans l'application.
     config: PoseDetectorConfig.realtime().copyWith(
-      maxPoses: 1,
+      maxPoses: 10,
       minConfidence: 0.5,
       minPoseDetectionConfidence: 0.5,
       minPosePresenceConfidence: 0.5,
@@ -137,8 +136,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
         debugPrint('[Pose] Could not read Android model: $error');
       }
     }
-    final preferences = await SharedPreferences.getInstance();
-    _smoothing.alpha = preferences.getDouble(_smoothingAlphaPreference) ?? 1.0;
+    //final preferences = await SharedPreferences.getInstance();
+    _smoothing.alpha = 0.5;
     final acceleration = await _poseDetector.initialize();
     final config = _poseDetector.config;
     debugPrint(
@@ -153,12 +152,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
     );
   }
 
-  Future<void> setSmoothingAlpha(double value) async {
+  /*Future<void> setSmoothingAlpha(double value) async {
     _smoothing.alpha = value;
     final preferences = await SharedPreferences.getInstance();
     await preferences.setDouble(_smoothingAlphaPreference, _smoothing.alpha);
     notifyListeners();
-  }
+  }*/
 
   /// [destinationIdentities] : si seul le viewer web consomme le squelette,
   /// renseigne son identité pour éviter le fan-out vers les autres participants.

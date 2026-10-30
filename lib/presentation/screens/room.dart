@@ -3,12 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
-
 import '../../core/pip_service.dart';
 import '../../core/recording_controller.dart';
 import '../../data/remote_telemetry.dart';
 import '../../data/user_role.dart';
-import '../../exts.dart';
 import '../../theme.dart';
 import '../../utils.dart';
 import '../utils/ui_utils.dart';
@@ -102,7 +100,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     });
 
     if (lkPlatformIs(PlatformType.android)) {
-      unawaited(widget.room.setSpeakerOn(true, forceSpeakerOutput: false));
+      unawaited(AudioManager.instance.setSpeakerOutputPreferred(true));
     }
 
     if (lkPlatformIsDesktop()) {
@@ -141,7 +139,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
         final orientation = MediaQuery.orientationOf(context);
         final size = MediaQuery.sizeOf(context);
         final isLandscape = orientation == Orientation.landscape;
-        final isTabletOrDesktop = size.shortestSide >= 600 || size.width >= 720;
+        final isTabletOrDesktop = size.shortestSide >= 700 || size.width >= 820;
         final useTwoColumns = (isLandscape || isTabletOrDesktop) && !inPip;
 
         return Scaffold(
@@ -232,67 +230,6 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
             children: [
               Positioned.fill(
                 child: _buildPrimaryVideo(context, inPip: false),
-              ),
-              // Barre d'en-tête discrète (bouton retour et nom de session)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: UIUtils.md,
-                      vertical: UIUtils.xs,
-                    ),
-                    child: Row(
-                      children: [
-                        IconButton(
-                          constraints: const BoxConstraints(
-                            minWidth: 48,
-                            minHeight: 48,
-                          ),
-                          icon: const Icon(
-                            Icons.arrow_back_ios_new_rounded,
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                          onPressed: () async {
-                            final result = await context.showDisconnectDialog();
-                            if (result == true) await widget.room.disconnect();
-                          },
-                          style: IconButton.styleFrom(
-                            backgroundColor:
-                                LKColors.lkDarkBlue.withValues(alpha: 0.85),
-                            shape: const CircleBorder(),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: LKColors.lkDarkBlue.withValues(alpha: 0.85),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.25),
-                            ),
-                          ),
-                          child: Text(
-                            widget.roomName ?? widget.room.name ?? 'Session',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
               ),
             ],
           ),
@@ -505,31 +442,6 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
               ),
             ),
           ),
-          ListenableBuilder(
-            listenable: _vm,
-            builder: (context, _) {
-              final count = _vm.secondaryTracks.length +
-                  (_vm.primaryTrack != null ? 1 : 0);
-              return Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: LKColors.primary.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: LKColors.primary.withValues(alpha: 0.4),
-                  ),
-                ),
-                child: Text(
-                  '$count',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: LKColors.primary,
-                  ),
-                ),
-              );
-            },
-          ),
         ],
       ),
     );
@@ -679,8 +591,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
         showPosture: showPosture,
         onTogglePosture: _vm.togglePosture,
         postureSmoothingAlpha: _vm.poseSmoothingAlpha,
-        onSetPostureSmoothingAlpha:
-            widget.role.isTrainee ? _vm.setPoseSmoothingAlpha : null,
+        //onSetPostureSmoothingAlpha: widget.role.isTrainee ? _vm.setPoseSmoothingAlpha : null,
         recordingController: _recordingController,
       ),
     );

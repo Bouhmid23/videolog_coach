@@ -158,9 +158,9 @@ class RoomViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> setPoseSmoothingAlpha(double alpha) async {
+  /*Future<void> setPoseSmoothingAlpha(double alpha) async {
     await poseViewModel.setSmoothingAlpha(alpha);
-  }
+  }*/
 
   void selectParticipant(String? identity) {
     if (_selectedParticipantIdentity == identity) {
