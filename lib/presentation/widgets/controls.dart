@@ -33,6 +33,10 @@ class ControlsWidget extends StatefulWidget {
   final double postureSmoothingAlpha;
   //final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
   final RecordingController? recordingController;
+  final bool isScreenLocked;
+  final VoidCallback? onToggleSweatLock;
+  final bool isOutdoorSunMode;
+  final VoidCallback? onToggleOutdoorSunMode;
 
   const ControlsWidget(
     this.room,
@@ -47,6 +51,10 @@ class ControlsWidget extends StatefulWidget {
     this.postureSmoothingAlpha = 0.5,
     //this.onSetPostureSmoothingAlpha,
     this.recordingController,
+    this.isScreenLocked = false,
+    this.onToggleSweatLock,
+    this.isOutdoorSunMode = false,
+    this.onToggleOutdoorSunMode,
     super.key,
   });
 
@@ -697,6 +705,36 @@ class _ControlsWidgetState extends State<ControlsWidget> {
                     : LKColors.textSecondary,
                 isActive: widget.showPosture,
               ),
+
+              // ── Sweat / Pocket Lock ──
+              if (widget.onToggleSweatLock != null)
+                _buildControlButton(
+                  icon: widget.isScreenLocked
+                      ? Icons.lock_rounded
+                      : Icons.lock_outline_rounded,
+                  onPressed: widget.onToggleSweatLock,
+                  tooltip: widget.isScreenLocked
+                      ? 'Déverrouiller l\'écran'
+                      : 'Verrouillage sueur (Pocket / Sweat Lock)',
+                  iconColor: widget.isScreenLocked
+                      ? LKColors.warning
+                      : LKColors.textPrimary,
+                  isActive: widget.isScreenLocked,
+                ),
+
+              // ── Outdoor Sun Mode (Contraste solaire maximal) ──
+              if (widget.onToggleOutdoorSunMode != null)
+                _buildControlButton(
+                  icon: Icons.wb_sunny_rounded,
+                  onPressed: widget.onToggleOutdoorSunMode,
+                  tooltip: widget.isOutdoorSunMode
+                      ? 'Désactiver le mode plein soleil'
+                      : 'Mode plein soleil (Contraste maximal)',
+                  iconColor: widget.isOutdoorSunMode
+                      ? const Color(0xFFFFD700)
+                      : LKColors.textPrimary,
+                  isActive: widget.isOutdoorSunMode,
+                ),
               /*if (widget.onSetPostureSmoothingAlpha != null)
                 _buildControlButton(
                   icon: Icons.tune_rounded,

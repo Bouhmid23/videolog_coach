@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show HapticFeedback, MethodChannel;
+import 'package:flutter/services.dart' show EventChannel, HapticFeedback;
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +10,7 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/api_service.dart';
+import '../../core/athletic_haptics.dart';
 import '../../core/auth_service.dart';
 import '../../core/gravity_service.dart';
 import '../../data/livekit_token.dart';
@@ -64,8 +65,8 @@ class ConnectPage extends StatefulWidget {
 }
 
 class _ConnectPageState extends State<ConnectPage> {
-  static const MethodChannel _micMeterChannel = MethodChannel(
-    'videolog/mic_meter',
+  static const EventChannel _micMeterStreamChannel = EventChannel(
+    'videolog/mic_meter_stream',
   );
 
   bool _busy = false;
@@ -79,7 +80,7 @@ class _ConnectPageState extends State<ConnectPage> {
   bool _micEnabled = true;
   CameraPosition _cameraPosition = CameraPosition.front;
   final ValueNotifier<double> _micLevel = ValueNotifier<double>(0.0);
-  Timer? _micPollTimer;
+  StreamSubscription<double>? _micMeterSub;
 
   // ── État Capteurs BLE & GPS ──
   StreamSubscription<BleStatus>? _bleStatusSub;
@@ -124,7 +125,7 @@ class _ConnectPageState extends State<ConnectPage> {
 
   @override
   void dispose() {
-    _micPollTimer?.cancel();
+    unawaited(_micMeterSub?.cancel());
     unawaited(_bleStatusSub?.cancel());
     unawaited(_stopPreviewMedia());
     _micLevel.dispose();
@@ -132,7 +133,7 @@ class _ConnectPageState extends State<ConnectPage> {
   }
 
   Future<void> _initPreConnectChecks() async {
-    if (lkPlatformIs(PlatformType.android)) {
+    if (lkPlatformIsMobile()) {
       await _checkPermissions();
     }
     if (!mounted) return;
@@ -147,14 +148,19 @@ class _ConnectPageState extends State<ConnectPage> {
   }
 
   Future<void> _checkPermissions() async {
-    for (final perm in [
+    final permissions = [
       Permission.camera,
       Permission.microphone,
-      Permission.bluetooth,
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
+      if (lkPlatformIs(PlatformType.android)) ...[
+        Permission.bluetooth,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ] else if (lkPlatformIs(PlatformType.iOS)) ...[
+        Permission.bluetooth,
+      ],
       Permission.locationWhenInUse,
-    ]) {
+    ];
+    for (final perm in permissions) {
       final status = await perm.request();
       if (status.isPermanentlyDenied) {
         debugPrint('Permission $perm refusée définitivement');
@@ -222,7 +228,7 @@ class _ConnectPageState extends State<ConnectPage> {
   }
 
   Future<void> _switchPreviewCamera() async {
-    unawaited(HapticFeedback.lightImpact());
+    unawaited(AthleticHaptics.participantSwitched());
     final nextPosition = _cameraPosition.switched();
     setState(() => _cameraPosition = nextPosition);
     GravityService.instance.frontCamera = nextPosition == CameraPosition.front;
@@ -243,41 +249,41 @@ class _ConnectPageState extends State<ConnectPage> {
 
   // ── Jauge microphone ───────────────────────────────────────────────────────
   Future<void> _startMicMeter() async {
-    _micPollTimer?.cancel();
-    if (kIsWeb || !lkPlatformIs(PlatformType.android) || !_micEnabled) {
+    await _stopMicMeter();
+    if (kIsWeb || !lkPlatformIsMobile() || !_micEnabled) {
       _micLevel.value = 0.0;
       return;
     }
     try {
-      final started =
-          await _micMeterChannel.invokeMethod<bool>('start') ?? false;
-      if (!started || !mounted || !_micEnabled) return;
-      _micPollTimer = Timer.periodic(const Duration(milliseconds: 90), (_) async {
-        if (!mounted || !_micEnabled || _busy) return;
-        try {
-          final level =
-              await _micMeterChannel.invokeMethod<double>('getLevel') ?? 0.0;
-          _micLevel.value = level.clamp(0.0, 1.0);
-        } catch (_) {}
-      });
+      _micMeterSub = _micMeterStreamChannel
+          .receiveBroadcastStream()
+          .map((dynamic event) => (event as num).toDouble())
+          .listen(
+            (level) {
+              if (mounted && _micEnabled && !_busy) {
+                _micLevel.value = level.clamp(0.0, 1.0);
+              }
+            },
+            onError: (Object error) {
+              debugPrint('[ConnectPage] Jauge micro flux erreur: $error');
+              if (mounted) _micLevel.value = 0.0;
+            },
+          );
     } catch (e) {
       debugPrint('[ConnectPage] Jauge micro indisponible: $e');
     }
   }
 
   Future<void> _stopMicMeter() async {
-    _micPollTimer?.cancel();
-    _micPollTimer = null;
+    await _micMeterSub?.cancel();
+    _micMeterSub = null;
     _micLevel.value = 0.0;
-    if (kIsWeb || !lkPlatformIs(PlatformType.android)) return;
-    try {
-      await _micMeterChannel.invokeMethod<void>('stop');
-    } catch (_) {}
   }
 
   Future<void> _togglePreviewMic() async {
-    unawaited(HapticFeedback.lightImpact());
-    setState(() => _micEnabled = !_micEnabled);
+    final next = !_micEnabled;
+    unawaited(AthleticHaptics.micToggled(muted: !next));
+    setState(() => _micEnabled = next);
     if (_micEnabled) {
       await _startMicMeter();
     } else {
@@ -448,7 +454,7 @@ class _ConnectPageState extends State<ConnectPage> {
           name: 'custom_audio_track_name',
         ),
         defaultVideoPublishOptions: const VideoPublishOptions(
-          simulcast: false,
+          simulcast: true,
           videoCodec: 'H264',
           backupVideoCodec: BackupVideoCodec(enabled: true),
           videoEncoding: cameraEncoding,

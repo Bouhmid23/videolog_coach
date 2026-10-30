@@ -15,6 +15,7 @@ import android.os.Looper
 import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import kotlin.math.sqrt
 
@@ -23,6 +24,7 @@ class MainActivity : FlutterActivity() {
         const val CHANNEL = "videolog/pip"
         const val BEEP_CHANNEL = "videolog/beep"
         const val MIC_METER_CHANNEL = "videolog/mic_meter"
+        const val MIC_METER_STREAM_CHANNEL = "videolog/mic_meter_stream"
         val DEFAULT_RATIO = Rational(9, 16)
     }
 
@@ -35,6 +37,8 @@ class MainActivity : FlutterActivity() {
     @Volatile
     private var currentMicLevel = 0.0
     private var micMeterThread: Thread? = null
+    private var micEventSink: EventChannel.EventSink? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -49,7 +53,24 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        // Jauge niveau microphone pour l'écran de pré-connexion.
+        // Flux réactif du niveau microphone via EventChannel (push-based, zéro polling).
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, MIC_METER_STREAM_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    micEventSink = events
+                    val started = startMicMeter()
+                    if (!started) {
+                        events?.error("PERMISSION_OR_INIT_FAILED", "Microphone non accessible ou permission non accordée", null)
+                    }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    micEventSink = null
+                    stopMicMeter()
+                }
+            })
+
+        // Rétrocompatibilité : Jauge niveau microphone pour l'écran de pré-connexion.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MIC_METER_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -91,6 +112,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        micEventSink = null
         stopMicMeter()
         super.onDestroy()
     }
@@ -148,6 +170,10 @@ class MainActivity : FlutterActivity() {
                         // Gain doux pour une jauge visuelle réactive à la voix normale.
                         val normalized = (rms * 5.5).coerceIn(0.0, 1.0)
                         currentMicLevel = currentMicLevel * 0.35 + normalized * 0.65
+                        val levelToSend = currentMicLevel
+                        mainHandler.post {
+                            micEventSink?.success(levelToSend)
+                        }
                     } else {
                         Thread.sleep(40)
                     }
@@ -156,6 +182,9 @@ class MainActivity : FlutterActivity() {
                 // Ignoré en cas d'arrêt concurrent.
             } finally {
                 currentMicLevel = 0.0
+                mainHandler.post {
+                    micEventSink?.success(0.0)
+                }
                 try {
                     record.stop()
                 } catch (_: Throwable) {}

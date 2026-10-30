@@ -12,7 +12,8 @@ class PipService {
 
   static bool _initialized = false;
 
-  static bool get isAvailable => Platform.isAndroid;
+  static bool get isAvailable =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   static void initialize() {
     if (_initialized || !isAvailable) return;

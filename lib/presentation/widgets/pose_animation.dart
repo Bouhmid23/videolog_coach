@@ -1,7 +1,124 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 
 import '../../theme.dart';
+
+/// Filtre de Butterworth passe-bas d'ordre 2 pour coordonnées 2D (x, y).
+///
+/// Élimine le bruit et le micro-tremblement haute fréquence de détection (ex: MediaPipe Lite)
+/// tout en conservant une trajectoire cinématique ultra-fluide à 120 Hz.
+class ButterworthFilter2D {
+  final double cutoffFrequency; // Fréquence de coupure en Hz (ex: 5.0)
+  final double samplingRate; // Fréquence d'échantillonnage en Hz (ex: 30.0)
+
+  late final double _b0, _b1, _b2;
+  late final double _a1, _a2;
+
+  double? _x1, _x2;
+  double? _y1, _y2;
+
+  double? _yx1, _yx2;
+  double? _yy1, _yy2;
+
+  bool _initialized = false;
+
+  ButterworthFilter2D({
+    this.cutoffFrequency = 5.0,
+    this.samplingRate = 30.0,
+  }) {
+    // Calcul des coefficients du filtre IIR Butterworth passe-bas d'ordre 2
+    // via transformation bilinéaire :
+    final omega = math.tan(math.pi * cutoffFrequency / samplingRate);
+    final c = omega;
+    final c2 = c * c;
+    final sqrt2 = math.sqrt(2.0);
+    final d = 1.0 + sqrt2 * c + c2;
+
+    _b0 = c2 / d;
+    _b1 = 2.0 * _b0;
+    _b2 = _b0;
+
+    _a1 = 2.0 * (c2 - 1.0) / d;
+    _a2 = (1.0 - sqrt2 * c + c2) / d;
+  }
+
+  /// Filtre un point (x, y) et renvoie la coordonnée lissée.
+  Offset filter(Offset input) {
+    if (!_initialized) {
+      _x1 = _x2 = _y1 = _y2 = input.dx;
+      _yx1 = _yx2 = _yy1 = _yy2 = input.dy;
+      _initialized = true;
+      return input;
+    }
+
+    // Filtrage sur la composante X
+    final x = input.dx;
+    final outX = _b0 * x + _b1 * _x1! + _b2 * _x2! - _a1 * _y1! - _a2 * _y2!;
+    _x2 = _x1;
+    _x1 = x;
+    _y2 = _y1;
+    _y1 = outX;
+
+    // Filtrage sur la composante Y
+    final y = input.dy;
+    final outY = _b0 * y + _b1 * _yx1! + _b2 * _yx2! - _a1 * _yy1! - _a2 * _yy2!;
+    _yx2 = _yx1;
+    _yx1 = y;
+    _yy2 = _yy1;
+    _yy1 = outY;
+
+    return Offset(outX, outY);
+  }
+
+  /// Réinitialise l'état interne du filtre avec un point initial optionnel.
+  void reset([Offset? initial]) {
+    if (initial != null) {
+      _x1 = _x2 = _y1 = _y2 = initial.dx;
+      _yx1 = _yx2 = _yy1 = _yy2 = initial.dy;
+      _initialized = true;
+    } else {
+      _x1 = _x2 = _y1 = _y2 = null;
+      _yx1 = _yx2 = _yy1 = _yy2 = null;
+      _initialized = false;
+    }
+  }
+}
+
+/// Gestionnaire de filtrage Butterworth pour l'ensemble des points d'une pose humaine.
+class ButterworthPoseFilter {
+  final double cutoffFrequency;
+  final double samplingRate;
+  final Map<LandmarkType, ButterworthFilter2D> _filters = {};
+
+  ButterworthPoseFilter({
+    this.cutoffFrequency = 5.0,
+    this.samplingRate = 30.0,
+  });
+
+  InterpolatedPose filterPose(InterpolatedPose pose) {
+    final smoothedPoints = <LandmarkType, Offset>{};
+    for (final entry in pose.points.entries) {
+      final filter = _filters.putIfAbsent(
+        entry.key,
+        () => ButterworthFilter2D(
+          cutoffFrequency: cutoffFrequency,
+          samplingRate: samplingRate,
+        ),
+      );
+      smoothedPoints[entry.key] = filter.filter(entry.value);
+    }
+    return InterpolatedPose(
+      points: smoothedPoints,
+      confidence: pose.confidence,
+      timestamp: pose.timestamp,
+    );
+  }
+
+  void reset() {
+    _filters.clear();
+  }
+}
 
 /// Structure pour interpoler entre deux poses avec des métadonnées supplémentaires
 class InterpolatedPose {
@@ -210,7 +327,7 @@ class ConfidenceColorPalette {
   }
 }
 
-/// Contrôleur d'animation pour les poses avec easing personnalisé
+/// Contrôleur d'animation pour les poses avec easing personnalisé et filtre cinématique
 class PoseAnimationController extends ChangeNotifier {
   InterpolatedPose? _currentPose;
   InterpolatedPose? _fromPose;
@@ -218,13 +335,23 @@ class PoseAnimationController extends ChangeNotifier {
   late AnimationController _controller;
   late Animation<double> _animation;
   final Duration transitionDuration;
+  final bool enableButterworthFilter;
+  final ButterworthPoseFilter? _butterworthFilter;
 
   InterpolatedPose? get currentPose => _currentPose;
 
   PoseAnimationController({
     required TickerProvider vsync,
     this.transitionDuration = const Duration(milliseconds: 100),
-  }) {
+    this.enableButterworthFilter = false,
+    double cutoffFrequency = 5.0,
+    double samplingRate = 30.0,
+  }) : _butterworthFilter = enableButterworthFilter
+            ? ButterworthPoseFilter(
+                cutoffFrequency: cutoffFrequency,
+                samplingRate: samplingRate,
+              )
+            : null {
     _controller = AnimationController(
       duration: transitionDuration,
       vsync: vsync,
@@ -249,14 +376,15 @@ class PoseAnimationController extends ChangeNotifier {
   /// Met à jour la pose cible. [duration] : durée pour l'atteindre ; à passer égale à
   /// l'intervalle entre deux poses, pour arriver à la cible quand la pose suivante arrive.
   void updatePose(InterpolatedPose newPose, {Duration? duration}) {
+    final filtered = _butterworthFilter?.filterPose(newPose) ?? newPose;
     if (_currentPose == null) {
-      _currentPose = newPose;
-      _fromPose = newPose;
-      _targetPose = newPose;
+      _currentPose = filtered;
+      _fromPose = filtered;
+      _targetPose = filtered;
       notifyListeners();
     } else {
       _fromPose = _currentPose;
-      _targetPose = newPose;
+      _targetPose = filtered;
       if (duration != null) _controller.duration = duration;
       _controller.forward(from: 0.0);
     }
@@ -264,9 +392,11 @@ class PoseAnimationController extends ChangeNotifier {
 
   /// Met à jour immédiatement la pose (sans animation)
   void jumpToPose(InterpolatedPose newPose) {
-    _currentPose = newPose;
-    _fromPose = newPose;
-    _targetPose = newPose;
+    _butterworthFilter?.reset();
+    final filtered = _butterworthFilter?.filterPose(newPose) ?? newPose;
+    _currentPose = filtered;
+    _fromPose = filtered;
+    _targetPose = filtered;
     _controller.reset();
     notifyListeners();
   }
@@ -276,6 +406,7 @@ class PoseAnimationController extends ChangeNotifier {
     _currentPose = null;
     _fromPose = null;
     _targetPose = null;
+    _butterworthFilter?.reset();
     _controller.reset();
     notifyListeners();
   }

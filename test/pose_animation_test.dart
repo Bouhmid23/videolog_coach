@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videolog_coach/presentation/widgets/pose_animation.dart';
@@ -53,5 +51,33 @@ void main() {
     final after = controller.currentPose!.points[LandmarkType.nose]!.dx;
     expect((after - before).abs(), lessThan(5));
     controller.dispose();
+  });
+
+  test('ButterworthFilter2D atténue les bruits haute fréquence et préserve les positions stables', () {
+    final filter = ButterworthFilter2D(cutoffFrequency: 5.0, samplingRate: 30.0);
+    // Première valeur d'initialisation
+    final initial = filter.filter(const Offset(100, 100));
+    expect(initial, const Offset(100, 100));
+
+    // Entrée stable : reste stable à 100
+    for (int i = 0; i < 10; i++) {
+      final res = filter.filter(const Offset(100, 100));
+      expect(res.dx, closeTo(100, 0.1));
+      expect(res.dy, closeTo(100, 0.1));
+    }
+
+    // Injection d'un pic de bruit haute fréquence (bruit MediaPipe Lite isolé)
+    final noisy = filter.filter(const Offset(130, 130)); // saut brusque de 30px
+    // Le filtre passe-bas doit amortir drastiquement ce pic isolé
+    expect(noisy.dx, lessThan(115));
+    expect(noisy.dy, lessThan(115));
+  });
+
+  test('ButterworthPoseFilter filtre l ensemble des repères anatomiques', () {
+    final poseFilter = ButterworthPoseFilter(cutoffFrequency: 5.0, samplingRate: 30.0);
+    final rawPose = _pose(50);
+    final filtered = poseFilter.filterPose(rawPose);
+    expect(filtered.points.containsKey(LandmarkType.nose), isTrue);
+    expect(filtered.points[LandmarkType.nose]!.dx, 50);
   });
 }

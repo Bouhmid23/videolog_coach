@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../../data/remote_telemetry.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
+import 'animated_count.dart';
 import 'heart_rate_gauge.dart';
 
+export 'animated_count.dart';
 export 'heart_rate_gauge.dart';
 export '../../data/heart_rate_zones.dart';
 
@@ -17,6 +19,7 @@ class DataHud extends StatefulWidget {
   final bool transparent;
   final bool compact;
   final bool showToggle;
+  final bool outdoorSunMode;
 
   const DataHud({
     this.telemetry,
@@ -25,6 +28,7 @@ class DataHud extends StatefulWidget {
     this.transparent = false,
     this.compact = false,
     this.showToggle = true,
+    this.outdoorSunMode = false,
     super.key,
   });
 
@@ -32,46 +36,73 @@ class DataHud extends StatefulWidget {
   State<DataHud> createState() => _DataHudState();
 }
 
+class _HudItemData {
+  final IconData icon;
+  final Color standardColor;
+  final Color neonColor;
+  final double value;
+  final int fractionDigits;
+  final String unit;
+
+  const _HudItemData({
+    required this.icon,
+    required this.standardColor,
+    required this.neonColor,
+    required this.value,
+    required this.fractionDigits,
+    required this.unit,
+  });
+
+  Color color({required bool outdoorSunMode}) =>
+      outdoorSunMode ? neonColor : standardColor;
+}
+
 class _DataHudState extends State<DataHud> {
   bool _expanded = true;
   static const double _compactWidth = 320;
 
-  List<(IconData, Color, String, String)> _buildItems(
-    RemoteTelemetry? telemetry,
-  ) {
-    final items = <(IconData, Color, String, String)>[];
+  List<_HudItemData> _buildItems(RemoteTelemetry? telemetry) {
+    final items = <_HudItemData>[];
     if (telemetry == null) return items;
 
     if (telemetry.speed != null) {
-      items.add((
-        Icons.speed_rounded,
-        LKColors.warning,
-        '${telemetry.speed!.toStringAsFixed(1)} km/h',
-        '',
+      items.add(_HudItemData(
+        icon: Icons.speed_rounded,
+        standardColor: LKColors.warning,
+        neonColor: const Color(0xFFFFD700), // Ambre / Or fluo
+        value: telemetry.speed!,
+        fractionDigits: 1,
+        unit: 'km/h',
       ));
     }
     if (telemetry.cadence != null) {
-      items.add((
-        Icons.pedal_bike_rounded,
-        LKColors.success,
-        '${telemetry.cadence!.toStringAsFixed(0)} rpm',
-        '',
+      items.add(_HudItemData(
+        icon: Icons.pedal_bike_rounded,
+        standardColor: LKColors.success,
+        neonColor: const Color(0xFF00FF66), // Vert néon saturé
+        value: telemetry.cadence!,
+        fractionDigits: 0,
+        unit: 'rpm',
       ));
     }
     if (telemetry.altitude != null) {
-      items.add((
-        Icons.height_rounded,
-        LKColors.secondary,
-        '${telemetry.altitude!.toStringAsFixed(0)} m',
-        '',
+      items.add(_HudItemData(
+        icon: Icons.height_rounded,
+        standardColor: LKColors.secondary,
+        neonColor: const Color(0xFF00E5FF), // Cyan néon
+        value: telemetry.altitude!,
+        fractionDigits: 0,
+        unit: 'm',
       ));
     }
     if (telemetry.bearing != null) {
-      items.add((
-        Icons.explore_rounded,
-        LKColors.warning,
-        '${telemetry.bearing!.toStringAsFixed(0)} deg',
-        '',
+      items.add(_HudItemData(
+        icon: Icons.explore_rounded,
+        standardColor: LKColors.warning,
+        neonColor: const Color(0xFFFF6600), // Orange néon
+        value: telemetry.bearing!,
+        fractionDigits: 0,
+        unit: 'deg',
       ));
     }
 
@@ -147,23 +178,34 @@ class _DataHudState extends State<DataHud> {
                 transparent: widget.transparent,
                 showValue: widget.showValues,
                 showZoneBar: !compact,
+                outdoorSunMode: widget.outdoorSunMode,
               ),
             for (final item in items)
               _HudChip(
-                icon: item.$1,
-                color: item.$2,
-                text: widget.showValues ? item.$3 : item.$4,
+                icon: item.icon,
+                color: item.color(outdoorSunMode: widget.outdoorSunMode),
+                text: widget.showValues
+                    ? '${item.value.toStringAsFixed(item.fractionDigits)} ${item.unit}'
+                    : '',
+                value: widget.showValues ? item.value : null,
+                fractionDigits: item.fractionDigits,
+                unit: item.unit,
+                showText: widget.showValues,
                 compact: compact,
                 transparent: widget.transparent,
+                outdoorSunMode: widget.outdoorSunMode,
               ),
             if (widget.showToggle && !compact && !widget.transparent)
               _HudChip(
                 icon: _expanded
                     ? Icons.unfold_less_rounded
                     : Icons.unfold_more_rounded,
-                color: LKColors.textSecondary,
+                color: widget.outdoorSunMode ? Colors.white : LKColors.textSecondary,
                 text: _expanded ? 'Reduire' : 'Details',
                 showText: _expanded,
+                compact: compact,
+                transparent: widget.transparent,
+                outdoorSunMode: widget.outdoorSunMode,
                 onTap: () => setState(() => _expanded = !_expanded),
               ),
           ],
@@ -185,9 +227,14 @@ class _DataHudState extends State<DataHud> {
                   vertical: UIUtils.xs,
                 ),
                 decoration: BoxDecoration(
-                  color: LKColors.surface.withValues(alpha: 0.85),
+                  color: widget.outdoorSunMode
+                      ? Colors.black
+                      : LKColors.surface.withValues(alpha: 0.85),
                   borderRadius: UIUtils.borderRadiusAllMD,
-                  border: Border.all(color: LKColors.border, width: 0.5),
+                  border: Border.all(
+                    color: widget.outdoorSunMode ? Colors.white : LKColors.border,
+                    width: widget.outdoorSunMode ? 1.5 : 0.5,
+                  ),
                   boxShadow: UIUtils.shadowSM,
                 ),
                 child: content,
@@ -204,26 +251,45 @@ class _HudChip extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String text;
+  final double? value;
+  final int fractionDigits;
+  final String unit;
   final bool showText;
   final bool compact;
   final bool transparent;
+  final bool outdoorSunMode;
   final VoidCallback? onTap;
 
   const _HudChip({
     required this.icon,
     required this.color,
     required this.text,
+    this.value,
+    this.fractionDigits = 0,
+    this.unit = '',
     this.showText = true,
     this.compact = false,
     this.transparent = false,
+    this.outdoorSunMode = false,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final hasText = showText && text.isNotEmpty;
+    final hasText = showText && (text.isNotEmpty || value != null);
     final borderRadius = BorderRadius.circular(999);
-    final chip = AnimatedContainer(
+
+    final backgroundColor = outdoorSunMode
+        ? Colors.black
+        : (transparent
+            ? LKColors.background.withValues(alpha: 0.5)
+            : LKColors.background.withValues(alpha: 0.65));
+
+    final borderColor = outdoorSunMode
+        ? color
+        : LKColors.border.withValues(alpha: 0.6);
+
+    return AnimatedContainer(
       duration: UIUtils.animationDuration,
       curve: UIUtils.animationCurve,
       padding: EdgeInsets.symmetric(
@@ -231,11 +297,11 @@ class _HudChip extends StatelessWidget {
         vertical: compact ? 4 : 6,
       ),
       decoration: BoxDecoration(
-        color: LKColors.background.withValues(alpha: 0.65),
+        color: backgroundColor,
         borderRadius: borderRadius,
         border: Border.all(
-          color: LKColors.border.withValues(alpha: 0.6),
-          width: 0.8,
+          color: borderColor,
+          width: outdoorSunMode ? 1.2 : 0.8,
         ),
       ),
       child: Row(
@@ -249,30 +315,41 @@ class _HudChip extends StatelessWidget {
                 ? const SizedBox(width: 0)
                 : Padding(
                     padding: const EdgeInsets.only(left: 4),
-                    child: Text(
-                      text,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: LKColors.textPrimary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: transparent
-                            ? 10
-                            : compact
-                            ? 9
-                            : 10,
-                        fontFeatures: const [ui.FontFeature.tabularFigures()],
-                      ),
-                    ),
+                    child: value != null
+                        ? AnimatedSportsCount(
+                            value: value!,
+                            fractionDigits: fractionDigits,
+                            suffix: ' $unit',
+                            outdoorSunMode: outdoorSunMode,
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: outdoorSunMode ? Colors.white : LKColors.textPrimary,
+                              fontWeight: outdoorSunMode ? FontWeight.w900 : FontWeight.w700,
+                              fontSize: transparent
+                                  ? 10
+                                  : compact
+                                      ? 9
+                                      : 10,
+                              fontFeatures: const [ui.FontFeature.tabularFigures()],
+                            ),
+                          )
+                        : Text(
+                            text,
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: outdoorSunMode ? Colors.white : LKColors.textPrimary,
+                              fontWeight: outdoorSunMode ? FontWeight.w900 : FontWeight.w700,
+                              fontSize: transparent
+                                  ? 10
+                                  : compact
+                                      ? 9
+                                      : 10,
+                              fontFeatures: const [ui.FontFeature.tabularFigures()],
+                            ),
+                          ),
                   ),
           ),
         ],
       ),
     );
 
-    if (onTap == null) return chip;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: borderRadius,
-      child: chip,
-    );
   }
 }

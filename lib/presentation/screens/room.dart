@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
+import '../../core/athletic_haptics.dart';
 import '../../core/pip_service.dart';
 import '../../core/recording_controller.dart';
 import '../../data/remote_telemetry.dart';
@@ -12,6 +13,7 @@ import '../../utils.dart';
 import '../utils/ui_utils.dart';
 import '../widgets/controls.dart';
 import '../widgets/participant.dart';
+import '../widgets/sweat_lock_overlay.dart';
 import '../../viewmodels/room_viewmodel.dart';
 
 class RoomPage extends StatefulWidget {
@@ -40,7 +42,12 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   late final RoomViewModel _vm;
   RecordingController? _recordingController;
   final ValueNotifier<bool> _showControls = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> _isScreenLocked = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isOutdoorSunMode = ValueNotifier<bool>(false);
   Timer? _controlsHideTimer;
+  String? _gestureFeedbackMessage;
+  IconData? _gestureFeedbackIcon;
+  Timer? _gestureFeedbackTimer;
 
   static const Duration _controlsAutoHideDuration = Duration(seconds: 4);
   static const double _galleryHeight = 180;
@@ -58,12 +65,93 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   }
 
   void _toggleControls() {
+    if (_isScreenLocked.value) return;
     _showControls.value = !_showControls.value;
     if (_showControls.value) {
       _scheduleControlsAutoHide();
     } else {
       _controlsHideTimer?.cancel();
     }
+  }
+
+  void _showGestureFeedback(String message, IconData icon) {
+    _gestureFeedbackTimer?.cancel();
+    setState(() {
+      _gestureFeedbackMessage = message;
+      _gestureFeedbackIcon = icon;
+    });
+    _gestureFeedbackTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) {
+        setState(() {
+          _gestureFeedbackMessage = null;
+          _gestureFeedbackIcon = null;
+        });
+      }
+    });
+  }
+
+  /// Balayage horizontal gauche : switcher vers le participant suivant
+  void _onSwipeLeft() {
+    if (_isScreenLocked.value) return;
+    final switched = _vm.switchToNextParticipant();
+    if (switched) {
+      unawaited(AthleticHaptics.participantSwitched());
+      final primary = _vm.primaryTrack;
+      final name = primary?.participant.name.isNotEmpty == true
+          ? displayNameForIdentity(primary!.participant.name)
+          : displayNameForIdentity(primary?.participant.identity ?? '');
+      _showGestureFeedback('Participant : $name', Icons.swap_horiz_rounded);
+    }
+  }
+
+  /// Balayage horizontal droite : switcher vers le participant précédent
+  void _onSwipeRight() {
+    if (_isScreenLocked.value) return;
+    final switched = _vm.switchToPreviousParticipant();
+    if (switched) {
+      unawaited(AthleticHaptics.participantSwitched());
+      final primary = _vm.primaryTrack;
+      final name = primary?.participant.name.isNotEmpty == true
+          ? displayNameForIdentity(primary!.participant.name)
+          : displayNameForIdentity(primary?.participant.identity ?? '');
+      _showGestureFeedback('Participant : $name', Icons.swap_horiz_rounded);
+    }
+  }
+
+  /// Double-tap direct sur la vidéo : activer / couper le micro
+  void _onDoubleTapVideo() {
+    if (_isScreenLocked.value) return;
+    _vm.controlsViewModel.toggleMicrophone();
+    final isMuted = _vm.room?.localParticipant?.isMuted ?? false;
+    unawaited(AthleticHaptics.micToggled(muted: isMuted));
+    _showGestureFeedback(
+      isMuted ? 'Micro désactivé' : 'Micro activé',
+      isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+    );
+  }
+
+  /// Basculement du verrouillage anti-sueur (Pocket & Sweat Lock)
+  void _toggleSweatLock() {
+    final next = !_isScreenLocked.value;
+    _isScreenLocked.value = next;
+    unawaited(AthleticHaptics.sweatLockToggled(locked: next));
+    if (next) {
+      _controlsHideTimer?.cancel();
+      _showControls.value = false;
+    }
+    setState(() {});
+  }
+
+  /// Basculement du mode plein soleil à contraste maximal
+  void _toggleOutdoorSunMode() {
+    final next = !_isOutdoorSunMode.value;
+    _isOutdoorSunMode.value = next;
+    unawaited(AthleticHaptics.outdoorModeToggled(active: next));
+    _showGestureFeedback(
+      next ? 'Mode Plein Soleil (Contraste maximal)' : 'Mode Standard',
+      next ? Icons.wb_sunny_rounded : Icons.nightlight_round,
+    );
+    setState(() {});
   }
 
   @override
@@ -123,10 +211,13 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controlsHideTimer?.cancel();
+    _gestureFeedbackTimer?.cancel();
     unawaited(PipService.disableAutoEnter());
     _recordingController?.dispose();
     _vm.dispose();
     _showControls.dispose();
+    _isScreenLocked.dispose();
+    _isOutdoorSunMode.dispose();
     onWindowShouldClose = null;
     super.dispose();
   }
@@ -134,57 +225,123 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
-      valueListenable: PipService.isInPip,
-      builder: (context, inPip, _) {
-        final orientation = MediaQuery.orientationOf(context);
-        final size = MediaQuery.sizeOf(context);
-        final isLandscape = orientation == Orientation.landscape;
-        final isTabletOrDesktop = size.shortestSide >= 700 || size.width >= 820;
-        final useTwoColumns = (isLandscape || isTabletOrDesktop) && !inPip;
+      valueListenable: _isOutdoorSunMode,
+      builder: (context, outdoorSunMode, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: _isScreenLocked,
+          builder: (context, isLocked, _) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: PipService.isInPip,
+              builder: (context, inPip, _) {
+                final orientation = MediaQuery.orientationOf(context);
+                final size = MediaQuery.sizeOf(context);
+                final isLandscape = orientation == Orientation.landscape;
+                final isTabletOrDesktop = size.shortestSide >= 700 || size.width >= 820;
+                final useTwoColumns = (isLandscape || isTabletOrDesktop) && !inPip;
 
-        return Scaffold(
-          extendBody: true,
-          extendBodyBehindAppBar: true,
-          backgroundColor: LKColors.background,
-          body: Stack(
-            children: [
-              // ========================================================================
-              // VUE PRINCIPALE (Adaptative 2 colonnes paysage / iPad OU pile portrait)
-              // ========================================================================
-              Positioned.fill(
-                child: useTwoColumns
-                    ? _buildLandscapeLayout(context)
-                    : _buildPortraitLayout(context, inPip: inPip),
-              ),
+                return Scaffold(
+                  extendBody: true,
+                  extendBodyBehindAppBar: true,
+                  backgroundColor: outdoorSunMode ? Colors.black : LKColors.background,
+                  body: Stack(
+                    children: [
+                      // ========================================================================
+                      // VUE PRINCIPALE (Adaptative 2 colonnes paysage / iPad OU pile portrait)
+                      // ========================================================================
+                      Positioned.fill(
+                        child: useTwoColumns
+                            ? _buildLandscapeLayout(context)
+                            : _buildPortraitLayout(context, inPip: inPip),
+                      ),
 
-              // ========================================================================
-              // INDICATEUR DE CHARGEMENT
-              // ========================================================================
-              if (!inPip)
-                Positioned.fill(
-                  child: ListenableBuilder(
-                    listenable: _vm,
-                    builder: (context, _) {
-                      final isConnected =
-                          _vm.room?.connectionState == ConnectionState.connected;
-                      if (isConnected) {
-                        return const IgnorePointer(child: SizedBox.shrink());
-                      }
-                      return Container(
-                        color: LKColors.background.withValues(alpha: 0.8),
-                        child: const Center(
-                          child: CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              LKColors.primary,
+                      // ========================================================================
+                      // BANNIÈRE FLOTTANTE DE RETOUR GESTUEL DIRECT
+                      // ========================================================================
+                      if (_gestureFeedbackMessage != null && !inPip)
+                        Positioned(
+                          top: 54,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: outdoorSunMode ? Colors.black : Colors.black.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: outdoorSunMode ? Colors.white : LKColors.primary,
+                                  width: outdoorSunMode ? 1.5 : 1,
+                                ),
+                                boxShadow: UIUtils.shadowMD,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_gestureFeedbackIcon != null) ...[
+                                    Icon(
+                                      _gestureFeedbackIcon,
+                                      color: outdoorSunMode ? const Color(0xFFFFB800) : LKColors.primary,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 8),
+                                  ],
+                                  Text(
+                                    _gestureFeedbackMessage!,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: outdoorSunMode ? FontWeight.w900 : FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      );
-                    },
+
+                      // ========================================================================
+                      // OVERLAY DE VERROUILLAGE SWEAT / POCKET LOCK
+                      // ========================================================================
+                      if (isLocked && !inPip)
+                        SweatLockOverlay(
+                          onUnlock: _toggleSweatLock,
+                          outdoorSunMode: outdoorSunMode,
+                        ),
+
+                      // ========================================================================
+                      // INDICATEUR DE CHARGEMENT
+                      // ========================================================================
+                      if (!inPip)
+                        Positioned.fill(
+                          child: ListenableBuilder(
+                            listenable: _vm,
+                            builder: (context, _) {
+                              final isConnected =
+                                  _vm.room?.connectionState == ConnectionState.connected;
+                              if (isConnected) {
+                                return const IgnorePointer(child: SizedBox.shrink());
+                              }
+                              return Container(
+                                color: outdoorSunMode
+                                    ? Colors.black.withValues(alpha: 0.9)
+                                    : LKColors.background.withValues(alpha: 0.8),
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      LKColors.primary,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                    ],
                   ),
-                ),
-            ],
-          ),
+                );
+              },
+            );
+          },
         );
       },
     );
@@ -275,18 +432,22 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
         builder: (context, _) {
           final primaryTrack = _vm.primaryTrack;
           return Container(
-            color: LKColors.surface,
+            color: _isOutdoorSunMode.value ? Colors.black : LKColors.surface,
             child: primaryTrack != null
                 ? ParticipantWidget.widgetFor(
                     primaryTrack,
                     showStatsLayer: !inPip,
                     infoAtTop: !inPip,
                     recordingController: _recordingController,
-                    onTap: _toggleControls,
+                    onTap: _isScreenLocked.value ? null : _toggleControls,
+                    onDoubleTap: _isScreenLocked.value ? null : _onDoubleTapVideo,
+                    onSwipeLeft: _isScreenLocked.value ? null : _onSwipeLeft,
+                    onSwipeRight: _isScreenLocked.value ? null : _onSwipeRight,
+                    outdoorSunMode: _isOutdoorSunMode.value,
                   )
                 : GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: _toggleControls,
+                    onTap: _isScreenLocked.value ? null : _toggleControls,
                     child: _buildEmptyState('Aucun participant principal'),
                   ),
           );
@@ -348,6 +509,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                                       showValues: false,
                                       compact: true,
                                       showToggle: false,
+                                      outdoorSunMode: _isOutdoorSunMode.value,
                                     ),
                                   ),
                                   const SizedBox(height: _galleryHudSpacing),
@@ -364,6 +526,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                               showValues: false,
                               compact: true,
                               showToggle: false,
+                              outdoorSunMode: _isOutdoorSunMode.value,
                             ),
                           ),
                           const SizedBox(height: _galleryHudSpacing),
@@ -551,6 +714,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                             showValues: true,
                             compact: true,
                             showToggle: false,
+                            outdoorSunMode: _isOutdoorSunMode.value,
                           );
                         },
                       ),
@@ -561,6 +725,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                         showValues: true,
                         compact: true,
                         showToggle: false,
+                        outdoorSunMode: _isOutdoorSunMode.value,
                       ),
                     ],
                   ],
@@ -593,6 +758,10 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
         postureSmoothingAlpha: _vm.poseSmoothingAlpha,
         //onSetPostureSmoothingAlpha: widget.role.isTrainee ? _vm.setPoseSmoothingAlpha : null,
         recordingController: _recordingController,
+        isScreenLocked: _isScreenLocked.value,
+        onToggleSweatLock: _toggleSweatLock,
+        isOutdoorSunMode: _isOutdoorSunMode.value,
+        onToggleOutdoorSunMode: _toggleOutdoorSunMode,
       ),
     );
   }

@@ -39,6 +39,9 @@ class _PoseOverlayState extends State<PoseOverlay>
     _animation = PoseAnimationController(
       vsync: this,
       transitionDuration: const Duration(milliseconds: 85),
+      enableButterworthFilter: true,
+      cutoffFrequency: 5.0,
+      samplingRate: 30.0,
     );
     _updateFrame(widget.frame, initial: true);
   }

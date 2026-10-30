@@ -14,6 +14,7 @@ class HeartRateZone {
   final String code;
   final String name;
   final Color color;
+  final Color neonColor;
   final double minPercent;
   final double maxPercent;
 
@@ -22,6 +23,7 @@ class HeartRateZone {
     required this.code,
     required this.name,
     required this.color,
+    required this.neonColor,
     required this.minPercent,
     required this.maxPercent,
   });
@@ -32,6 +34,7 @@ class HeartRateZone {
     code: 'Z1',
     name: 'Récupération',
     color: Color(0xFF38BDF8), // Cyan / Sky Blue
+    neonColor: Color(0xFF00E5FF), // Neon Cyan
     minPercent: 0.0,
     maxPercent: 0.60,
   );
@@ -42,6 +45,7 @@ class HeartRateZone {
     code: 'Z2',
     name: 'Endurance',
     color: Color(0xFF10B981), // Emerald Green
+    neonColor: Color(0xFF00FF66), // Saturated Neon Green (Vert fluo)
     minPercent: 0.60,
     maxPercent: 0.70,
   );
@@ -52,6 +56,7 @@ class HeartRateZone {
     code: 'Z3',
     name: 'Tempo',
     color: Color(0xFFF59E0B), // Amber / Gold
+    neonColor: Color(0xFFFFB800), // Saturated Neon Amber (Ambre néon)
     minPercent: 0.70,
     maxPercent: 0.80,
   );
@@ -62,6 +67,7 @@ class HeartRateZone {
     code: 'Z4',
     name: 'Seuil',
     color: Color(0xFFF97316), // Vivid Orange
+    neonColor: Color(0xFFFF6600), // Saturated Neon Orange
     minPercent: 0.80,
     maxPercent: 0.90,
   );
@@ -72,9 +78,14 @@ class HeartRateZone {
     code: 'Z5',
     name: 'VO2 Max',
     color: Color(0xFFEF4444), // Crimson Red
+    neonColor: Color(0xFFFF0033), // Saturated Neon Vivid Red (Rouge vif néon)
     minPercent: 0.90,
     maxPercent: 1.0,
   );
+
+  /// Retourne la couleur standard ou saturée néon selon le mode extérieur plein soleil
+  Color colorFor({bool outdoorSunMode = false}) =>
+      outdoorSunMode ? neonColor : color;
 
   static const List<HeartRateZone> allZones = [z1, z2, z3, z4, z5];
 

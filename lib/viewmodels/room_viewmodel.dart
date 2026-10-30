@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import '../core/athletic_haptics.dart';
 import '../core/auth_service.dart';
 import '../core/beep_service.dart';
 import '../core/ble_sensor_service.dart';
@@ -20,6 +21,7 @@ import '../core/call_foreground_service.dart';
 import '../core/pip_service.dart';
 import '../data/ball_marker.dart';
 import '../data/glasses_message.dart';
+import '../data/heart_rate_zones.dart';
 import '../data/remote_posture.dart';
 import '../data/remote_telemetry.dart';
 import '../data/telemetry_codec.dart';
@@ -180,6 +182,28 @@ class RoomViewModel extends ChangeNotifier {
     if (_selectedPrimaryTrack == selected) return;
     _selectedPrimaryTrack = selected;
     _notifySafe();
+  }
+
+  /// Bascule vers le participant suivant (balayage horizontal direct sur la vidéo)
+  bool switchToNextParticipant() {
+    if (_participantTracks.length <= 1) return false;
+    final current = primaryTrack;
+    if (current == null) return false;
+    final currentIndex = _participantTracks.indexOf(current);
+    final nextIndex = (currentIndex + 1) % _participantTracks.length;
+    setPrimaryTrack(_participantTracks[nextIndex]);
+    return true;
+  }
+
+  /// Bascule vers le participant précédent (balayage horizontal direct sur la vidéo)
+  bool switchToPreviousParticipant() {
+    if (_participantTracks.length <= 1) return false;
+    final current = primaryTrack;
+    if (current == null) return false;
+    final currentIndex = _participantTracks.indexOf(current);
+    final prevIndex = (currentIndex - 1 + _participantTracks.length) % _participantTracks.length;
+    setPrimaryTrack(_participantTracks[prevIndex]);
+    return true;
   }
 
   void closeSideSheet() {
@@ -348,6 +372,12 @@ class RoomViewModel extends ChangeNotifier {
           return;
         }
 
+        // Correction posturale envoyée par le coach
+        if (event.topic == 'correction' || event.topic == 'posture_correction') {
+          _handlePostureCorrection(event.data);
+          return;
+        }
+
         // Message du coach pour les lunettes Engo : JSON sur le topic `engo_message`.
         if (event.topic == 'engo_message') {
           _handleGlassesMessage(event.data);
@@ -392,12 +422,19 @@ class RoomViewModel extends ChangeNotifier {
   }
 
   /// Le sportif dessine les ballons du coach sur sa propre vidéo.
+  /// Déclenche une double impulsion haptique discrète de coaching.
   void _handleMarker(Object? data) {
     if (!_role.isTrainee) return;
     final marker = BallMarker.tryParse(data, receivedAt: DateTime.now());
     if (marker == null) return; // Message invalide : ignoré sans erreur.
-    unawaited(HapticFeedback.lightImpact());
+    unawaited(AthleticHaptics.coachingDoublePulse());
     markers.add(marker);
+  }
+
+  /// Réception d'une correction posturale du coach.
+  void _handlePostureCorrection(Object? data) {
+    if (!_role.isTrainee) return;
+    unawaited(AthleticHaptics.coachingDoublePulse());
   }
 
   // ── Telemetry ──
@@ -570,10 +607,23 @@ class RoomViewModel extends ChangeNotifier {
 
     _hrmSub = sensorService.heartRateStream.listen((bpm) {
       if (_sensorHeartRate == bpm) return;
+      final prevBpm = _sensorHeartRate;
       _sensorHeartRate = bpm;
       final localIdentity = _room?.localParticipant?.identity;
       if (localIdentity != null) {
         _setTelemetryFor(localIdentity, localTelemetry);
+      }
+
+      // Haptique de seuil : Vibration marquée lors du passage en Zone Cardiaque 5 (VO2 Max / Anaérobie)
+      if (bpm > 0) {
+        final prevZone = prevBpm != null && prevBpm > 0
+            ? HeartRateZone.fromBpm(prevBpm)
+            : null;
+        final newZone = HeartRateZone.fromBpm(bpm);
+        if (newZone.level == HeartRateZoneLevel.z5 &&
+            prevZone?.level != HeartRateZoneLevel.z5) {
+          unawaited(AthleticHaptics.thresholdZone5Alert());
+        }
       }
     });
 

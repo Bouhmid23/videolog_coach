@@ -31,6 +31,10 @@ abstract class ParticipantWidget extends StatefulWidget {
     bool infoAtTop = false,
     RecordingController? recordingController,
     VoidCallback? onTap,
+    VoidCallback? onDoubleTap,
+    VoidCallback? onSwipeLeft,
+    VoidCallback? onSwipeRight,
+    bool outdoorSunMode = false,
   }) {
     final key = ValueKey(
       '${participantTrack.participant.identity}_${participantTrack.type.name}',
@@ -52,6 +56,10 @@ abstract class ParticipantWidget extends StatefulWidget {
         infoAtTop: infoAtTop,
         recordingController: recordingController,
         onTap: onTap,
+        onDoubleTap: onDoubleTap,
+        onSwipeLeft: onSwipeLeft,
+        onSwipeRight: onSwipeRight,
+        outdoorSunMode: outdoorSunMode,
       );
     } else if (participantTrack.participant is RemoteParticipant) {
       return RemoteParticipantWidget(
@@ -69,6 +77,10 @@ abstract class ParticipantWidget extends StatefulWidget {
         showDataHud: showDataHud,
         infoAtTop: infoAtTop,
         onTap: onTap,
+        onDoubleTap: onDoubleTap,
+        onSwipeLeft: onSwipeLeft,
+        onSwipeRight: onSwipeRight,
+        outdoorSunMode: outdoorSunMode,
       );
     }
     throw UnimplementedError('Unknown participant type');
@@ -95,6 +107,10 @@ abstract class ParticipantWidget extends StatefulWidget {
   final bool infoAtTop;
   final VoidCallback? onTogglePosture;
   final VoidCallback? onTap;
+  final VoidCallback? onDoubleTap;
+  final VoidCallback? onSwipeLeft;
+  final VoidCallback? onSwipeRight;
+  final bool outdoorSunMode;
   final VideoQuality quality;
   final RecordingController? recordingController;
 
@@ -115,6 +131,10 @@ abstract class ParticipantWidget extends StatefulWidget {
     this.infoAtTop = false,
     this.onTogglePosture,
     this.onTap,
+    this.onDoubleTap,
+    this.onSwipeLeft,
+    this.onSwipeRight,
+    this.outdoorSunMode = false,
     this.quality = VideoQuality.HIGH,
     this.recordingController,
     super.key,
@@ -150,6 +170,10 @@ class LocalParticipantWidget extends ParticipantWidget {
     super.infoAtTop,
     super.recordingController,
     super.onTap,
+    super.onDoubleTap,
+    super.onSwipeLeft,
+    super.onSwipeRight,
+    super.outdoorSunMode,
     super.key,
   });
 
@@ -186,6 +210,10 @@ class RemoteParticipantWidget extends ParticipantWidget {
     super.showDataHud,
     super.infoAtTop,
     super.onTap,
+    super.onDoubleTap,
+    super.onSwipeLeft,
+    super.onSwipeRight,
+    super.outdoorSunMode,
     super.key,
   });
 
@@ -466,13 +494,21 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
             ),
           ),
 
-        // 4. Couche de détection du clic AU-DESSUS de VideoTrackRenderer
-        // (sur mobile, LocalVideoTrack embarque un GestureDetector interne dans
-        // livekit_client qui volerait sinon les clics placés en parent).
+        // 4. Couche de détection des gestes directs AU-DESSUS de VideoTrackRenderer
+        // (balayage horizontal pour switcher de participant, double-tap pour le micro, tap pour HUD)
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: widget.onTap ?? () => setState(() => _visible = !_visible),
+            onDoubleTap: widget.onDoubleTap,
+            onHorizontalDragEnd: (details) {
+              final velocity = details.primaryVelocity ?? 0;
+              if (velocity < -250) {
+                widget.onSwipeLeft?.call();
+              } else if (velocity > 250) {
+                widget.onSwipeRight?.call();
+              }
+            },
           ),
         ),
 
@@ -514,6 +550,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
                 transparent: true,
                 compact: true,
                 showToggle: false,
+                outdoorSunMode: widget.outdoorSunMode,
               )
             : null,
         audioAvailable:
