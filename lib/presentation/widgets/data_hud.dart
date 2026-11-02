@@ -1,4 +1,6 @@
+import 'dart:ui' show FontFeature;
 import 'dart:ui' as ui;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -217,29 +219,23 @@ class _DataHudState extends State<DataHud> {
 
         return Align(
           alignment: Alignment.topLeft,
-          child: ClipRRect(
-            borderRadius: UIUtils.borderRadiusAllMD,
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: UIUtils.sm,
-                  vertical: UIUtils.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: widget.outdoorSunMode
-                      ? Colors.black
-                      : LKColors.surface.withValues(alpha: 0.85),
-                  borderRadius: UIUtils.borderRadiusAllMD,
-                  border: Border.all(
-                    color: widget.outdoorSunMode ? Colors.white : LKColors.border,
-                    width: widget.outdoorSunMode ? 1.5 : 0.5,
-                  ),
-                  boxShadow: UIUtils.shadowSM,
-                ),
-                child: content,
-              ),
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: UIUtils.sm,
+              vertical: UIUtils.xs,
             ),
+            decoration: BoxDecoration(
+              color: widget.outdoorSunMode
+                  ? Colors.black
+                  : const Color(0xE60F172A), // 90% opaque Slate-900 (ultra-smooth athletic surface without GPU blur overhead)
+              borderRadius: UIUtils.borderRadiusAllMD,
+              border: Border.all(
+                color: widget.outdoorSunMode ? Colors.white : LKColors.border,
+                width: widget.outdoorSunMode ? 1.5 : 0.8,
+              ),
+              boxShadow: UIUtils.shadowSM,
+            ),
+            child: content,
           ),
         );
       },
@@ -329,7 +325,7 @@ class _HudChip extends StatelessWidget {
                                   : compact
                                       ? 9
                                       : 10,
-                              fontFeatures: const [ui.FontFeature.tabularFigures()],
+                              fontFeatures: const [FontFeature.tabularFigures()],
                             ),
                           )
                         : Text(
@@ -342,7 +338,7 @@ class _HudChip extends StatelessWidget {
                                   : compact
                                       ? 9
                                       : 10,
-                              fontFeatures: const [ui.FontFeature.tabularFigures()],
+                              fontFeatures: const [FontFeature.tabularFigures()],
                             ),
                           ),
                   ),

@@ -219,6 +219,7 @@ class WebRtcPoseSink(
     private var batteryLevel: Float = 1.0f
     private var thermalListener: Any? = null
     private var batteryReceiver: BroadcastReceiver? = null
+    private var cachedPixelArray: IntArray? = null
 
     val currentEffectiveFps: Int
         get() {
@@ -330,7 +331,8 @@ class WebRtcPoseSink(
     }
 
     /**
-     * Converts a WebRTC VideoFrame (I420 or Texture) to an Android Bitmap in native memory.
+     * Converts a WebRTC VideoFrame to an Android Bitmap with rotation applied directly
+     * in native memory, without any JPEG compression/decompression overhead.
      */
     private fun convertVideoFrameToBitmap(videoFrame: VideoFrame): Bitmap? {
         val buffer = videoFrame.buffer
@@ -342,48 +344,63 @@ class WebRtcPoseSink(
         } ?: return null
 
         return try {
-            val width = i420Buffer.width
-            val height = i420Buffer.height
+            val srcWidth = i420Buffer.width
+            val srcHeight = i420Buffer.height
+            val rotation = videoFrame.rotation
 
-            val y = i420Buffer.dataY
-            val u = i420Buffer.dataU
-            val v = i420Buffer.dataV
+            val (dstWidth, dstHeight) = if (rotation == 90 || rotation == 270) {
+                srcHeight to srcWidth
+            } else {
+                srcWidth to srcHeight
+            }
+
+            val totalPixels = dstWidth * dstHeight
+            var pixels = cachedPixelArray
+            if (pixels == null || pixels.size < totalPixels) {
+                pixels = IntArray(totalPixels)
+                cachedPixelArray = pixels
+            }
+
+            val yBuffer = i420Buffer.dataY
+            val uBuffer = i420Buffer.dataU
+            val vBuffer = i420Buffer.dataV
 
             val strideY = i420Buffer.strideY
             val strideU = i420Buffer.strideU
             val strideV = i420Buffer.strideV
 
-            val chromaWidth = (width + 1) / 2
-            val chromaHeight = (height + 1) / 2
-            val minSize = width * height + chromaWidth * chromaHeight * 2
+            // Direct conversion from I420 (Y, U, V planar) to ARGB_8888 with embedded rotation.
+            // Eliminates 100% of JPEG encoding/decoding and intermediate Bitmap allocations.
+            for (row in 0 until srcHeight) {
+                val yRowOffset = row * strideY
+                val uvRowOffset = (row shr 1)
 
-            val yuvBuffer = ByteBuffer.allocateDirect(minSize)
+                for (col in 0 until srcWidth) {
+                    val yVal = yBuffer.get(yRowOffset + col).toInt() and 0xFF
+                    val uvColOffset = col shr 1
+                    val uVal = (uBuffer.get(uvRowOffset * strideU + uvColOffset).toInt() and 0xFF) - 128
+                    val vVal = (vBuffer.get(uvRowOffset * strideV + uvColOffset).toInt() and 0xFF) - 128
 
-            // WebRTC YuvHelper converts I420 to NV21/NV12
-            YuvHelper.I420ToNV12(y, strideY, v, strideV, u, strideU, yuvBuffer, width, height)
+                    // Standard ITU-R BT.601 integer fixed-point conversion
+                    val r = (yVal + (1436 * vVal shr 10)).coerceIn(0, 255)
+                    val g = (yVal - (352 * uVal + 731 * vVal shr 10)).coerceIn(0, 255)
+                    val b = (yVal + (1814 * uVal shr 10)).coerceIn(0, 255)
+                    val argb = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
 
-            val cleanedArray = ByteArray(minSize)
-            yuvBuffer.rewind()
-            yuvBuffer.get(cleanedArray)
-
-            val yuvImage = YuvImage(cleanedArray, ImageFormat.NV21, width, height, null)
-            val out = ByteArrayOutputStream()
-            yuvImage.compressToJpeg(Rect(0, 0, width, height), 90, out)
-            val jpegBytes = out.toByteArray()
-
-            val rawBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-
-            val rotation = videoFrame.rotation
-            if (rotation != 0 && rawBitmap != null) {
-                val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-                val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
-                rawBitmap.recycle()
-                rotated
-            } else {
-                rawBitmap
+                    // Map coordinates according to rotation directly into dst index
+                    val outIndex = when (rotation) {
+                        90 -> col * dstWidth + (dstWidth - 1 - row)
+                        180 -> (dstHeight - 1 - row) * dstWidth + (dstWidth - 1 - col)
+                        270 -> (dstHeight - 1 - col) * dstWidth + row
+                        else -> row * dstWidth + col
+                    }
+                    pixels[outIndex] = argb
+                }
             }
+
+            Bitmap.createBitmap(pixels, 0, dstWidth, dstWidth, dstHeight, Bitmap.Config.ARGB_8888)
         } catch (e: Exception) {
-            Log.e(TAG, "VideoFrame to Bitmap conversion failed: ${e.message}")
+            Log.e(TAG, "VideoFrame to Bitmap direct conversion failed: ${e.message}")
             null
         } finally {
             i420Buffer.release()
@@ -475,6 +492,7 @@ class WebRtcPoseSink(
             batteryReceiver = null
         }
 
+        cachedPixelArray = null
         scope.cancel()
         Log.i(TAG, "WebRtcPoseSink stopped and disposed")
     }

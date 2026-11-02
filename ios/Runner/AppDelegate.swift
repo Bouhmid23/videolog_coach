@@ -4,34 +4,48 @@ import AVFoundation
 import AVKit
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var micStreamHandler: MicMeterStreamHandler?
   private var pipManager: PipManager?
+  private var channelsConfigured = false
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    GeneratedPluginRegistrant.register(with: self)
-
+    // Fallback pour exécution sans UIScene (iOS < 13 ou tests)
     if let controller = window?.rootViewController as? FlutterViewController {
-      // 1. Canal micro réactif (EventChannel videolog/mic_meter_stream)
-      let micChannel = FlutterEventChannel(
-        name: "videolog/mic_meter_stream",
-        binaryMessenger: controller.binaryMessenger
-      )
-      let micHandler = MicMeterStreamHandler()
-      micStreamHandler = micHandler
-      micChannel.setStreamHandler(micHandler)
-
-      // 2. Gestionnaire Picture-in-Picture (MethodChannel videolog/pip)
-      pipManager = PipManager(
-        binaryMessenger: controller.binaryMessenger,
-        rootViewController: controller
-      )
+      GeneratedPluginRegistrant.register(with: self)
+      setupCustomChannels(binaryMessenger: controller.binaryMessenger, rootViewController: controller)
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // MARK: - FlutterImplicitEngineDelegate (UIScene Lifecycle)
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    setupCustomChannels(binaryMessenger: engineBridge.applicationRegistrar.messenger(), rootViewController: nil)
+  }
+
+  private func setupCustomChannels(binaryMessenger: FlutterBinaryMessenger, rootViewController: UIViewController?) {
+    guard !channelsConfigured else { return }
+    channelsConfigured = true
+
+    // 1. Canal micro réactif (EventChannel videolog/mic_meter_stream)
+    let micChannel = FlutterEventChannel(
+      name: "videolog/mic_meter_stream",
+      binaryMessenger: binaryMessenger
+    )
+    let micHandler = MicMeterStreamHandler()
+    micStreamHandler = micHandler
+    micChannel.setStreamHandler(micHandler)
+
+    // 2. Gestionnaire Picture-in-Picture (MethodChannel videolog/pip)
+    pipManager = PipManager(
+      binaryMessenger: binaryMessenger,
+      rootViewController: rootViewController
+    )
   }
 }
 
@@ -44,6 +58,18 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
   private var isPipActive = false
   private var autoEnterEnabled = false
   private weak var rootViewController: UIViewController?
+
+  private var effectiveRootViewController: UIViewController? {
+    if let rvc = rootViewController { return rvc }
+    for scene in UIApplication.shared.connectedScenes {
+      if let windowScene = scene as? UIWindowScene {
+        for window in windowScene.windows where window.isKeyWindow {
+          return window.rootViewController
+        }
+      }
+    }
+    return UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController
+  }
 
   init(binaryMessenger: FlutterBinaryMessenger, rootViewController: UIViewController?) {
     self.channel = FlutterMethodChannel(name: "videolog/pip", binaryMessenger: binaryMessenger)
@@ -61,7 +87,7 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
   }
 
   private func setupPipController() {
-    guard #available(iOS 15.0, *), isSupported(), let rootView = rootViewController?.view else { return }
+    guard #available(iOS 15.0, *), isSupported(), let rootView = effectiveRootViewController?.view else { return }
 
     let callVC = AVPictureInPictureVideoCallViewController()
     callVC.preferredContentSize = CGSize(width: 9, height: 16)
@@ -129,6 +155,9 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
 
   private func enterPip() -> Bool {
     if #available(iOS 15.0, *) {
+      if pipController == nil {
+        setupPipController()
+      }
       guard let controller = pipController, controller.isPictureInPicturePossible else {
         return false
       }
@@ -143,7 +172,7 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
   func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
     if #available(iOS 15.0, *),
        let callVC = pipVideoCallViewController as? AVPictureInPictureVideoCallViewController,
-       let rootView = rootViewController?.view,
+       let rootView = effectiveRootViewController?.view,
        let snapshot = rootView.snapshotView(afterScreenUpdates: false) {
       snapshot.tag = 999
       callVC.view.subviews.forEach { if $0.tag == 999 { $0.removeFromSuperview() } }
@@ -155,7 +184,7 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
 
   func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
     isPipActive = true
-    channel.invokeMethod("pipModeChanged", true)
+    channel.invokeMethod("pipModeChanged", arguments: true)
   }
 
   func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
@@ -164,7 +193,7 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
        let callVC = pipVideoCallViewController as? AVPictureInPictureVideoCallViewController {
       callVC.view.subviews.forEach { if $0.tag == 999 { $0.removeFromSuperview() } }
     }
-    channel.invokeMethod("pipModeChanged", false)
+    channel.invokeMethod("pipModeChanged", arguments: false)
   }
 
   func pictureInPictureController(
@@ -172,7 +201,7 @@ class PipManager: NSObject, AVPictureInPictureControllerDelegate {
     failedToStartPictureInPictureWithError error: Error
   ) {
     isPipActive = false
-    channel.invokeMethod("pipModeChanged", false)
+    channel.invokeMethod("pipModeChanged", arguments: false)
   }
 
   func pictureInPictureController(

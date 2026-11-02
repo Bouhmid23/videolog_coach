@@ -18,143 +18,56 @@ import 'package:livekit_client/livekit_client.dart';
 
 import '../core/gravity_service.dart';
 import '../core/posture_detection_service.dart';
-import '../data/posture_codec.dart';
 import '../data/remote_posture.dart';
+import 'pose/motion_detector.dart';
+import 'pose/pose_frame.dart';
+import 'pose/pose_publisher.dart';
+import 'pose/posture_classifier.dart';
 
-/// Chemin du JPEG capturé et instant où l'image a été prise. Le timestamp
-/// reste attaché à l'image : la capture N+1 tourne pendant la détection N.
-class _CapturedFrame {
-  const _CapturedFrame(
-    this.bytes,
-    this.capturedAt,
-    this.videoTimestampMs,
-    this.captureMicros,
-  );
+export 'pose/pose_frame.dart';
 
-  final Uint8List bytes;
-  final DateTime capturedAt;
-  final int videoTimestampMs;
-  final int captureMicros;
-}
-
-/// Dernière pose détectée, prête à être dessinée par l'UI.
-class PoseFrame {
-  const PoseFrame({
-    required this.pose,
-    required this.frameSize,
-    required this.capturedAt,
-  });
-
-  final Pose pose;
-  final Size frameSize;
-  final DateTime capturedAt;
-}
-
-/// Détecteur de mouvement pour l'adaptation intelligente du framerate.
-/// Si la variation moyenne des articulations est faible pendant plusieurs frames,
-/// la posture est considérée comme statique (ex: gainage, repos, posture fixe).
-class _MotionDetector {
-  Pose? _lastPose;
-  int _staticFrameCount = 0;
-  static const int _staticThresholdFrames = 15; // ~0.5s - 1s
-  static const double _motionEpsilon = 0.015; // Seuil de déplacement normalisé
-
-  bool update(Pose? currentPose) {
-    if (currentPose == null || _lastPose == null) {
-      _lastPose = currentPose;
-      _staticFrameCount = 0;
-      return false;
-    }
-
-    final p1 = _lastPose!.landmarks;
-    final p2 = currentPose.landmarks;
-    _lastPose = currentPose;
-
-    if (p1.isEmpty || p2.isEmpty) return false;
-
-    double totalDelta = 0;
-    int count = 0;
-
-    for (int i = 0; i < math.min(p1.length, p2.length); i++) {
-      final lm1 = p1[i];
-      final lm2 = p2[i];
-      if (lm1.visibility > 0.5 && lm2.visibility > 0.5) {
-        final dx = lm1.x - lm2.x;
-        final dy = lm1.y - lm2.y;
-        totalDelta += math.sqrt(dx * dx + dy * dy);
-        count++;
-      }
-    }
-
-    final avgDelta = count > 0 ? (totalDelta / count) : 0.0;
-    if (avgDelta < _motionEpsilon) {
-      _staticFrameCount++;
-    } else {
-      _staticFrameCount = 0;
-    }
-
-    return _staticFrameCount >= _staticThresholdFrames;
-  }
-
-  void reset() {
-    _lastPose = null;
-    _staticFrameCount = 0;
-  }
-}
-
-/// Capture la caméra locale, détecte la pose (MediaPipe lite en mode VIDEO) et publie le squelette
-/// en binaire sur le topic `posture`. La dernière pose est aussi exposée via
-/// [frameNotifier] pour le rendu local du squelette.
-///
-/// Choix pour le temps réel :
-///  - pipeline à 2 étages : la capture N+1 démarre pendant la détection N ;
-///  - aucune limitation de cadence ni delta encoding (≈8.25 Ko/s à 30 poses/s) ;
-///  - canal lossy, `publishData` non attendu ;
-///  - capture JPEG gardée en mémoire et dimensions lues depuis le résultat ;
-///  - paquet « pose perdue » pour que le web efface le squelette.
+/// Orchestrateur de détection posturale :
+/// - Supervise le pipeline matériel Zéro-Copie WebRTC et son repli Capture.
+/// - Anime l'overlay local via [frameNotifier].
+/// - Classifie et stabilise la posture en temps réel.
+/// - Émet le flux binaire compact v7 via [PosePublisher].
 class PoseDetectionViewModel extends ChangeNotifier {
-  //static const String _smoothingAlphaPreference = 'pose_smoothing_alpha';
   final PostureSmoothing _smoothing = PostureSmoothing(alpha: 0.5);
 
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
-    // Le backend GPU MediaPipe est le plus rapide pour un flux caméra continu.
-    // Le mode NPU/QNN vise l'autonomie mais est plus lent et nécessite des
-    // bibliothèques QNN supplémentaires non embarquées dans l'application.
     config: PoseDetectorConfig.realtime().copyWith(
-      maxPoses: 10,
-      minConfidence: 0.5,
-      minPoseDetectionConfidence: 0.5,
-      minPosePresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5,
+      maxPoses: 1,
+      minConfidence: 0.75,
+      minPoseDetectionConfidence: 0.75,
+      minPosePresenceConfidence: 0.75,
+      minTrackingConfidence: 0.7,
       enableZEstimation: true,
       preferredAcceleration: AccelerationMode.gpu,
     ),
   );
 
-  /// Nombre de frames consécutives requises pour changer de label.
-  static const int _labelHoldFrames = 3;
   static const Size _fallbackSize = Size(480, 640);
 
+  // Sub-modules
+  final MotionDetector _motionDetector = MotionDetector();
+  final PostureClassifier _classifier = const PostureClassifier();
+  final PostureStabilizer _stabilizer = PostureStabilizer();
+  final PosePublisher _publisher = PosePublisher();
+
   bool _running = false;
+  bool _paused = false;
   Room? _room;
-  List<String>? _destinationIdentities;
-  int _seq = 0;
 
   bool _hadPose = false;
   DateTime _lastLostSent = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime? _lossStartedAt;
 
-  // Mesures (moyennes et débits calculés sur une fenêtre d'une seconde).
+  // Statistiques et mesures
   int _captureMicros = 0;
   int _captureSamples = 0;
   int _detectMicros = 0;
   int _detectSamples = 0;
   int _inferMicros = 0;
   int _inferSamples = 0;
-  int _publishMicros = 0;
-  int _publishSamples = 0;
-  int _publishedSinceStats = 0;
-  int _seqAtLastStats = 0;
   DateTime _statsWindowStart = DateTime.now();
   DateTime _lastRuntimeLandmarkLog = DateTime.fromMillisecondsSinceEpoch(0);
   Size? _lastFrameSize;
@@ -162,17 +75,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   final Stopwatch _videoClock = Stopwatch()..start();
 
-
-  // Stabilisation du label (hystérésis)
-  String? _stableLabel;
-  String? _candidateLabel;
-  int _candidateCount = 0;
-
   RemotePosture? _currentPosture;
 
-  // Pipeline natif zéro-copie et FPS adaptatif intelligent
+  // Pipeline natif zéro-copie et FPS adaptatif
   StreamSubscription<FrameResult>? _webRtcSubscription;
-  final _MotionDetector _motionDetector = _MotionDetector();
   bool _isNativePipelineActive = false;
   bool _lastIsStatic = false;
   bool _lastThermalThrottled = false;
@@ -183,20 +89,18 @@ class PoseDetectionViewModel extends ChangeNotifier {
   DateTime? _lastNativeAttemptAt;
   String? _lastFailedTrackId;
 
+  // ── Getters publics ──
   bool get isNativePipelineActive => _isNativePipelineActive;
   bool get isThermalThrottled => _lastThermalThrottled;
   bool get isLowBattery => _lastLowBattery;
   int get currentTargetFps => _currentTargetFps;
   double get nativeFps => _nativeFps;
-
-  /// Dernière pose (coordonnées source + taille de frame) pour l'overlay local.
-  final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(
-    null,
-  );
-
   RemotePosture? get currentPosture => _currentPosture;
   bool get isBusy => _running;
   double get smoothingAlpha => _smoothing.alpha;
+
+  /// Dernière pose pour l'overlay local.
+  final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(null);
 
   Future<void> init() async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
@@ -207,7 +111,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
         debugPrint('[Pose] Could not read Android model: $error');
       }
     }
-    //final preferences = await SharedPreferences.getInstance();
     _smoothing.alpha = 0.5;
     final acceleration = await _poseDetector.initialize();
     final config = _poseDetector.config;
@@ -223,15 +126,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
     );
   }
 
-  /*Future<void> setSmoothingAlpha(double value) async {
-    _smoothing.alpha = value;
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setDouble(_smoothingAlphaPreference, _smoothing.alpha);
-    notifyListeners();
-  }*/
-
-  /// [destinationIdentities] : si seul le viewer web consomme le squelette,
-  /// renseigne son identité pour éviter le fan-out vers les autres participants.
   void start(Room room, {List<String>? destinationIdentities}) {
     _room = room;
     setDestinationIdentities(destinationIdentities);
@@ -239,42 +133,44 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _running = true;
     GravityService.instance.start();
     _statsWindowStart = DateTime.now();
-    _seqAtLastStats = _seq;
+    _publisher.resetStats(_publisher.seq);
     unawaited(_poseLoop());
     debugPrint('🏃 Pose detection started (temps réel)');
   }
 
-  /// Met à jour les destinataires sans redémarrer la boucle. Une liste vide
-  /// (aucun viewer connu) revient au comportement par défaut : tous les
-  /// participants, car LiveKit traite une liste vide comme un broadcast.
   void setDestinationIdentities(List<String>? identities) {
-    _destinationIdentities = (identities == null || identities.isEmpty)
-        ? null
-        : List<String>.unmodifiable(identities);
+    _publisher.setDestinationIdentities(identities);
   }
 
   void stop() {
     _stopNativePipeline();
-    if (_running && _hadPose) _publishLost(DateTime.now());
+    if (_running && _hadPose) {
+      _publisher.publishLost(
+        room: _room,
+        capturedAt: DateTime.now(),
+        deviceModel: _deviceModel,
+      );
+    }
     _running = false;
     GravityService.instance.stop();
     _hadPose = false;
-    _stableLabel = null;
-    _candidateLabel = null;
-    _candidateCount = 0;
-    _lossStartedAt = null;
+    _stabilizer.reset();
     _currentPosture = null;
     _smoothing.reset();
     frameNotifier.value = null;
   }
 
-  bool _paused = false;
-
   void pause() {
     if (!_running || _paused) return;
     _paused = true;
     _stopNativePipeline();
-    if (_hadPose) _publishLost(DateTime.now());
+    if (_hadPose) {
+      _publisher.publishLost(
+        room: _room,
+        capturedAt: DateTime.now(),
+        deviceModel: _deviceModel,
+      );
+    }
     _hadPose = false;
     frameNotifier.value = null;
     debugPrint('⏸️ Pose detection paused (background)');
@@ -284,7 +180,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
     if (!_running || !_paused) return;
     _paused = false;
     _statsWindowStart = DateTime.now();
-    _seqAtLastStats = _seq;
+    _publisher.resetStats(_publisher.seq);
     unawaited(_poseLoop());
     debugPrint('▶️ Pose detection resumed (foreground)');
   }
@@ -299,7 +195,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // Pipeline Zéro-Copie Natif & FPS Adaptatif Intelligent
+  // Superviseur : Zéro-Copie Natif & Repli Intelligent
   // ---------------------------------------------------------------------------
 
   void _tryStartNativePipeline() {
@@ -308,7 +204,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
     final trackId = track.mediaStreamTrack.id;
     if (trackId == null || trackId.isEmpty) return;
 
-    // Si cette piste a déjà échoué récemment, temporiser 30s pour ne pas spammer
     if (_lastFailedTrackId == trackId &&
         _lastNativeAttemptAt != null &&
         DateTime.now().difference(_lastNativeAttemptAt!) <
@@ -346,15 +241,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
     }
   }
 
-  /// Superviseur résilient : garantit l'analyse continue, le dessin du squelette
-  /// et l'envoi des DataTracks LiveKit.
-  /// - Si le pipeline natif zéro-copie émet des frames (< 600ms), Dart ne fait aucune copie CPU/GPU.
-  /// - Si le flux natif tarde ou échoue, la capture de secours s'exécute immédiatement avec
-  ///   Dynamic Throttling (30 fps en mouvement, 15 fps statique ou batterie faible).
   Future<void> _poseLoop() async {
     if (kIsWeb) return;
 
-    Future<_CapturedFrame?>? next;
+    Future<CapturedFrame?>? next;
 
     while (_running) {
       if (_paused) {
@@ -369,17 +259,14 @@ class PoseDetectionViewModel extends ChangeNotifier {
               const Duration(milliseconds: 600);
 
       if (hasRecentNativeFrames) {
-        // Le flux natif zéro-copie alimente déjà l'overlay et LiveKit
         _isNativePipelineActive = true;
         next = null;
         await Future<void>.delayed(const Duration(milliseconds: 50));
         continue;
       }
 
-      // Le pipeline natif n'émet pas : repli immédiat sur capture directe
       _isNativePipelineActive = false;
 
-      // Tentative périodique de raccrocher le sink natif (toutes les 3 secondes)
       if (_webRtcSubscription == null &&
           (_lastNativeAttemptAt == null ||
               now.difference(_lastNativeAttemptAt!) >
@@ -399,7 +286,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
       final frame = await (next ?? _capture(track));
       if (!_running || _paused) break;
 
-      // Si une frame native est arrivée pendant la capture, abandonner la capture concurrente
       if (_lastNativeFrameReceivedAt != null &&
           DateTime.now().difference(_lastNativeFrameReceivedAt!) <
               const Duration(milliseconds: 600)) {
@@ -435,15 +321,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
           _onLost(frame.capturedAt);
         } else {
           final rawPose = result.firstPose!;
-
-          // Dynamic Throttling sur repli : 15 fps statique vs 30 fps dynamique
           final isStatic = _motionDetector.update(rawPose);
           if (isStatic != _lastIsStatic) {
             _lastIsStatic = isStatic;
             _currentTargetFps = isStatic ? 15 : 30;
-            debugPrint(
-              '🏃 [Fallback Throttling] Posture ${isStatic ? "STATIQUE (15 fps)" : "DYNAMIQUE (30 fps)"}',
-            );
           }
 
           final size = result.imageWidth > 0 && result.imageHeight > 0
@@ -460,15 +341,17 @@ class PoseDetectionViewModel extends ChangeNotifier {
             frameSize: size,
             capturedAt: frame.capturedAt,
           );
-          final posture = _stabilizedPosture(
-            classifyPosture(rawPose, frameSize: size),
-          );
+          final rawPosture = _classifier.classify(rawPose, frameSize: size);
+          final posture = _stabilizePosture(rawPosture);
           _hadPose = true;
-          _publish(
-            pose,
-            posture,
-            size,
+
+          _publisher.publish(
+            room: _room,
+            pose: pose,
+            posture: posture,
+            frameSize: size,
             capturedAt: frame.capturedAt,
+            deviceModel: _deviceModel,
             captureMicros: frame.captureMicros,
             detectMicros: detectMicros,
             inferMicros: result.processingTimeMs * 1000,
@@ -497,8 +380,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
     }
   }
 
-  /// Traitement direct du résultat léger des 33 coordonnées normalisées envoyé par le natif.
-  /// Dart ne reçoit AUCUNE image bitmap/jpeg/rgba en mémoire : Zéro-Copie.
   void _handleNativeFrameResult(FrameResult frameResult) {
     if (!_running || _paused) return;
 
@@ -512,17 +393,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _nativeFps = frameResult.fps;
     _currentTargetFps = frameResult.targetFps ?? 30;
 
-    // Détection de l'état thermique et batterie (Dynamic Throttling)
     if (frameResult.isThermalThrottled != _lastThermalThrottled ||
         frameResult.isLowBattery != _lastLowBattery) {
       _lastThermalThrottled = frameResult.isThermalThrottled;
       _lastLowBattery = frameResult.isLowBattery;
-      debugPrint(
-        '⚡ [Dynamic Throttling] thermique=${frameResult.isThermalThrottled} '
-        'batterieFaible=${frameResult.isLowBattery} '
-        'niveau=${((frameResult.batteryLevel ?? 1.0) * 100).toInt()}% '
-        'cadenceCible=$_currentTargetFps fps',
-      );
     }
 
     if (!result.hasPoses) {
@@ -530,16 +404,11 @@ class PoseDetectionViewModel extends ChangeNotifier {
       _onLost(capturedAt);
     } else {
       final rawPose = result.firstPose!;
-
-      // FPS Adaptatif basé sur le mouvement (statique 15 fps vs mouvement 30 fps)
       final isStatic = _motionDetector.update(rawPose);
       if (isStatic != _lastIsStatic) {
         _lastIsStatic = isStatic;
         final targetFps = isStatic ? 15 : 30;
         _poseDetector.setTargetFps(targetFps);
-        debugPrint(
-          '🏃 [Dynamic Throttling] Posture ${isStatic ? "STATIQUE (15 fps)" : "DYNAMIQUE (30 fps)"} -> setTargetFps($targetFps)',
-        );
       }
 
       final size = result.imageWidth > 0 && result.imageHeight > 0
@@ -556,21 +425,22 @@ class PoseDetectionViewModel extends ChangeNotifier {
         frameSize: size,
         capturedAt: capturedAt,
       );
-      final posture = _stabilizedPosture(
-        classifyPosture(rawPose, frameSize: size),
-      );
+      final rawPosture = _classifier.classify(rawPose, frameSize: size);
+      final posture = _stabilizePosture(rawPosture);
       _hadPose = true;
       _inferMicros += result.processingTimeMs * 1000;
       _inferSamples++;
       _detectMicros += result.processingTimeMs * 1000;
       _detectSamples++;
 
-      _publish(
-        pose,
-        posture,
-        size,
+      _publisher.publish(
+        room: _room,
+        pose: pose,
+        posture: posture,
+        frameSize: size,
         capturedAt: capturedAt,
-        captureMicros: 0, // Zéro-copie : 0 ms de capture côté Dart !
+        deviceModel: _deviceModel,
+        captureMicros: 0,
         detectMicros: result.processingTimeMs * 1000,
         inferMicros: result.processingTimeMs * 1000,
       );
@@ -579,8 +449,78 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _logStats();
   }
 
-  /// Runtime evidence: prints detector image-z and MediaPipe metric world-z
-  /// ranges so the on-device configuration/output can be checked in logcat.
+  RemotePosture? _stabilizePosture(RemotePosture? raw) {
+    final stabilized = _stabilizer.stabilize(raw);
+    if (stabilized == null) {
+      if (_currentPosture != null) {
+        _currentPosture = null;
+        notifyListeners();
+      }
+      return null;
+    }
+    if (_currentPosture?.label != stabilized.label) {
+      _currentPosture = stabilized;
+      notifyListeners();
+    } else {
+      _currentPosture = stabilized;
+    }
+    return stabilized;
+  }
+
+  void _onLost(DateTime capturedAt) {
+    final now = DateTime.now();
+    if (_hadPose ||
+        now.difference(_lastLostSent) > const Duration(milliseconds: 500)) {
+      _hadPose = false;
+      _lastLostSent = now;
+      _publisher.publishLost(
+        room: _room,
+        capturedAt: capturedAt,
+        deviceModel: _deviceModel,
+      );
+    }
+    _stabilizer.onPoseLost();
+    if (_smoothing.alpha < 1.0) _smoothing.reset();
+    frameNotifier.value = null;
+    if (_currentPosture != null) {
+      _currentPosture = null;
+      notifyListeners();
+    }
+  }
+
+  LocalVideoTrack? _cameraTrack() {
+    final participant = _room?.localParticipant;
+    if (participant == null) return null;
+    for (final publication in participant.videoTrackPublications) {
+      final track = publication.track;
+      if (track != null && track.source == TrackSource.camera) return track;
+    }
+    return null;
+  }
+
+  Future<CapturedFrame?> _capture(LocalVideoTrack track) async {
+    final watch = Stopwatch()..start();
+    final capturedAt = DateTime.now();
+    final videoTimestampMs = _videoClock.elapsedMilliseconds;
+    try {
+      final buffer = await track.mediaStreamTrack.captureFrame();
+      final captureMicros = watch.elapsedMicroseconds;
+      return CapturedFrame(
+        Uint8List.view(buffer),
+        capturedAt,
+        videoTimestampMs,
+        captureMicros,
+      );
+    } catch (error) {
+      debugPrint('⚠️ Pose capture failed: $error');
+      return null;
+    } finally {
+      watch.stop();
+      _captureMicros += watch.elapsedMicroseconds;
+      _captureSamples++;
+    }
+  }
+
   void _logRuntimeLandmarks(Pose pose) {
     if (!kDebugMode) return;
     final now = DateTime.now();
@@ -607,8 +547,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
     );
   }
 
-  /// Moyennes capture/détection/publication et débits sur la dernière seconde.
-  /// `publishData/s` doit être égal au débit de `seq`.
   void _logStats() {
     if (!kDebugMode) return;
     final now = DateTime.now();
@@ -635,9 +573,9 @@ class PoseDetectionViewModel extends ChangeNotifier {
       'capture=${averageMs(_captureMicros, _captureSamples).toStringAsFixed(1)}ms '
       'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
       'infer=${averageMs(_inferMicros, _inferSamples).toStringAsFixed(1)}ms '
-      'publish=${averageMs(_publishMicros, _publishSamples).toStringAsFixed(1)}ms '
-      'publishData=${(_publishedSinceStats / seconds).toStringAsFixed(1)}/s '
-      'seq=${((_seq - _seqAtLastStats) / seconds).toStringAsFixed(1)}/s',
+      'publish=${averageMs(_publisher.publishMicros, _publisher.publishSamples).toStringAsFixed(1)}ms '
+      'publishData=${(_publisher.publishedSinceStats / seconds).toStringAsFixed(1)}/s '
+      'seq=${((_publisher.seq - _publisher.seqAtLastStats) / seconds).toStringAsFixed(1)}/s',
     );
 
     _captureMicros = 0;
@@ -646,310 +584,13 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _detectSamples = 0;
     _inferMicros = 0;
     _inferSamples = 0;
-    _publishMicros = 0;
-    _publishSamples = 0;
-    _publishedSinceStats = 0;
-    _seqAtLastStats = _seq;
+    _publisher.resetStats(_publisher.seq);
     _statsWindowStart = now;
   }
 
-  LocalVideoTrack? _cameraTrack() {
-    final participant = _room?.localParticipant;
-    if (participant == null) return null;
-    for (final publication in participant.videoTrackPublications) {
-      final track = publication.track;
-      if (track != null && track.source == TrackSource.camera) return track;
-    }
-    return null;
-  }
-
-  Future<_CapturedFrame?> _capture(LocalVideoTrack track) async {
-    final watch = Stopwatch()..start();
-    // Horodatage AVANT la capture : c'est l'instant où l'image est prise, pas
-    // celui où l'inférence se termine ni celui de la publication.
-    final capturedAt = DateTime.now();
-    final videoTimestampMs = _videoClock.elapsedMilliseconds;
-    try {
-      final buffer = await track.mediaStreamTrack.captureFrame();
-      final captureMicros = watch.elapsedMicroseconds;
-      return _CapturedFrame(
-        Uint8List.view(buffer),
-        capturedAt,
-        videoTimestampMs,
-        captureMicros,
-      );
-    } catch (error) {
-      debugPrint('⚠️ Pose capture failed: $error');
-      return null;
-    } finally {
-      watch.stop();
-      _captureMicros += watch.elapsedMicroseconds;
-      _captureSamples++;
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Publication
-  // ---------------------------------------------------------------------------
-
-  void _publish(
-    Pose pose,
-    RemotePosture? posture,
-    Size frameSize, {
-    required DateTime capturedAt,
-    required int captureMicros,
-    required int detectMicros,
-    required int inferMicros,
-  }) {
-    if (_room?.localParticipant == null) return;
-
-    final seq = ++_seq;
-    final bytes = PostureCodec.encode(
-      label: posture?.label ?? 'inconnu',
-      confidence: posture?.confidence,
-      landmarks: pose.landmarks,
-      worldLandmarks: pose.worldLandmarks,
-      frameSize: frameSize,
-      seq: seq,
-      timestampMs: capturedAt.millisecondsSinceEpoch,
-      gravity: GravityService.instance.upInCameraAxes,
-    );
-    _send(
-      bytes,
-      'posture',
-      frameSeq: seq,
-      frameSize: frameSize,
-      captureMicros: captureMicros,
-      detectMicros: detectMicros,
-      inferMicros: inferMicros,
-    );
-  }
-
-  void _publishLost(DateTime capturedAt) {
-    if (_room?.localParticipant == null) return;
-    _send(
-      PostureCodec.encodeLost(
-        ++_seq,
-        timestampMs: capturedAt.millisecondsSinceEpoch,
-      ),
-      'lost',
-    );
-  }
-
-  /// Envoi lossy non attendu, avec mesure de la durée jusqu'au retour du futur.
-  void _send(
-    Uint8List bytes,
-    String kind, {
-    int? frameSeq,
-    Size? frameSize,
-    int? captureMicros,
-    int? detectMicros,
-    int? inferMicros,
-  }) {
-    final participant = _room?.localParticipant;
-    if (participant == null) return;
-
-    _publishedSinceStats++;
-    final watch = Stopwatch()..start();
-    unawaited(
-      participant
-          .publishData(
-            bytes,
-            reliable: false,
-            topic: 'posture',
-            destinationIdentities: _destinationIdentities,
-          )
-          .then((_) {
-            watch.stop();
-            _publishMicros += watch.elapsedMicroseconds;
-            _publishSamples++;
-            if (kDebugMode && frameSeq != null && frameSize != null) {
-              debugPrint(
-                '📊 pose-frame seq=$frameSeq model=lite device=$_deviceModel '
-                'resolution=${frameSize.width.toInt()}x${frameSize.height.toInt()} '
-                'capture=${(captureMicros ?? 0) / 1000.0}ms '
-                'detect=${(detectMicros ?? 0) / 1000.0}ms '
-                'infer=${(inferMicros ?? 0) / 1000.0}ms '
-                'publish=${watch.elapsedMicroseconds / 1000.0}ms',
-              );
-            }
-          })
-          .catchError((Object e) {
-            watch.stop();
-            _publishMicros += watch.elapsedMicroseconds;
-            _publishSamples++;
-            debugPrint('⚠️ Failed to publish $kind: $e');
-          }),
-    );
-  }
-
-  /// Pose absente : un paquet « perdu » à la transition, puis un rappel
-  /// toutes les 500 ms tant que la pose reste absente.
-  void _onLost(DateTime capturedAt) {
-    final now = DateTime.now();
-    if (_hadPose ||
-        now.difference(_lastLostSent) > const Duration(milliseconds: 500)) {
-      _hadPose = false;
-      _lastLostSent = now;
-      _publishLost(capturedAt);
-    }
-    _lossStartedAt ??= now;
-    if (_smoothing.alpha < 1.0) _smoothing.reset();
-    frameNotifier.value = null;
-    if (_currentPosture != null) {
-      _currentPosture = null;
-      notifyListeners();
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Classification
-  // ---------------------------------------------------------------------------
-
-  /// Hystérésis : le label ne change qu'après [_labelHoldFrames] frames
-  /// consécutives identiques. N'affecte pas le squelette, seulement le label.
-  RemotePosture? _stabilizedPosture(RemotePosture? raw) {
-    if (raw == null) {
-      _candidateLabel = null;
-      _candidateCount = 0;
-      if (_currentPosture != null) {
-        _currentPosture = null;
-        notifyListeners();
-      }
-      return null;
-    }
-
-    final lossStartedAt = _lossStartedAt;
-    if (lossStartedAt != null &&
-        DateTime.now().difference(lossStartedAt) >
-            const Duration(milliseconds: 900)) {
-      _candidateLabel = null;
-      _candidateCount = 0;
-    }
-    _lossStartedAt = null;
-
-    if (_stableLabel == null) {
-      _stableLabel = raw.label;
-    } else if (raw.label == _stableLabel) {
-      _candidateLabel = null;
-      _candidateCount = 0;
-    } else if (raw.label == _candidateLabel) {
-      if (++_candidateCount >= _labelHoldFrames) {
-        _stableLabel = raw.label;
-        _candidateLabel = null;
-        _candidateCount = 0;
-      }
-    } else {
-      _candidateLabel = raw.label;
-      _candidateCount = 1;
-    }
-
-    final stabilized = RemotePosture(
-      label: _stableLabel!,
-      confidence: raw.confidence,
-      receivedAt: raw.receivedAt,
-    );
-
-    // On ne notifie l'UI que si le label change (pas à chaque frame).
-    if (_currentPosture?.label != stabilized.label) {
-      _currentPosture = stabilized;
-      notifyListeners();
-    } else {
-      _currentPosture = stabilized;
-    }
-    return stabilized;
-  }
-
-  RemotePosture? classifyPosture(
-    Pose pose, {
-    required Size frameSize,
-  }) {
-    PoseLandmark? landmark(LandmarkType type) => pose.getLandmark(type);
-    bool visible(LandmarkType type) =>
-        (landmark(type)?.visibility ?? 0) >= 0.5;
-
-    double averageLikelihood(List<PoseLandmark?> landmarks) {
-      final values = landmarks
-          .whereType<PoseLandmark>()
-          .map((item) => item.visibility)
-          .toList();
-      if (values.isEmpty) return 0.0;
-      return values.reduce((a, b) => a + b) / values.length;
-    }
-
-    Offset? midpoint(LandmarkType a, LandmarkType b) {
-      final left = landmark(a);
-      final right = landmark(b);
-      if (left == null || right == null) return null;
-      return Offset((left.x + right.x) / 2, (left.y + right.y) / 2);
-    }
-
-    const torsoPoints = [
-      LandmarkType.leftShoulder,
-      LandmarkType.rightShoulder,
-      LandmarkType.leftHip,
-      LandmarkType.rightHip,
-    ];
-    if (!torsoPoints.every(visible)) return null;
-
-    final shoulderMid = midpoint(
-      LandmarkType.leftShoulder,
-      LandmarkType.rightShoulder,
-    );
-    final hipMid = midpoint(LandmarkType.leftHip, LandmarkType.rightHip);
-    if (shoulderMid == null || hipMid == null) return null;
-
-    final kneeMid = midpoint(LandmarkType.leftKnee, LandmarkType.rightKnee);
-    final ankleMid = midpoint(LandmarkType.leftAnkle, LandmarkType.rightAnkle);
-
-    final torsoDx = (shoulderMid.dx - hipMid.dx) * frameSize.width;
-    final torsoDy = (hipMid.dy - shoulderMid.dy) * frameSize.height;
-    final torsoAngleDeg =
-        math.atan2(
-          torsoDx.abs(),
-          torsoDy.abs().clamp(1e-6, double.infinity).toDouble(),
-        ) *
-        180 /
-        math.pi;
-
-    // A horizontal torso is enough to identify lying down. For seated/standing,
-    // require visible knees and ankles instead of interpreting missing points
-    // at (0, 0) as a standing posture.
-    late final String label;
-    if (torsoAngleDeg > 48) {
-      label = 'allong\u00e9';
-    } else {
-      const legPoints = [
-        LandmarkType.leftKnee,
-        LandmarkType.rightKnee,
-        LandmarkType.leftAnkle,
-        LandmarkType.rightAnkle,
-      ];
-      if (!legPoints.every(visible)) return null;
-      final legTorsoLength =
-          math.max((hipMid.dy - shoulderMid.dy).abs() * frameSize.height, 1e-6);
-      final kneeDrop = kneeMid == null
-          ? 0.0
-          : (kneeMid.dy - hipMid.dy) * frameSize.height / legTorsoLength;
-      final ankleDrop = ankleMid == null
-          ? 0.0
-          : (ankleMid.dy - hipMid.dy) * frameSize.height / legTorsoLength;
-      label = kneeDrop < 0.35 && ankleDrop < 0.7 ? 'assis' : 'debout';
-    }
-
-    final confidence = averageLikelihood([
-      landmark(LandmarkType.leftShoulder),
-      landmark(LandmarkType.rightShoulder),
-      landmark(LandmarkType.leftHip),
-      landmark(LandmarkType.rightHip),
-    ]);
-
-    return RemotePosture(
-      label: label,
-      confidence: confidence.clamp(0.0, 1.0).toDouble(),
-      receivedAt: DateTime.now(),
-    );
-  }
+  /// Méthode publique de classification pour compatibilité ascendante.
+  RemotePosture? classifyPosture(Pose pose, {required Size frameSize}) =>
+      _classifier.classify(pose, frameSize: frameSize);
 
   @override
   void dispose() {

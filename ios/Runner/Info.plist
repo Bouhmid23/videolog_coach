@@ -50,6 +50,12 @@
 		<string>audio</string>
 		<string>voip</string>
 		<string>location</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.pravera.flutter_foreground_task.refresh</string>
 	</array>
 	<key>io.flutter.embedded_views_preview</key>
 	<true/>
@@ -65,5 +71,24 @@
 	<string>Position nécessaire pour la télémétrie GPS en direct</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Position nécessaire pour la télémétrie GPS en arrière-plan</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>FlutterSceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 </dict>
 </plist>

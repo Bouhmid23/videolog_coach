@@ -264,10 +264,9 @@ class _PoseSkeletonPainter extends CustomPainter {
       canvas.drawLine(from, to, _boneOutlinePaint);
 
       _boneMainPaint
-        ..shader = colorFrom == colorTo
-            ? null
-            : ui.Gradient.linear(from, to, [colorFrom, colorTo])
-        ..color = colorFrom.withValues(alpha: visibility)
+        ..shader = null
+        ..color = (colorFrom == colorTo ? colorFrom : midColor)
+            .withValues(alpha: visibility)
         ..strokeWidth = width;
       canvas.drawLine(from, to, _boneMainPaint);
 

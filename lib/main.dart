@@ -1,4 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:intl/intl.dart';
@@ -12,11 +13,15 @@ import 'firebase_options.dart';
 import 'router.dart';
 
 void main() async {
-  final format = DateFormat('HH:mm:ss');
-  Logger.root.level = Level.FINEST;
-  Logger.root.onRecord.listen((record) {
-    debugPrint('${format.format(record.time)} [${record.level.name}]: ${record.message}');
-  });
+  if (kReleaseMode) {
+    Logger.root.level = Level.WARNING;
+  } else {
+    final format = DateFormat('HH:mm:ss');
+    Logger.root.level = Level.INFO;
+    Logger.root.onRecord.listen((record) {
+      debugPrint('${format.format(record.time)} [${record.level.name}]: ${record.message}');
+    });
+  }
 
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -42,7 +47,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp.router(
       debugShowCheckedModeBanner: false,
       theme: LiveKitTheme().buildThemeData(context),
-      title: 'VideoLog',
+      title: 'VideoLog OnAir',
       routerConfig: goRouter,
     );
   }

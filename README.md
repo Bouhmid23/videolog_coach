@@ -1,4 +1,4 @@
-# livekitapp
+# videologCoach
 
 ## Real-time pose stream
 

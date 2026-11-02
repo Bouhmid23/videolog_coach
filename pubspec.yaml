@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.1+2
 
 environment:
-  sdk: ^3.10.3
+  sdk: ^3.13.7
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -42,13 +42,11 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   google_fonts: ^8.0.2
   flutter_svg: ^2.2.4
-  flutter_webrtc: ^1.6.3
   http: ^1.6.0
   flutter_foreground_task: ^9.2.2
   wakelock_plus: ^1.5.2
   flutter_reactive_ble: ^5.4.2
-  camera: ^0.12.2
-  image_picker: ^1.2.4
+
   flutter_pose_detection: ^0.4.0
   path_provider: ^2.1.5
   geolocator: ^13.0.2
@@ -77,6 +75,8 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  config:
+    enable-swift-package-manager: false
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
+
 import '../../core/athletic_haptics.dart';
 import '../../core/pip_service.dart';
 import '../../core/recording_controller.dart';
@@ -44,6 +46,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   final ValueNotifier<bool> _showControls = ValueNotifier<bool>(true);
   final ValueNotifier<bool> _isScreenLocked = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _isOutdoorSunMode = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _showLandscapeSidebar = ValueNotifier<bool>(true);
   Timer? _controlsHideTimer;
   String? _gestureFeedbackMessage;
   IconData? _gestureFeedbackIcon;
@@ -154,6 +157,12 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     setState(() {});
   }
 
+  /// Basculement de l'affichage du panneau latéral en mode paysage
+  void _toggleLandscapeSidebar() {
+    _showLandscapeSidebar.value = !_showLandscapeSidebar.value;
+    unawaited(HapticFeedback.lightImpact());
+  }
+
   @override
   void initState() {
     super.initState();
@@ -218,6 +227,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     _showControls.dispose();
     _isScreenLocked.dispose();
     _isOutdoorSunMode.dispose();
+    _showLandscapeSidebar.dispose();
     onWindowShouldClose = null;
     super.dispose();
   }
@@ -234,15 +244,15 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
               valueListenable: PipService.isInPip,
               builder: (context, inPip, _) {
                 final orientation = MediaQuery.orientationOf(context);
-                final size = MediaQuery.sizeOf(context);
                 final isLandscape = orientation == Orientation.landscape;
-                final isTabletOrDesktop = size.shortestSide >= 700 || size.width >= 820;
-                final useTwoColumns = (isLandscape || isTabletOrDesktop) && !inPip;
+                final useTwoColumns = isLandscape && !inPip;
 
                 return Scaffold(
                   extendBody: true,
                   extendBodyBehindAppBar: true,
-                  backgroundColor: outdoorSunMode ? Colors.black : LKColors.background,
+                  backgroundColor: outdoorSunMode
+                      ? Colors.black
+                      : LKColors.background,
                   body: Stack(
                     children: [
                       // ========================================================================
@@ -264,12 +274,19 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                           right: 0,
                           child: Center(
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
                               decoration: BoxDecoration(
-                                color: outdoorSunMode ? Colors.black : Colors.black.withValues(alpha: 0.85),
+                                color: outdoorSunMode
+                                    ? Colors.black
+                                    : Colors.black.withValues(alpha: 0.85),
                                 borderRadius: BorderRadius.circular(999),
                                 border: Border.all(
-                                  color: outdoorSunMode ? Colors.white : LKColors.primary,
+                                  color: outdoorSunMode
+                                      ? Colors.white
+                                      : LKColors.primary,
                                   width: outdoorSunMode ? 1.5 : 1,
                                 ),
                                 boxShadow: UIUtils.shadowMD,
@@ -280,7 +297,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                                   if (_gestureFeedbackIcon != null) ...[
                                     Icon(
                                       _gestureFeedbackIcon,
-                                      color: outdoorSunMode ? const Color(0xFFFFB800) : LKColors.primary,
+                                      color: outdoorSunMode
+                                          ? const Color(0xFFFFB800)
+                                          : LKColors.primary,
                                       size: 18,
                                     ),
                                     const SizedBox(width: 8),
@@ -289,7 +308,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                                     _gestureFeedbackMessage!,
                                     style: TextStyle(
                                       color: Colors.white,
-                                      fontWeight: outdoorSunMode ? FontWeight.w900 : FontWeight.bold,
+                                      fontWeight: outdoorSunMode
+                                          ? FontWeight.w900
+                                          : FontWeight.bold,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -317,14 +338,19 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                             listenable: _vm,
                             builder: (context, _) {
                               final isConnected =
-                                  _vm.room?.connectionState == ConnectionState.connected;
+                                  _vm.room?.connectionState ==
+                                  ConnectionState.connected;
                               if (isConnected) {
-                                return const IgnorePointer(child: SizedBox.shrink());
+                                return const IgnorePointer(
+                                  child: SizedBox.shrink(),
+                                );
                               }
                               return Container(
                                 color: outdoorSunMode
                                     ? Colors.black.withValues(alpha: 0.9)
-                                    : LKColors.background.withValues(alpha: 0.8),
+                                    : LKColors.background.withValues(
+                                        alpha: 0.8,
+                                      ),
                                 child: const Center(
                                   child: CircularProgressIndicator(
                                     valueColor: AlwaysStoppedAnimation<Color>(
@@ -351,9 +377,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   Widget _buildPortraitLayout(BuildContext context, {required bool inPip}) {
     return Stack(
       children: [
-        Positioned.fill(
-          child: _buildPrimaryVideo(context, inPip: inPip),
-        ),
+        Positioned.fill(child: _buildPrimaryVideo(context, inPip: inPip)),
         if (!inPip)
           Positioned(
             left: 0,
@@ -374,53 +398,74 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     );
   }
 
-  /// Vue Paysage / iPad adaptative deux colonnes :
-  /// - 70% Gauche : Flux vidéo principal, calque de pose et télémétrie sportive.
-  /// - 30% Droite : Colonne d'analyse verticale (galerie secondaire + console de contrôles).
+  /// Vue Paysage adaptative :
+  /// - Colonne Gauche : Flux vidéo principal, calque de pose et poignée chevron.
+  /// - Colonne Droite (Repliable) : Galerie secondaire + console de contrôles.
   Widget _buildLandscapeLayout(BuildContext context) {
-    return Row(
-      children: [
-        // ── 70% Colonne Gauche : Vidéo Principale + Pose ──
-        Expanded(
-          flex: 7,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: _buildPrimaryVideo(context, inPip: false),
+    return ValueListenableBuilder<bool>(
+      valueListenable: _showLandscapeSidebar,
+      builder: (context, showSidebar, _) {
+        return Row(
+          children: [
+            // ── Colonne Gauche : Vidéo Principale + Pose + Poignée Chevron ──
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: _buildPrimaryVideo(context, inPip: false),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _buildSidebarToggleButton(
+                        context,
+                        isExpanded: showSidebar,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
+            ),
 
-        // ── 30% Colonne Droite : Galerie Verticale & Contrôles ──
-        Container(
-          width: 330,
-          decoration: BoxDecoration(
-            color: LKColors.surface,
-            border: Border(
-              left: BorderSide(
-                color: LKColors.border.withValues(alpha: 0.7),
-                width: 1,
-              ),
+            // ── Colonne Droite : Galerie Verticale & Contrôles (Repliable) ──
+            AnimatedSize(
+              duration: UIUtils.animationDuration,
+              curve: UIUtils.animationCurve,
+              child: showSidebar
+                  ? Container(
+                      width: 330,
+                      decoration: BoxDecoration(
+                        color: LKColors.surface,
+                        border: Border(
+                          left: BorderSide(
+                            color: LKColors.border.withValues(alpha: 0.7),
+                            width: 1,
+                          ),
+                        ),
+                      ),
+                      child: SafeArea(
+                        left: false,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildSidebarHeader(context),
+                            const Divider(height: 1, color: LKColors.border),
+                            Expanded(
+                              child: _buildSecondaryVerticalGallery(context),
+                            ),
+                            const Divider(height: 1, color: LKColors.border),
+                            _buildControlsPanel(context),
+                          ],
+                        ),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
             ),
-          ),
-          child: SafeArea(
-            left: false,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildSidebarHeader(context),
-                const Divider(height: 1, color: LKColors.border),
-                Expanded(
-                  child: _buildSecondaryVerticalGallery(context),
-                ),
-                const Divider(height: 1, color: LKColors.border),
-                _buildControlsPanel(context),
-              ],
-            ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 
@@ -440,7 +485,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                     infoAtTop: !inPip,
                     recordingController: _recordingController,
                     onTap: _isScreenLocked.value ? null : _toggleControls,
-                    onDoubleTap: _isScreenLocked.value ? null : _onDoubleTapVideo,
+                    onDoubleTap: _isScreenLocked.value
+                        ? null
+                        : _onDoubleTapVideo,
                     onSwipeLeft: _isScreenLocked.value ? null : _onSwipeLeft,
                     onSwipeRight: _isScreenLocked.value ? null : _onSwipeRight,
                     outdoorSunMode: _isOutdoorSunMode.value,
@@ -469,8 +516,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
           padding: EdgeInsets.only(bottom: UIUtils.sm),
           child: RepaintBoundary(
             child: SizedBox(
-              height:
-                  _galleryHeight + _galleryHudHeight + _galleryHudSpacing,
+              height: _galleryHeight + _galleryHudHeight + _galleryHudSpacing,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 padding: EdgeInsets.symmetric(horizontal: UIUtils.md),
@@ -498,8 +544,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                               }
                               return Column(
                                 mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.stretch,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   GestureDetector(
                                     behavior: HitTestBehavior.opaque,
@@ -599,13 +644,75 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
           Expanded(
             child: Text(
               'Participants & Télémétrie',
-              style: UIUtils.titleSmall(context).copyWith(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
+              style: UIUtils.titleSmall(context)
+                  .copyWith(fontWeight: FontWeight.bold, fontSize: 13),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Languette chevron verticale au milieu à l'extérieur du pavé.
+  /// S'oriente dynamiquement vers la droite (fermer) ou vers la gauche (ouvrir).
+  /// Format large et robuste pensé pour un clic facile en pleine session sportive.
+  Widget _buildSidebarToggleButton(
+    BuildContext context, {
+    required bool isExpanded,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _toggleLandscapeSidebar,
+        borderRadius: const BorderRadius.horizontal(left: Radius.circular(28)),
+        child: Container(
+          width: 58,
+          height: 104,
+          decoration: BoxDecoration(
+            color: _isOutdoorSunMode.value
+                ? Colors.black
+                : LKColors.surfaceElevated.withValues(alpha: 0.95),
+            borderRadius: const BorderRadius.horizontal(
+              left: Radius.circular(28),
+            ),
+            border: Border(
+              top: BorderSide(
+                color: _isOutdoorSunMode.value ? Colors.white : LKColors.border,
+                width: 1.5,
+              ),
+              left: BorderSide(
+                color: _isOutdoorSunMode.value ? Colors.white : LKColors.border,
+                width: 1.5,
+              ),
+              bottom: BorderSide(
+                color: _isOutdoorSunMode.value ? Colors.white : LKColors.border,
+                width: 1.5,
+              ),
+              right: BorderSide.none,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.4),
+                blurRadius: 8,
+                offset: const Offset(-3, 0),
+              ),
+            ],
+          ),
+          child: Center(
+            child: AnimatedRotation(
+              turns: isExpanded ? 0.0 : 0.5,
+              duration: UIUtils.animationDuration,
+              curve: UIUtils.animationCurve,
+              child: Icon(
+                Icons.chevron_right_rounded,
+                color: _isOutdoorSunMode.value
+                    ? Colors.white
+                    : LKColors.primary,
+                size: 54,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -631,9 +738,8 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                   SizedBox(height: UIUtils.sm),
                   Text(
                     'Aucun autre participant',
-                    style: UIUtils.bodySmall(context).copyWith(
-                      color: LKColors.textHint,
-                    ),
+                    style: UIUtils.bodySmall(context)
+                        .copyWith(color: LKColors.textHint),
                   ),
                 ],
               ),
@@ -782,16 +888,14 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
             SizedBox(height: UIUtils.md),
             Text(
               message,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(color: LKColors.textSecondary),
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(color: LKColors.textSecondary),
             ),
             SizedBox(height: UIUtils.sm),
             Text(
               'En attente des participants...',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: LKColors.textHint),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: LKColors.textHint),
             ),
           ],
         ),
