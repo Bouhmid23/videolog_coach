@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:videolog_coach/core/auth_service.dart';
 import 'package:videolog_coach/core/call_foreground_service.dart';
+import 'package:videolog_coach/core/thermal_service.dart';
 import 'package:videolog_coach/theme.dart';
 import 'package:logging/logging.dart';
 
@@ -32,6 +33,7 @@ void main() async {
 
   FlutterForegroundTask.initCommunicationPort();
   CallForegroundService.initialize();
+  await ThermalService.instance.initialize(navigatorKey: rootNavigatorKey);
 
   await LiveKitClient.initialize(
     bypassVoiceProcessing: lkPlatformIsMobile(),

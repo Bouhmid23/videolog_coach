@@ -8,10 +8,11 @@ import 'presentation/screens/login_screen.dart';
 import 'presentation/screens/room.dart';
 import 'presentation/screens/rooms_screen.dart';
 
-final _rootNavigatorKey = GlobalKey<NavigatorState>();
+final rootNavigatorKey = GlobalKey<NavigatorState>();
+final _rootNavigatorKey = rootNavigatorKey;
 
 final goRouter = GoRouter(
-  navigatorKey: _rootNavigatorKey,
+  navigatorKey: rootNavigatorKey,
   initialLocation: '/login',
   refreshListenable: AuthService.instance,
   redirect: (context, state) {

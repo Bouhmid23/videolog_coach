@@ -28,7 +28,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.8'
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
 
@@ -79,8 +79,22 @@ jobs:
             exit 1
           fi
 
+      - name: Generate release version info
+        id: release_info
+        run: |
+          RELEASE_DATE=$(date +'%d_%m_%Y')
+          VERSION_NAME="videolog_coach_${RELEASE_DATE}"
+          APK_NAME="${VERSION_NAME}.apk"
+          echo "release_date=${RELEASE_DATE}" >> $GITHUB_OUTPUT
+          echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "apk_name=${APK_NAME}" >> $GITHUB_OUTPUT
+
       - name: Build release APK
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release \
+            --build-name="${{ steps.release_info.outputs.version_name }}" \
+            --build-number="${{ github.run_number }}"
+          cp build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/${{ steps.release_info.outputs.apk_name }}"
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -92,4 +106,5 @@ jobs:
           appId: ${{ vars.FIREBASE_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           groups: testers
-          file: build/app/outputs/flutter-apk/app-release.apk
+          file: build/app/outputs/flutter-apk/${{ steps.release_info.outputs.apk_name }}
+          releaseNotes: "Release ${{ steps.release_info.outputs.version_name }} (Build #${{ github.run_number }})"

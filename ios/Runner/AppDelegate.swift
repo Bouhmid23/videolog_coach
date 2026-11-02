@@ -7,6 +7,7 @@ import AVKit
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var micStreamHandler: MicMeterStreamHandler?
   private var pipManager: PipManager?
+  private var thermalStreamHandler: ThermalStreamHandler?
   private var channelsConfigured = false
 
   override func application(
@@ -46,6 +47,34 @@ import AVKit
       binaryMessenger: binaryMessenger,
       rootViewController: rootViewController
     )
+
+    // 3. Surveillance thermique (MethodChannel & EventChannel videolog/thermal)
+    let thermalChannel = FlutterMethodChannel(
+      name: "videolog/thermal",
+      binaryMessenger: binaryMessenger
+    )
+    thermalChannel.setMethodCallHandler { (call, result) in
+      if call.method == "getThermalStatus" {
+        let state = ProcessInfo.processInfo.thermalState
+        let isOverheating = (state == .serious || state == .critical)
+        result([
+          "isOverheating": isOverheating,
+          "status": state.rawValue,
+          "statusName": ThermalStreamHandler.thermalStateName(state),
+          "batteryTempC": NSNull()
+        ])
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    let thermalEventChannel = FlutterEventChannel(
+      name: "videolog/thermal_stream",
+      binaryMessenger: binaryMessenger
+    )
+    let thermalHandler = ThermalStreamHandler()
+    thermalStreamHandler = thermalHandler
+    thermalEventChannel.setStreamHandler(thermalHandler)
   }
 }
 
@@ -322,3 +351,57 @@ class MicMeterStreamHandler: NSObject, FlutterStreamHandler {
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
   }
 }
+
+// MARK: - ThermalStreamHandler
+
+class ThermalStreamHandler: NSObject, FlutterStreamHandler {
+  private var eventSink: FlutterEventSink?
+  private var observer: NSObjectProtocol?
+
+  static func thermalStateName(_ state: ProcessInfo.ThermalState) -> String {
+    switch state {
+    case .nominal: return "NOMINAL"
+    case .fair: return "FAIR"
+    case .serious: return "SERIOUS"
+    case .critical: return "CRITICAL"
+    @unknown default: return "UNKNOWN"
+    }
+  }
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    self.eventSink = events
+    sendCurrentStatus()
+    observer = NotificationCenter.default.addObserver(
+      forName: ProcessInfo.thermalStateDidChangeNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.sendCurrentStatus()
+    }
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    if let obs = observer {
+      NotificationCenter.default.removeObserver(obs)
+      observer = nil
+    }
+    self.eventSink = nil
+    return nil
+  }
+
+  private func sendCurrentStatus() {
+    let state = ProcessInfo.processInfo.thermalState
+    let isOverheating = (state == .serious || state == .critical)
+    let data: [String: Any] = [
+      "isOverheating": isOverheating,
+      "status": state.rawValue,
+      "statusName": Self.thermalStateName(state),
+      "batteryTempC": NSNull()
+    ]
+    DispatchQueue.main.async { [weak self] in
+      self?.eventSink?(data)
+    }
+  }
+}
+

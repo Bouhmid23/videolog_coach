@@ -2,6 +2,9 @@ package com.opkodelabs.videolog_coach
 
 import android.Manifest
 import android.app.PictureInPictureParams
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.media.AudioFormat
@@ -9,9 +12,11 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -25,6 +30,8 @@ class MainActivity : FlutterActivity() {
         const val BEEP_CHANNEL = "videolog/beep"
         const val MIC_METER_CHANNEL = "videolog/mic_meter"
         const val MIC_METER_STREAM_CHANNEL = "videolog/mic_meter_stream"
+        const val THERMAL_CHANNEL = "videolog/thermal"
+        const val THERMAL_STREAM_CHANNEL = "videolog/thermal_stream"
         val DEFAULT_RATIO = Rational(9, 16)
     }
 
@@ -38,6 +45,8 @@ class MainActivity : FlutterActivity() {
     private var currentMicLevel = 0.0
     private var micMeterThread: Thread? = null
     private var micEventSink: EventChannel.EventSink? = null
+    private var thermalEventSink: EventChannel.EventSink? = null
+    private var thermalStatusListener: Any? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -109,12 +118,119 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // Surveillance thermique (température processeur et batterie)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, THERMAL_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getThermalStatus" -> result.success(getThermalData())
+                    else -> result.notImplemented()
+                }
+            }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, THERMAL_STREAM_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    thermalEventSink = events
+                    startThermalMonitoring()
+                    events?.success(getThermalData())
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    stopThermalMonitoring()
+                }
+            })
     }
 
     override fun onDestroy() {
         micEventSink = null
         stopMicMeter()
+        stopThermalMonitoring()
         super.onDestroy()
+    }
+
+    private fun getThermalData(): Map<String, Any?> {
+        val batteryTemp = getBatteryTemperature()
+        var status = 0
+        var statusName = "NONE"
+        var isOverheating = false
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            status = powerManager?.currentThermalStatus ?: 0
+            statusName = getThermalStatusName(status)
+            isOverheating = status >= PowerManager.THERMAL_STATUS_MODERATE
+        }
+
+        if (batteryTemp != null && batteryTemp >= 42.0) {
+            isOverheating = true
+        }
+
+        return mapOf(
+            "isOverheating" to isOverheating,
+            "status" to status,
+            "statusName" to statusName,
+            "batteryTempC" to batteryTemp
+        )
+    }
+
+    private fun getThermalStatusName(status: Int): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            when (status) {
+                PowerManager.THERMAL_STATUS_NONE -> "NONE"
+                PowerManager.THERMAL_STATUS_LIGHT -> "LIGHT"
+                PowerManager.THERMAL_STATUS_MODERATE -> "MODERATE"
+                PowerManager.THERMAL_STATUS_SEVERE -> "SEVERE"
+                PowerManager.THERMAL_STATUS_CRITICAL -> "CRITICAL"
+                PowerManager.THERMAL_STATUS_EMERGENCY -> "EMERGENCY"
+                PowerManager.THERMAL_STATUS_SHUTDOWN -> "SHUTDOWN"
+                else -> "UNKNOWN ($status)"
+            }
+        } else {
+            "UNSUPPORTED"
+        }
+    }
+
+    private fun getBatteryTemperature(): Double? {
+        return try {
+            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val intent = registerReceiver(null, filter)
+            val temp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+            if (temp > 0) temp / 10.0 else null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun startThermalMonitoring() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (thermalStatusListener == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val listener = PowerManager.OnThermalStatusChangedListener { _ ->
+                    val data = getThermalData()
+                    mainHandler.post {
+                        thermalEventSink?.success(data)
+                    }
+                }
+                try {
+                    powerManager?.addThermalStatusListener(listener)
+                    thermalStatusListener = listener
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    private fun stopThermalMonitoring() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && thermalStatusListener != null) {
+            try {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                powerManager?.removeThermalStatusListener(
+                    thermalStatusListener as PowerManager.OnThermalStatusChangedListener
+                )
+            } catch (_: Throwable) {}
+            thermalStatusListener = null
+        }
+        thermalEventSink = null
     }
 
     @Synchronized

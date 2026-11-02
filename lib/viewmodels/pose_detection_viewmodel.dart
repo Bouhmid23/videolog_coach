@@ -18,6 +18,7 @@ import 'package:livekit_client/livekit_client.dart';
 
 import '../core/gravity_service.dart';
 import '../core/posture_detection_service.dart';
+import '../core/thermal_service.dart';
 import '../data/remote_posture.dart';
 import 'pose/motion_detector.dart';
 import 'pose/pose_frame.dart';
@@ -395,8 +396,17 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
     if (frameResult.isThermalThrottled != _lastThermalThrottled ||
         frameResult.isLowBattery != _lastLowBattery) {
+      final wasThermalThrottled = _lastThermalThrottled;
       _lastThermalThrottled = frameResult.isThermalThrottled;
       _lastLowBattery = frameResult.isLowBattery;
+      notifyListeners();
+
+      if (_lastThermalThrottled && !wasThermalThrottled) {
+        ThermalService.instance.notifyThermalThrottled(
+          isThrottled: true,
+          reason: 'pose_detection_npu',
+        );
+      }
     }
 
     if (!result.hasPoses) {
