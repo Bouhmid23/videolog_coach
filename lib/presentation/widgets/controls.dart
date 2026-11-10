@@ -10,10 +10,12 @@ import '../../exts.dart';
 import '../../theme.dart';
 import '../../viewmodels/controls_viewmodel.dart';
 import '../utils/ui_utils.dart';
+import 'controls/audio_sheet_content.dart';
 import 'controls/ble_sheet_content.dart';
 import 'controls/glasses_icon.dart';
 import 'controls/sensor_sheet_content.dart';
 import 'recording_controls.dart';
+export 'controls/audio_sheet_content.dart';
 export 'controls/ble_sheet_content.dart';
 export 'controls/glasses_icon.dart';
 export 'controls/posture_smoothing_dialog.dart';
@@ -116,6 +118,17 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     await _vm.closeSensorSheet();
   }
 
+  Future<void> _openAudioSheet() async {
+    await _vm.refreshAudioDevices();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => AudioSheetContent(vm: _vm, room: widget.room),
+    );
+  }
+
   /*Future<void> _openPostureSmoothingDialog() async {
     final onChange = widget.onSetPostureSmoothingAlpha;
     if (onChange == null) return;
@@ -174,6 +187,7 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     required IconData icon,
     required VoidCallback? onPressed,
     required String tooltip,
+    VoidCallback? onLongPress,
     Color? iconColor,
     double iconSize = 24,
     bool isActive = false,
@@ -202,25 +216,33 @@ class _ControlsWidgetState extends State<ControlsWidget> {
         child: _buildCircularBlurContainer(
           isActive: isActive,
           badge: badge,
-          child: IconButton(
-            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-            onPressed: onPressed == null
-                ? null
-                : () {
-                    unawaited(HapticFeedback.lightImpact());
-                    onPressed();
-                  },
-            icon: iconChild,
-            tooltip: tooltip,
-            style: IconButton.styleFrom(
-              minimumSize: const Size(48, 48),
-              tapTargetSize: MaterialTapTargetSize.padded,
-              foregroundColor: LKColors.textPrimary,
-              backgroundColor: Colors.transparent,
-              hoverColor: LKColors.primary.withValues(alpha: 0.2),
-              disabledForegroundColor: LKColors.textHint,
-              padding: UIUtils.paddingSM,
-              shape: const CircleBorder(),
+          child: GestureDetector(
+            onLongPress: onLongPress != null
+                ? () {
+                    unawaited(HapticFeedback.mediumImpact());
+                    onLongPress();
+                  }
+                : null,
+            child: IconButton(
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              onPressed: onPressed == null
+                  ? null
+                  : () {
+                      unawaited(HapticFeedback.lightImpact());
+                      onPressed();
+                    },
+              icon: iconChild,
+              tooltip: tooltip,
+              style: IconButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                tapTargetSize: MaterialTapTargetSize.padded,
+                foregroundColor: LKColors.textPrimary,
+                backgroundColor: Colors.transparent,
+                hoverColor: LKColors.primary.withValues(alpha: 0.2),
+                disabledForegroundColor: LKColors.textHint,
+                padding: UIUtils.paddingSM,
+                shape: const CircleBorder(),
+              ),
             ),
           ),
         ),
@@ -487,7 +509,8 @@ class _ControlsWidgetState extends State<ControlsWidget> {
               _buildControlButton(
                 icon: Icons.mic_rounded,
                 onPressed: _vm.disableAudio,
-                tooltip: 'Désactiver le microphone',
+                onLongPress: _openAudioSheet,
+                tooltip: 'Désactiver le microphone (appui long : périphériques audio)',
                 iconColor: LKColors.textPrimary,
               )
             else
@@ -557,79 +580,21 @@ class _ControlsWidgetState extends State<ControlsWidget> {
               iconColor: LKColors.danger,
             ),
 
-          // ── Audio output (desktop) ──
-          if (!lkPlatformIsMobile())
-            _buildCircularBlurContainer(
-              child: PopupMenuButton<MediaDevice>(
-                icon: UIUtils.textPrimaryIcon(
-                  Icons.volume_up_rounded,
-                  size: 24,
-                ),
-                tooltip: 'Sélectionner la sortie audio',
-                itemBuilder: (BuildContext context) {
-                  return [
-                    PopupMenuItem<MediaDevice>(
-                      value: null,
-                      child: ListTile(
-                        leading: Icon(
-                          Icons.speaker_rounded,
-                          color: LKColors.textSecondary,
-                        ),
-                        title: Text(
-                          'Sélectionner la sortie audio',
-                          style: UIUtils.labelMedium(context),
-                        ),
-                        contentPadding: UIUtils.paddingHorizontalSM,
-                      ),
-                    ),
-                    if (_vm.audioOutputs != null)
-                      ..._vm.audioOutputs!.map((device) {
-                        return PopupMenuItem<MediaDevice>(
-                          value: device,
-                          child: ListTile(
-                            leading:
-                                device.deviceId ==
-                                    widget.room.selectedAudioOutputDeviceId
-                                ? Icon(
-                                    Icons.check_circle_rounded,
-                                    color: LKColors.success,
-                                  )
-                                : Icon(
-                                    Icons.radio_button_unchecked_rounded,
-                                    color: LKColors.textHint,
-                                  ),
-                            title: Text(
-                              device.label,
-                              style: UIUtils.labelMedium(context),
-                            ),
-                            contentPadding: UIUtils.paddingHorizontalSM,
-                          ),
-                          onTap: () => _vm.selectAudioOutput(device),
-                        );
-                      }),
-                  ];
-                },
-                shape: RoundedRectangleBorder(
-                  borderRadius: UIUtils.borderRadiusAllMD,
-                ),
-                color: LKColors.lkDarkBlue,
-                surfaceTintColor: Colors.transparent,
-                elevation: 4,
-                shadowColor: Colors.black.withValues(alpha: 0.3),
-              ),
-            ),
-
-              // ── Speakerphone ──
-              if (!kIsWeb && lkPlatformIsMobile())
+              // ── Audio output / Périphériques audio (Bluetooth, Haut-parleur...) ──
+              if (!kIsWeb)
                 _buildControlButton(
                   icon: _vm.speakerphoneOn
-                      ? Icons.volume_up
-                      : Icons.headphones_rounded,
-                  onPressed: _vm.toggleSpeakerphone,
+                      ? Icons.volume_up_rounded
+                      : (_vm.hasBluetoothOutput
+                          ? Icons.bluetooth_audio_rounded
+                          : Icons.headphones_rounded),
+                  onPressed: _openAudioSheet,
                   tooltip: _vm.speakerphoneOn
-                      ? 'Passer en haut-parleur'
-                      : 'Passer en écouteur',
-                  iconColor: LKColors.textPrimary,
+                      ? 'Sortie : Haut-parleur (toucher pour changer)'
+                      : 'Sortie : Écouteurs / Bluetooth (toucher pour changer)',
+                  iconColor: _vm.speakerphoneOn
+                      ? LKColors.textPrimary
+                      : LKColors.secondary,
                 ),
 
               // ── Camera ──

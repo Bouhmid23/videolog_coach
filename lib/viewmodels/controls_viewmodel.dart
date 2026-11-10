@@ -42,8 +42,38 @@ class ControlsViewModel extends ChangeNotifier {
   int? get bleBattery => _bleBattery;
   List<MediaDevice>? get audioInputs => _audioInputs;
   List<MediaDevice>? get audioOutputs => _audioOutputs;
+  Room? get room => _room;
   bool get isMuted => _participant?.isMuted ?? true;
   bool get isCameraEnabled => _participant?.isCameraEnabled() ?? false;
+
+  bool get hasBluetoothOutput {
+    final list = _audioOutputs;
+    if (list == null || list.isEmpty) return false;
+    return list.any((d) => _isBluetoothDevice(d.label));
+  }
+
+  bool get hasBluetoothInput {
+    final list = _audioInputs;
+    if (list == null || list.isEmpty) return false;
+    return list.any((d) => _isBluetoothDevice(d.label));
+  }
+
+  static bool _isBluetoothDevice(String label) {
+    final lower = label.toLowerCase();
+    return lower.contains('bluetooth') ||
+        lower.contains('headset') ||
+        lower.contains('casque') ||
+        lower.contains('écouteur') ||
+        lower.contains('ecouteur') ||
+        lower.contains('airpod') ||
+        lower.contains('buds') ||
+        lower.contains('freebuds') ||
+        lower.contains('wh-') ||
+        lower.contains('wf-') ||
+        lower.contains('bose') ||
+        lower.contains('jabra') ||
+        lower.contains('shokz');
+  }
 
   bool _lastMuted = true;
   bool _lastCameraEnabled = false;
@@ -192,6 +222,12 @@ class ControlsViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setSpeakerphone(bool enabled) async {
+    _speakerphoneOn = enabled;
+    await AudioManager.instance.setSpeakerOutputPreferred(enabled);
+    notifyListeners();
+  }
+
   Future<void> selectAudioInput(MediaDevice device) async {
     final room = _room;
     if (room == null) return;
@@ -202,8 +238,17 @@ class ControlsViewModel extends ChangeNotifier {
   Future<void> selectAudioOutput(MediaDevice device) async {
     final room = _room;
     if (room == null) return;
+    final isSpeaker = device.label.toLowerCase().contains('speaker') ||
+        device.label.toLowerCase().contains('haut-parleur');
+    _speakerphoneOn = isSpeaker;
+    await AudioManager.instance.setSpeakerOutputPreferred(isSpeaker);
     await room.setAudioOutputDevice(device);
     notifyListeners();
+  }
+
+  Future<void> refreshAudioDevices() async {
+    final devices = await Hardware.instance.enumerateDevices();
+    _loadDevices(devices);
   }
 
   // ── BLE actions ──
