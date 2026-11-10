@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Rational
+import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -32,6 +33,8 @@ class MainActivity : FlutterActivity() {
         const val MIC_METER_STREAM_CHANNEL = "videolog/mic_meter_stream"
         const val THERMAL_CHANNEL = "videolog/thermal"
         const val THERMAL_STREAM_CHANNEL = "videolog/thermal_stream"
+        const val REMOTE_SHUTTER_CHANNEL = "videolog/remote_shutter_control"
+        const val REMOTE_SHUTTER_STREAM_CHANNEL = "videolog/remote_shutter_stream"
         val DEFAULT_RATIO = Rational(9, 16)
     }
 
@@ -47,18 +50,21 @@ class MainActivity : FlutterActivity() {
     private var micEventSink: EventChannel.EventSink? = null
     private var thermalEventSink: EventChannel.EventSink? = null
     private var thermalStatusListener: Any? = null
+    private var shutterEventSink: EventChannel.EventSink? = null
+    @Volatile
+    private var interceptShutterKeys = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Petit bip à l'arrivée d'un message du coach pour les lunettes.
+        // Petit bip à l'arrivée d'un message du coach pour les lunettes ou confirmation de déclenchement.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BEEP_CHANNEL)
             .setMethodCallHandler { call, result ->
-                if (call.method == "beep") {
-                    result.success(playBeep())
-                } else {
-                    result.notImplemented()
+                when (call.method) {
+                    "beep" -> result.success(playBeep())
+                    "doubleBeep" -> result.success(playDoubleBeep())
+                    else -> result.notImplemented()
                 }
             }
 
@@ -140,9 +146,37 @@ class MainActivity : FlutterActivity() {
                     stopThermalMonitoring()
                 }
             })
+
+        // Contrôle et écoute du déclencheur distant (ex. stick Bluetooth K28 / selfie)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, REMOTE_SHUTTER_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setIntercept" -> {
+                        interceptShutterKeys = call.argument<Boolean>("enabled") ?: false
+                        result.success(interceptShutterKeys)
+                    }
+                    "isIntercepting" -> {
+                        result.success(interceptShutterKeys)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, REMOTE_SHUTTER_STREAM_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    shutterEventSink = events
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    shutterEventSink = null
+                }
+            })
     }
 
     override fun onDestroy() {
+        interceptShutterKeys = false
+        shutterEventSink = null
         micEventSink = null
         stopMicMeter()
         stopThermalMonitoring()
@@ -353,6 +387,46 @@ class MainActivity : FlutterActivity() {
         } catch (e: RuntimeException) {
             false
         }
+    }
+
+    // Double bip pour marquer l'arrêt d'un enregistrement.
+    private fun playDoubleBeep(): Boolean {
+        return try {
+            val tone1 = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70)
+            tone1.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
+            mainHandler.postDelayed({
+                try {
+                    val tone2 = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70)
+                    tone2.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
+                    mainHandler.postDelayed({ tone2.release() }, 400)
+                } catch (_: Throwable) {}
+                tone1.release()
+            }, 180)
+            true
+        } catch (e: RuntimeException) {
+            false
+        }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
+        if (event == null) return super.dispatchKeyEvent(event)
+        if (interceptShutterKeys) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP,
+                KeyEvent.KEYCODE_VOLUME_DOWN,
+                KeyEvent.KEYCODE_CAMERA,
+                KeyEvent.KEYCODE_HEADSETHOOK,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        mainHandler.post {
+                            shutterEventSink?.success("TRIGGER")
+                        }
+                    }
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     // Android impose un ratio entre 1:2.39 et 2.39:1.

@@ -6,8 +6,10 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../core/athletic_haptics.dart';
+import '../../core/beep_service.dart';
 import '../../core/pip_service.dart';
 import '../../core/recording_controller.dart';
+import '../../core/remote_shutter_service.dart';
 import '../../data/remote_telemetry.dart';
 import '../../data/user_role.dart';
 import '../../theme.dart';
@@ -15,6 +17,7 @@ import '../../utils.dart';
 import '../utils/ui_utils.dart';
 import '../widgets/controls.dart';
 import '../widgets/participant.dart';
+import '../widgets/recording_controls.dart';
 import '../widgets/sweat_lock_overlay.dart';
 import '../../viewmodels/room_viewmodel.dart';
 
@@ -43,6 +46,7 @@ class RoomPage extends StatefulWidget {
 class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   late final RoomViewModel _vm;
   RecordingController? _recordingController;
+  StreamSubscription<void>? _shutterSubscription;
   final ValueNotifier<bool> _showControls = ValueNotifier<bool>(true);
   final ValueNotifier<bool> _isScreenLocked = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _isOutdoorSunMode = ValueNotifier<bool>(false);
@@ -177,6 +181,14 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
         canControl: widget.canControlRecording,
       );
       unawaited(_recordingController!.load());
+
+      if (widget.canControlRecording) {
+        unawaited(RemoteShutterService.instance.enable());
+        _shutterSubscription =
+            RemoteShutterService.instance.onShutterPressed.listen((_) {
+          _handleRemoteShutterTrigger();
+        });
+      }
     }
 
     PipService.initialize();
@@ -221,6 +233,8 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _controlsHideTimer?.cancel();
     _gestureFeedbackTimer?.cancel();
+    _shutterSubscription?.cancel();
+    unawaited(RemoteShutterService.instance.disable());
     unawaited(PipService.disableAutoEnter());
     _recordingController?.dispose();
     _vm.dispose();
@@ -230,6 +244,52 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     _showLandscapeSidebar.dispose();
     onWindowShouldClose = null;
     super.dispose();
+  }
+
+  void _handleRemoteShutterTrigger() {
+    final controller = _recordingController;
+    if (controller == null || !mounted || !widget.canControlRecording) return;
+
+    if (controller.loading || controller.isPending) {
+      debugPrint('[RemoteShutter] Clic ignoré car opération en cours (loading/pending)');
+      return;
+    }
+
+    if (controller.isRecording) {
+      if (controller.canStop) {
+        unawaited(BeepService.doubleBeep());
+        _showGestureFeedback('REC Arrêt (K28)', Icons.stop_circle_rounded);
+        unawaited(RecordingControls.stopWithFeedback(context, controller));
+      } else {
+        final reason = controller.stopBlockReason;
+        if (reason != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(reason),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } else {
+      if (controller.canStart) {
+        unawaited(BeepService.beep());
+        _showGestureFeedback('REC Démarrage (K28)', Icons.fiber_manual_record_rounded);
+        unawaited(RecordingControls.startWithFeedback(context, controller, controller.layout));
+      } else {
+        final reason = controller.startBlockReason;
+        if (reason != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(reason),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    }
   }
 
   @override

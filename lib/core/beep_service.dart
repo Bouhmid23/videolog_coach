@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 class BeepService {
   static const MethodChannel _channel = MethodChannel('videolog/beep');
 
+  /// Bip simple (début d'enregistrement, message coach).
   static Future<void> beep() async {
     try {
       await _channel.invokeMethod<bool>('beep');
@@ -20,6 +21,25 @@ class BeepService {
       }
     } catch (_) {
       // Un bip manqué ne doit jamais gêner l'affichage.
+    }
+  }
+
+  /// Double bip (arrêt d'enregistrement).
+  static Future<void> doubleBeep() async {
+    try {
+      await _channel.invokeMethod<bool>('doubleBeep');
+    } on MissingPluginException {
+      try {
+        await SystemSound.play(SystemSoundType.click);
+        await HapticFeedback.mediumImpact();
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        await SystemSound.play(SystemSoundType.click);
+        await HapticFeedback.mediumImpact();
+      } catch (_) {
+        // Pas de son disponible.
+      }
+    } catch (_) {
+      // Un bip manqué ne doit jamais bloquer l'action.
     }
   }
 }
