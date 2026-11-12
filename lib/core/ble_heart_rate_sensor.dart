@@ -33,6 +33,7 @@ class SensorStatus {
 /// Service dédié et testable unitairement pour un capteur cardio BLE
 /// (Bluetooth SIG Heart Rate Service `0x180D` / Measurement `0x2A37`).
 class BleHeartRateSensor {
+  // ignore: prefer_initializing_formals
   BleHeartRateSensor({FlutterReactiveBle? ble}) : _ble = ble;
 
   static final Uuid serviceUuid = Uuid.parse(

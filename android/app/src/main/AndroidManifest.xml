@@ -16,6 +16,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
@@ -23,7 +24,7 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
     <application
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="false"
         android:label="Videolog OnAir"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
@@ -57,8 +58,8 @@
         <service
              android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
              android:exported="false"
-             android:foregroundServiceType="camera|microphone|connectedDevice"
-             android:stopWithTask="false"/>
+             android:foregroundServiceType="camera|microphone|connectedDevice|location"
+             android:stopWithTask="true"/>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

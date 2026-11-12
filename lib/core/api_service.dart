@@ -15,12 +15,39 @@ import 'auth_service.dart';
 /// Toutes les requêtes portent l'ID token Firebase courant en Bearer. Aucun
 /// secret LiveKit, MinIO ou Firebase Admin n'est présent côté application.
 class ApiService {
-  ApiService._();
+  ApiService({http.Client? httpClient, AuthService? authService})
+    : _httpClient = httpClient ?? http.Client(),
+      _authService = authService; // ignore: prefer_initializing_formals
+
+  /// Instance partagée par défaut (réutilise les connexions HTTP keep-alive).
+  static ApiService instance = ApiService();
 
   static const String baseUrl = 'https://api.videolog.app';
   static const Duration _timeout = Duration(seconds: 15);
 
-  static Future<List<MobileRoom>> getRooms({int limit = 50}) async {
+  final http.Client _httpClient;
+  final AuthService? _authService;
+
+  AuthService get _auth => _authService ?? AuthService.instance;
+
+  static Future<List<MobileRoom>> getRooms({int limit = 50}) =>
+      instance.fetchRooms(limit: limit);
+
+  static Future<LiveKitToken> getLiveKitToken(String roomName) =>
+      instance.fetchLiveKitToken(roomName);
+
+  static Future<RecordingState> startRecording(
+    String roomName, {
+    String layout = 'grid',
+  }) => instance.requestStartRecording(roomName, layout: layout);
+
+  static Future<RecordingState> stopRecording(String roomName) =>
+      instance.requestStopRecording(roomName);
+
+  static Future<RecordingState> getRecording(String roomName) =>
+      instance.fetchRecording(roomName);
+
+  Future<List<MobileRoom>> fetchRooms({int limit = 50}) async {
     final body = await _send(
       'GET',
       '/mobile/rooms',
@@ -50,7 +77,7 @@ class ApiService {
     return parsed;
   }
 
-  static Future<LiveKitToken> getLiveKitToken(String roomName) async {
+  Future<LiveKitToken> fetchLiveKitToken(String roomName) async {
     final body = await _send('POST', '/token', body: {'room': roomName});
     final LiveKitToken token;
     try {
@@ -68,7 +95,7 @@ class ApiService {
     return token;
   }
 
-  static Future<RecordingState> startRecording(
+  Future<RecordingState> requestStartRecording(
     String roomName, {
     String layout = 'grid',
   }) async {
@@ -80,7 +107,7 @@ class ApiService {
     return _recordingFrom(body, roomName);
   }
 
-  static Future<RecordingState> stopRecording(String roomName) async {
+  Future<RecordingState> requestStopRecording(String roomName) async {
     final body = await _send(
       'POST',
       '/mobile/rooms/${Uri.encodeComponent(roomName)}/recording/stop',
@@ -88,7 +115,7 @@ class ApiService {
     return _recordingFrom(body, roomName);
   }
 
-  static Future<RecordingState> getRecording(String roomName) async {
+  Future<RecordingState> fetchRecording(String roomName) async {
     final body = await _send(
       'GET',
       '/mobile/rooms/${Uri.encodeComponent(roomName)}/recording',
@@ -107,13 +134,16 @@ class ApiService {
     return RecordingState.fromJson(normalized);
   }
 
-  static Future<Map<String, dynamic>> _send(
+  Future<Map<String, dynamic>> _send(
     String method,
     String path, {
     Map<String, String>? query,
     Map<String, dynamic>? body,
+    bool retriedAfterUnauthorized = false,
   }) async {
-    final idToken = await AuthService.instance.requireIdToken();
+    final idToken = await _auth.requireIdToken(
+      forceRefresh: retriedAfterUnauthorized,
+    );
     final base = Uri.parse('$baseUrl$path');
     final uri = query == null ? base : base.replace(queryParameters: query);
     final headers = <String, String>{
@@ -130,9 +160,9 @@ class ApiService {
     late final http.Response response;
     try {
       if (method == 'GET') {
-        response = await http.get(uri, headers: headers).timeout(_timeout);
+        response = await _httpClient.get(uri, headers: headers).timeout(_timeout);
       } else {
-        response = await http
+        response = await _httpClient
             .post(
               uri,
               headers: headers,
@@ -163,6 +193,19 @@ class ApiService {
             : raw;
         debugPrint('[API] $method $path body: $preview');
       }
+    }
+
+    if (response.statusCode == 401 && !retriedAfterUnauthorized) {
+      if (kDebugMode) {
+        debugPrint('[API] 401 sur $method $path -> rafraîchissement du jeton et nouvel essai');
+      }
+      return _send(
+        method,
+        path,
+        query: query,
+        body: body,
+        retriedAfterUnauthorized: true,
+      );
     }
 
     Object? decoded;

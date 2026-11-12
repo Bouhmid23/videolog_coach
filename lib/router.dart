@@ -20,6 +20,9 @@ final goRouter = GoRouter(
     final atLogin = state.matchedLocation == '/login';
     if (!signedIn) return atLogin ? null : '/login';
     if (atLogin) return '/rooms';
+    if (state.matchedLocation == '/room' && state.extra is! RoomRouteArgs) {
+      return '/rooms';
+    }
     return null;
   },
   routes: [
@@ -43,13 +46,14 @@ final goRouter = GoRouter(
       path: '/room',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (context, state) {
-        final args = state.extra as RoomRouteArgs;
+        final extra = state.extra;
+        if (extra is! RoomRouteArgs) return const RoomsScreen();
         return RoomPage(
-          args.room,
-          args.listener,
-          role: args.role,
-          roomName: args.roomName,
-          canControlRecording: args.canControlRecording,
+          extra.room,
+          extra.listener,
+          role: extra.role,
+          roomName: extra.roomName,
+          canControlRecording: extra.canControlRecording,
           fastConnection: true,
         );
       },

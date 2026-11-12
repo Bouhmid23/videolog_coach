@@ -38,10 +38,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
   final NpuPoseDetector _poseDetector = NpuPoseDetector(
     config: PoseDetectorConfig.realtime().copyWith(
       maxPoses: 1,
-      minConfidence: 0.75,
-      minPoseDetectionConfidence: 0.75,
-      minPosePresenceConfidence: 0.75,
-      minTrackingConfidence: 0.7,
+      minConfidence: 0.85,
+      minPoseDetectionConfidence: 0.85,
+      minPosePresenceConfidence: 0.85,
+      minTrackingConfidence: 0.8,
       enableZEstimation: true,
       preferredAcceleration: AccelerationMode.gpu,
     ),
@@ -57,6 +57,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   bool _running = false;
   bool _paused = false;
+  bool _cameraSwitching = false;
   Room? _room;
 
   bool _hadPose = false;
@@ -153,6 +154,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
       );
     }
     _running = false;
+    _cameraSwitching = false;
     GravityService.instance.stop();
     _hadPose = false;
     _stabilizer.reset();
@@ -184,6 +186,37 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _publisher.resetStats(_publisher.seq);
     unawaited(_poseLoop());
     debugPrint('▶️ Pose detection resumed (foreground)');
+  }
+
+  /// Appelé juste avant un basculement matériel de caméra (front <-> back).
+  /// Détache proprement le sink natif pour éviter toute contention sur les
+  /// buffers de texture OpenGL / Camera2 et réinitialise le lissage.
+  Future<void> beginCameraSwitch() async {
+    if (!_running) return;
+    _cameraSwitching = true;
+    _webRtcSubscription?.cancel();
+    _webRtcSubscription = null;
+    _lastNativeFrameReceivedAt = null;
+    _isNativePipelineActive = false;
+    _lastFailedTrackId = null;
+    _lastNativeAttemptAt = null;
+    _motionDetector.reset();
+    _smoothing.reset();
+    _stabilizer.reset();
+    frameNotifier.value = null;
+    try {
+      await _poseDetector.stopWebRtcDetection();
+    } catch (_) {}
+  }
+
+  /// Appelé une fois la bascule matérielle de caméra terminée.
+  /// Ré-attache immédiatement le pipeline natif zéro-copie sur la piste active.
+  void endCameraSwitch() {
+    _cameraSwitching = false;
+    if (!_running || _paused) return;
+    _lastFailedTrackId = null;
+    _lastNativeAttemptAt = DateTime.now();
+    _tryStartNativePipeline();
   }
 
   void _stopNativePipeline() {
@@ -248,16 +281,16 @@ class PoseDetectionViewModel extends ChangeNotifier {
     Future<CapturedFrame?>? next;
 
     while (_running) {
-      if (_paused) {
+      if (_paused || _cameraSwitching) {
         next = null;
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
         continue;
       }
 
       final now = DateTime.now();
       final hasRecentNativeFrames = _lastNativeFrameReceivedAt != null &&
           now.difference(_lastNativeFrameReceivedAt!) <
-              const Duration(milliseconds: 600);
+              const Duration(milliseconds: 1500);
 
       if (hasRecentNativeFrames) {
         _isNativePipelineActive = true;
@@ -268,12 +301,33 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
       _isNativePipelineActive = false;
 
+      if (_webRtcSubscription != null) {
+        // Si la souscription native est ouverte mais n'a encore rien émis depuis
+        // moins de 1500 ms (phase d'amorçage ou changement de caméra), on patiente
+        // sans lancer captureFrame() en concurrence.
+        final sinceAttempt = _lastNativeAttemptAt != null
+            ? now.difference(_lastNativeAttemptAt!)
+            : const Duration(seconds: 99);
+        if (sinceAttempt < const Duration(milliseconds: 1500)) {
+          next = null;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          continue;
+        }
+        // Au-delà de 1500 ms sans aucune frame native, le sink est décroché :
+        // on le ferme proprement pour permettre un ré-attachement.
+        debugPrint('🔄 [Native Pipeline] Aucun frame depuis >1.5s, réinitialisation du sink');
+        _stopNativePipeline();
+      }
+
       if (_webRtcSubscription == null &&
           (_lastNativeAttemptAt == null ||
               now.difference(_lastNativeAttemptAt!) >
-                  const Duration(seconds: 3))) {
+                  const Duration(seconds: 2))) {
         _lastNativeAttemptAt = now;
         _tryStartNativePipeline();
+        next = null;
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        continue;
       }
 
       final loopWatch = Stopwatch()..start();
@@ -285,15 +339,15 @@ class PoseDetectionViewModel extends ChangeNotifier {
       }
 
       final frame = await (next ?? _capture(track));
-      if (!_running || _paused) break;
+      if (!_running || _paused || _cameraSwitching) break;
 
       if (_lastNativeFrameReceivedAt != null &&
           DateTime.now().difference(_lastNativeFrameReceivedAt!) <
-              const Duration(milliseconds: 600)) {
+              const Duration(milliseconds: 1500)) {
         continue;
       }
 
-      next = (_running && !_paused && !_isNativePipelineActive)
+      next = (_running && !_paused && !_cameraSwitching && !_isNativePipelineActive)
           ? _capture(track)
           : null;
 
@@ -513,7 +567,9 @@ class PoseDetectionViewModel extends ChangeNotifier {
     final capturedAt = DateTime.now();
     final videoTimestampMs = _videoClock.elapsedMilliseconds;
     try {
-      final buffer = await track.mediaStreamTrack.captureFrame();
+      final buffer = await track.mediaStreamTrack
+          .captureFrame()
+          .timeout(const Duration(milliseconds: 800));
       final captureMicros = watch.elapsedMicroseconds;
       return CapturedFrame(
         Uint8List.view(buffer),

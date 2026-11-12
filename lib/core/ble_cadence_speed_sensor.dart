@@ -8,6 +8,7 @@ import 'ble_heart_rate_sensor.dart';
 /// Service dédié et testable unitairement pour un capteur de cadence/vitesse BLE
 /// (Bluetooth SIG Cycling Speed & Cadence Service `0x1816` / Measurement `0x2A5B`).
 class BleCadenceSpeedSensor {
+  // ignore: prefer_initializing_formals
   BleCadenceSpeedSensor({FlutterReactiveBle? ble}) : _ble = ble;
 
   static final Uuid serviceUuid = Uuid.parse(

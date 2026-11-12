@@ -123,7 +123,7 @@ abstract class ParticipantWidget extends StatefulWidget {
     this.poseFrameSize,
     this.avatarOnly = false,
     this.showPosePip = true,
-    this.showPosture = true,
+    this.showPosture = false,
     this.showPostureListenable,
     this.poseAside = false,
     this.showDataHud = true,

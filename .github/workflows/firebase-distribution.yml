@@ -71,6 +71,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Analyze project
+        run: flutter analyze --no-pub
+
+      - name: Run unit tests
+        run: flutter test --no-pub
+
       - name: Decode keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks

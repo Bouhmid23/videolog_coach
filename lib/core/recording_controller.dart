@@ -16,7 +16,10 @@ class RecordingController extends ChangeNotifier {
     required this.roomName,
     required this.canControl,
     this.pollInterval = const Duration(seconds: 4),
-  }) {
+    ApiService? apiService,
+    AuthService? authService,
+  }) : _apiService = apiService, // ignore: prefer_initializing_formals
+       _authService = authService { // ignore: prefer_initializing_formals
     debugPrint(
       '[Recording] contrôleur créé room=$roomName canControl=$canControl '
       'poll=${pollInterval.inSeconds}s',
@@ -26,6 +29,11 @@ class RecordingController extends ChangeNotifier {
   final String roomName;
   final bool canControl;
   final Duration pollInterval;
+  final ApiService? _apiService;
+  final AuthService? _authService;
+
+  ApiService get _api => _apiService ?? ApiService.instance;
+  AuthService get _auth => _authService ?? AuthService.instance;
 
   static const Duration pendingConfirmationTimeout = Duration(seconds: 45);
 
@@ -169,7 +177,7 @@ class RecordingController extends ChangeNotifier {
     );
 
     try {
-      final next = await ApiService.getRecording(roomName);
+      final next = await _api.fetchRecording(roomName);
       state = next;
       lastStatusCheckAt = DateTime.now();
       lastStatusCheckSucceeded = true;
@@ -195,7 +203,7 @@ class RecordingController extends ChangeNotifier {
       );
       debugPrintStack(stackTrace: stack);
       if (exception.isUnauthorized) {
-        await AuthService.instance.signOut();
+        await _auth.signOut();
       }
     } catch (err, stack) {
       error = 'Impossible de récupérer l\'état de l\'enregistrement.';
@@ -228,7 +236,7 @@ class RecordingController extends ChangeNotifier {
     debugPrint('[Recording] start room=$roomName layout=$selectedLayout');
     return _run(
       'start',
-      () => ApiService.startRecording(roomName, layout: selectedLayout),
+      () => _api.requestStartRecording(roomName, layout: selectedLayout),
     );
   }
 
@@ -242,7 +250,7 @@ class RecordingController extends ChangeNotifier {
       return false;
     }
     debugPrint('[Recording] stop room=$roomName');
-    return _run('stop', () => ApiService.stopRecording(roomName));
+    return _run('stop', () => _api.requestStopRecording(roomName));
   }
 
   Future<bool> _run(
@@ -278,7 +286,7 @@ class RecordingController extends ChangeNotifier {
       );
       debugPrintStack(stackTrace: stack);
       if (exception.isUnauthorized) {
-        await AuthService.instance.signOut();
+        await _auth.signOut();
       }
     } catch (err, stack) {
       error = 'Opération d\'enregistrement impossible.';

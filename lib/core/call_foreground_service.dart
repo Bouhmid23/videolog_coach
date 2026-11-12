@@ -121,6 +121,17 @@ class CallForegroundService {
     _onEndCall = callback;
   }
 
+  /// Types de service de premier plan utilisés pendant une session d'appel.
+  static const List<ForegroundServiceTypes> defaultServiceTypes = [
+    ForegroundServiceTypes.camera,
+    ForegroundServiceTypes.microphone,
+    ForegroundServiceTypes.connectedDevice,
+    ForegroundServiceTypes.location,
+  ];
+
+  /// Route initiale ouverte au tap sur la notification du service.
+  static const String defaultNotificationInitialRoute = '/rooms';
+
   static Future<void> start({
     required String roomName,
     required String username,
@@ -155,16 +166,13 @@ class CallForegroundService {
 
     final result = await FlutterForegroundTask.startService(
       serviceId: _serviceId,
-      serviceTypes: const [
-        ForegroundServiceTypes.camera,
-        ForegroundServiceTypes.microphone,
-      ],
+      serviceTypes: defaultServiceTypes,
       notificationTitle: 'Appel en cours',
       notificationText: '$username • $roomName',
       notificationButtons: const [
         NotificationButton(id: _endCallButtonId, text: 'Raccrocher'),
       ],
-      notificationInitialRoute: '/',
+      notificationInitialRoute: defaultNotificationInitialRoute,
       callback: callForegroundTaskCallback,
     );
 

@@ -8,6 +8,7 @@ import 'animated_count.dart';
 /// a 5-step sports intensity bar, and tabular-formatted bpm readings.
 class HeartRateHudGauge extends StatelessWidget {
   final int bpm;
+  final int? maxHr;
   final bool compact;
   final bool transparent;
   final bool showZoneBar;
@@ -16,6 +17,7 @@ class HeartRateHudGauge extends StatelessWidget {
 
   const HeartRateHudGauge({
     required this.bpm,
+    this.maxHr,
     this.compact = false,
     this.transparent = false,
     this.showZoneBar = true,
@@ -26,7 +28,7 @@ class HeartRateHudGauge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final zone = HeartRateZone.fromBpm(bpm);
+    final zone = HeartRateZone.fromBpm(bpm, maxHr: maxHr ?? 190);
     final zoneColor = zone.colorFor(outdoorSunMode: outdoorSunMode);
     final borderRadius = BorderRadius.circular(999);
 

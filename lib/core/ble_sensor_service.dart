@@ -83,9 +83,11 @@ class BleSensorService {
   // ─── Connexions / Déconnexions déléguées aux services dédiés ────────────────
 
   Future<void> connectHrm(String deviceId) => hrm.connect(deviceId);
+
   Future<void> disconnectHrm() => hrm.disconnect();
 
   Future<void> connectCadence(String deviceId) => cadence.connect(deviceId);
+
   Future<void> disconnectCadence() => cadence.disconnect();
 
   // ─── Classification d'un appareil découvert ─────────────────────────────────

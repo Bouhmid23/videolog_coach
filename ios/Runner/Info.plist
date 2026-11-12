@@ -48,29 +48,23 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
-		<string>voip</string>
 		<string>location</string>
-		<string>fetch</string>
-		<string>processing</string>
-	</array>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>com.pravera.flutter_foreground_task.refresh</string>
+		<string>bluetooth-central</string>
 	</array>
 	<key>io.flutter.embedded_views_preview</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Caméra nécessaire pour l'appel vidéo</string>
+	<string>La caméra est utilisée pendant vos sessions de coaching sportif en direct pour diffuser votre vidéo et analyser votre posture en temps réel.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Micro nécessaire pour l'appel audio</string>
+	<string>Le microphone est utilisé pendant vos sessions de coaching sportif en direct pour échanger en audio avec votre coach.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Bluetooth nécessaire pour connecter les devices BLE</string>
+	<string>Le Bluetooth est utilisé pour connecter vos capteurs sportifs (fréquence cardiaque, cadence) et vos lunettes connectées ActiveLook / Engo afin d'afficher vos métriques en temps réel.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Bluetooth nécessaire pour connecter les devices BLE</string>
+	<string>Le Bluetooth est utilisé pour connecter vos capteurs sportifs (fréquence cardiaque, cadence) et vos lunettes connectées ActiveLook / Engo.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Position nécessaire pour la télémétrie GPS en direct</string>
+	<string>Votre position GPS est utilisée pendant une session d'entraînement pour calculer votre vitesse, la distance parcourue et afficher votre position à votre coach.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Position nécessaire pour la télémétrie GPS en arrière-plan</string>
+	<string>Votre position GPS est utilisée pendant une session d'entraînement active, y compris lorsque l'écran est verrouillé ou que l'application est en arrière-plan, afin de maintenir le suivi de vitesse et de distance.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

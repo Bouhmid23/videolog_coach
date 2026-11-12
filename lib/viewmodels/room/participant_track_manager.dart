@@ -23,7 +23,7 @@ class ParticipantTrackManager {
   final Map<String, RemotePosture> _remotePostures = {};
   final Map<String, RemoteTelemetry> _remoteTelemetry = {};
   final Map<String, ValueNotifier<RemoteTelemetry?>> _telemetryNotifiers = {};
-  final ValueNotifier<bool> _showPostureNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> _showPostureNotifier = ValueNotifier<bool>(false);
 
   // Visibilité posture par participant
   final Set<String> _hiddenPostures = {};

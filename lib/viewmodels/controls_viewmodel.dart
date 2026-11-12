@@ -77,6 +77,9 @@ class ControlsViewModel extends ChangeNotifier {
 
   bool _lastMuted = true;
   bool _lastCameraEnabled = false;
+  bool _isSwitchingCamera = false;
+  Future<void> Function()? _onBeforeCameraSwitch;
+  VoidCallback? _onAfterCameraSwitch;
 
   // ── Lifecycle ──
   void init({
@@ -86,11 +89,15 @@ class ControlsViewModel extends ChangeNotifier {
     required BleSensorService sensorService,
     VoidCallback? onBleConnected,
     VoidCallback? onBleDisconnected,
+    Future<void> Function()? onBeforeCameraSwitch,
+    VoidCallback? onAfterCameraSwitch,
   }) {
     _participant = participant;
     _room = room;
     _bleService = bleService;
     _sensorService = sensorService;
+    _onBeforeCameraSwitch = onBeforeCameraSwitch;
+    _onAfterCameraSwitch = onAfterCameraSwitch;
     _speakerphoneOn = AudioManager.instance.isSpeakerOutputPreferred;
     _lastMuted = participant.isMuted;
     _lastCameraEnabled = participant.isCameraEnabled();
@@ -201,9 +208,12 @@ class ControlsViewModel extends ChangeNotifier {
   void disableVideo() => _participant?.setCameraEnabled(false);
 
   Future<void> switchCamera() async {
+    if (_isSwitchingCamera) return;
     final track = _participant?.videoTrackPublications.firstOrNull?.track;
     if (track == null) return;
+    _isSwitchingCamera = true;
     try {
+      await _onBeforeCameraSwitch?.call();
       final newPosition = _cameraPosition.switched();
       await track.setCameraPosition(newPosition);
       _cameraPosition = newPosition;
@@ -211,6 +221,9 @@ class ControlsViewModel extends ChangeNotifier {
       notifyListeners();
     } catch (error) {
       debugPrint('Could not restart track: $error');
+    } finally {
+      _onAfterCameraSwitch?.call();
+      _isSwitchingCamera = false;
     }
   }
 

@@ -58,7 +58,7 @@ class AuthService extends ChangeNotifier {
   AuthService.forTesting({
     required SecureTokenStore secureStore,
     Future<String?> Function({required bool forceRefresh})? tokenProvider,
-  }) : _secureStore = secureStore,
+  }) : _secureStore = secureStore, // ignore: prefer_initializing_formals
        _tokenProviderOverride = tokenProvider;
 
   static final AuthService instance = AuthService._();

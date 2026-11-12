@@ -32,11 +32,21 @@ class PosePublisher {
     _seqAtLastStats = currentSeq;
   }
 
+  /// Définit les destinataires du flux posture :
+  /// - `null` : diffusion à tous les participants de la room.
+  /// - liste vide : aucun destinataire identifié, l'émission réseau est suspendue.
+  /// - liste non vide : émission ciblée uniquement vers ces identités.
   void setDestinationIdentities(List<String>? identities) {
-    _destinationIdentities = (identities == null || identities.isEmpty)
-        ? null
-        : List<String>.unmodifiable(identities);
+    _destinationIdentities =
+        identities == null ? null : List<String>.unmodifiable(identities);
   }
+
+  /// Indique si au moins une cible (ou le broadcast) autorise l'envoi réseau.
+  bool get canPublish =>
+      _destinationIdentities == null || _destinationIdentities!.isNotEmpty;
+
+  /// Identités cibles courantes (`null` = broadcast).
+  List<String>? get destinationIdentities => _destinationIdentities;
 
   void publish({
     required Room? room,
@@ -49,7 +59,7 @@ class PosePublisher {
     int? detectMicros,
     int? inferMicros,
   }) {
-    if (room?.localParticipant == null) return;
+    if (room?.localParticipant == null || !canPublish) return;
 
     final seq = ++_seq;
     final bytes = PostureCodec.encode(
@@ -81,7 +91,7 @@ class PosePublisher {
     required DateTime capturedAt,
     required String deviceModel,
   }) {
-    if (room?.localParticipant == null) return;
+    if (room?.localParticipant == null || !canPublish) return;
     _send(
       room: room,
       bytes: PostureCodec.encodeLost(

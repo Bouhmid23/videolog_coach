@@ -186,9 +186,9 @@ class EngoGlassesDisplayService {
     FlutterReactiveBle? ble,
     GattChunkWriter? gattWriter,
     Duration flowControlTimeout = const Duration(seconds: 2),
-  }) : _ble = ble,
-       _gattWriter = gattWriter,
-       _flowControlTimeout = flowControlTimeout;
+  }) : _ble = ble, // ignore: prefer_initializing_formals
+       _gattWriter = gattWriter, // ignore: prefer_initializing_formals
+       _flowControlTimeout = flowControlTimeout; // ignore: prefer_initializing_formals
 
   FlutterReactiveBle? _ble;
   FlutterReactiveBle get _reactiveBle => _ble ??= FlutterReactiveBle();

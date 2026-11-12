@@ -39,11 +39,11 @@ import 'room/room_telemetry_coordinator.dart';
 ///   et les repères tactiques [MarkerController].
 class RoomViewModel extends ChangeNotifier {
   // ── Services & Sub-viewmodels ──
-  final BleTelemetryService bleService = BleTelemetryService();
-  final BleSensorService sensorService = BleSensorService();
-  final PoseDetectionViewModel poseViewModel = PoseDetectionViewModel();
-  final ControlsViewModel controlsViewModel = ControlsViewModel();
-  final MarkerController markers = MarkerController();
+  final BleTelemetryService bleService;
+  final BleSensorService sensorService;
+  final PoseDetectionViewModel poseViewModel;
+  final ControlsViewModel controlsViewModel;
+  final MarkerController markers;
 
   late final RoomTelemetryCoordinator _telemetryCoordinator;
   late final ParticipantTrackManager _trackManager;
@@ -57,11 +57,21 @@ class RoomViewModel extends ChangeNotifier {
   EventsListener<RoomEvent>? _listener;
   UserRole _role = UserRole.trainee;
 
-  RoomViewModel() {
+  RoomViewModel({
+    BleTelemetryService? bleService,
+    BleSensorService? sensorService,
+    PoseDetectionViewModel? poseViewModel,
+    ControlsViewModel? controlsViewModel,
+    MarkerController? markers,
+  }) : bleService = bleService ?? BleTelemetryService(),
+       sensorService = sensorService ?? BleSensorService(),
+       poseViewModel = poseViewModel ?? PoseDetectionViewModel(),
+       controlsViewModel = controlsViewModel ?? ControlsViewModel(),
+       markers = markers ?? MarkerController() {
     _trackManager = ParticipantTrackManager(onStateChanged: _notifySafe);
     _telemetryCoordinator = RoomTelemetryCoordinator(
-      bleService: bleService,
-      sensorService: sensorService,
+      bleService: this.bleService,
+      sensorService: this.sensorService,
       onTelemetryUpdated: _notifySafe,
       onLocalTelemetryChanged: (tel) {
         final localId = _room?.localParticipant?.identity;
@@ -109,13 +119,28 @@ class RoomViewModel extends ChangeNotifier {
         state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
     if (isBackground && !PipService.isInPip.value) {
       poseViewModel.pause();
-    } else if (state == AppLifecycleState.resumed) {
+    } else if (state == AppLifecycleState.resumed && showPosture) {
       poseViewModel.resume();
     }
   }
 
   void togglePosePip() => _trackManager.togglePosePip();
-  void togglePosture() => _trackManager.togglePosture();
+
+  /// Active ou désactive simultanément l'affichage du squelette et la détection de posture.
+  void togglePosture() {
+    _trackManager.togglePosture();
+    if (showPosture) {
+      final currentRoom = _room;
+      if (_role.isTrainee && currentRoom != null) {
+        _updatePoseDestinations();
+        poseViewModel.start(currentRoom);
+      }
+    } else {
+      poseViewModel.stop();
+    }
+    _notifySafe();
+  }
+
   void selectParticipant(String? identity) => _trackManager.selectParticipant(identity);
   void closeSideSheet() => _trackManager.closeSideSheet();
   void setPrimaryTrack(ParticipantTrack track) => _trackManager.setPrimaryTrack(track);
@@ -171,6 +196,8 @@ class RoomViewModel extends ChangeNotifier {
       sensorService: sensorService,
       onBleConnected: onBleConnected,
       onBleDisconnected: onBleDisconnected,
+      onBeforeCameraSwitch: poseViewModel.beginCameraSwitch,
+      onAfterCameraSwitch: poseViewModel.endCameraSwitch,
     );
 
     _setUpListeners();
@@ -182,8 +209,10 @@ class RoomViewModel extends ChangeNotifier {
     _telemetryCoordinator.start(room, _role);
 
     if (_role.isTrainee) {
-      poseViewModel.start(room);
       _updatePoseDestinations();
+      if (showPosture) {
+        poseViewModel.start(room);
+      }
     }
     _notifySafe();
   }

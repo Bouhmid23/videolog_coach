@@ -48,7 +48,7 @@ class ControlsWidget extends StatefulWidget {
     required this.controlsViewModel,
     required this.onBleConnected,
     required this.onBleDisconnected,
-    this.showPosture = true,
+    this.showPosture = false,
     this.onTogglePosture,
     this.postureSmoothingAlpha = 0.5,
     //this.onSetPostureSmoothingAlpha,
@@ -663,8 +663,8 @@ class _ControlsWidgetState extends State<ControlsWidget> {
                 icon: Icons.accessibility_new_rounded,
                 onPressed: widget.onTogglePosture,
                 tooltip: widget.showPosture
-                    ? 'Masquer la posture'
-                    : 'Afficher la posture',
+                    ? 'Désactiver la détection de posture'
+                    : 'Activer la détection de posture',
                 iconColor: widget.showPosture
                     ? LKColors.primary
                     : LKColors.textSecondary,

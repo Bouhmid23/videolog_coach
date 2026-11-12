@@ -154,13 +154,15 @@ class MediaPipeNpuDetector(private val context: Context) : PoseDetectorInterface
         // Convert to MediaPipe image
         val mpImage = BitmapImageBuilder(bitmap).build()
 
-        // Run detection
-        val timestampMs = synchronized(this) {
-            maxOf(requestedTimestampMs, lastVideoTimestampMs + 1).also {
-                lastVideoTimestampMs = it
-            }
+        // Run detection inside a single monitor lock: MediaPipe PoseLandmarker in VIDEO mode
+        // (especially with GPU delegate) requires strictly monotonic timestamps and is not thread-safe.
+        val result = synchronized(this) {
+            val activeLandmarker = poseLandmarker
+                ?: throw IllegalStateException("PoseLandmarker not initialized")
+            val timestampMs = maxOf(requestedTimestampMs, lastVideoTimestampMs + 1)
+            lastVideoTimestampMs = timestampMs
+            activeLandmarker.detectForVideo(mpImage, timestampMs)
         }
-        val result = landmarker.detectForVideo(mpImage, timestampMs)
 
         val processingTime = (System.currentTimeMillis() - startTime).toInt()
 

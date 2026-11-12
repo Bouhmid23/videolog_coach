@@ -411,19 +411,28 @@ class MainActivity : FlutterActivity() {
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
         if (event == null) return super.dispatchKeyEvent(event)
         if (interceptShutterKeys) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_VOLUME_UP,
-                KeyEvent.KEYCODE_VOLUME_DOWN,
+            val isDedicatedShutterKey = when (event.keyCode) {
                 KeyEvent.KEYCODE_CAMERA,
                 KeyEvent.KEYCODE_HEADSETHOOK,
-                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                        mainHandler.post {
-                            shutterEventSink?.success("TRIGGER")
-                        }
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_VOLUME_MUTE -> true
+                else -> false
+            }
+            // Les télécommandes Bluetooth K28 / selfie envoient souvent VOLUME_UP ou VOLUME_DOWN
+            // depuis un InputDevice externe (isExternal == true). On n'intercepte les touches
+            // de volume que lorsqu'elles proviennent d'un périphérique externe afin que les
+            // boutons physiques du téléphone continuent de régler le volume de l'appel.
+            val isExternalVolumeShutter = (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+                event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) &&
+                (event.device?.isExternal == true)
+
+            if (isDedicatedShutterKey || isExternalVolumeShutter) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    mainHandler.post {
+                        shutterEventSink?.success("TRIGGER")
                     }
-                    return true
                 }
+                return true
             }
         }
         return super.dispatchKeyEvent(event)

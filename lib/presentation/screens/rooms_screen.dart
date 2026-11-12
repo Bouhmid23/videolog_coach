@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/api_service.dart';
 import '../../core/auth_service.dart';
+import '../../data/athlete_profile.dart';
 import '../../data/mobile_room.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
+import '../widgets/athlete_profile_sheet.dart';
 import '../widgets/shimmer_skeleton.dart';
 
 class RoomsScreen extends StatefulWidget {
@@ -17,6 +19,7 @@ class RoomsScreen extends StatefulWidget {
 class _RoomsScreenState extends State<RoomsScreen> {
 
   List<MobileRoom> _rooms = const [];
+  AthleteProfile _athleteProfile = const AthleteProfile();
   bool _loading = true;
   String? _error;
 
@@ -26,7 +29,24 @@ class _RoomsScreenState extends State<RoomsScreen> {
   @override
   void initState() {
     super.initState();
+    _loadAthleteProfile();
     _load();
+  }
+
+  Future<void> _loadAthleteProfile() async {
+    final profile = await AthleteProfile.load();
+    if (!mounted) return;
+    setState(() => _athleteProfile = profile);
+  }
+
+  Future<void> _editAthleteProfile() async {
+    final updated = await showAthleteProfileSheet(
+      context,
+      initialProfile: _athleteProfile,
+    );
+    if (updated != null && mounted) {
+      setState(() => _athleteProfile = updated);
+    }
   }
 
   Future<void> _load({bool showSpinner = true}) async {
@@ -96,6 +116,12 @@ class _RoomsScreenState extends State<RoomsScreen> {
         elevation: 0,
         shadowColor: Colors.transparent,
         actions: [
+          IconButton(
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            onPressed: _editAthleteProfile,
+            icon: UIUtils.textPrimaryIcon(Icons.monitor_heart_outlined, size: 24),
+            tooltip: 'Profil athlète',
+          ),
           IconButton(
             constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             onPressed: _loading ? null : () => _load(showSpinner: false),
@@ -289,6 +315,50 @@ class _RoomsScreenState extends State<RoomsScreen> {
                       style: UIUtils.bodySmall(
                         context,
                       ).copyWith(color: LKColors.textHint),
+                    ),
+                    SizedBox(height: UIUtils.sm),
+                    InkWell(
+                      onTap: _editAthleteProfile,
+                      borderRadius: UIUtils.borderRadiusAllFull,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: LKColors.primary.withValues(alpha: 0.14),
+                          borderRadius: UIUtils.borderRadiusAllFull,
+                          border: Border.all(
+                            color: LKColors.primary.withValues(alpha: 0.35),
+                            width: 0.6,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.monitor_heart_rounded,
+                              size: 14,
+                              color: LKColors.primary,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${_athleteProfile.weightKg.toStringAsFixed(0)} kg • ${_athleteProfile.ageYears} ans • VO2max ${_athleteProfile.maxHeartRate} bpm',
+                              style: UIUtils.bodySmall(context).copyWith(
+                                color: LKColors.textPrimary,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(
+                              Icons.edit_rounded,
+                              size: 12,
+                              color: LKColors.textSecondary,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
