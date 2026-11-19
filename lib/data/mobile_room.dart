@@ -8,11 +8,15 @@ class MobileRoom {
     required this.recording,
     required this.recordingStatus,
     required this.canControlRecording,
+    this.title,
+    this.orgId,
     this.createdAt,
     this.updatedAt,
   });
 
   final String name;
+  final String? title;
+  final String? orgId;
   final int participantCount;
   final bool recording;
   final String recordingStatus;
@@ -20,9 +24,14 @@ class MobileRoom {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  String get displayTitle =>
+      title != null && title!.trim().isNotEmpty ? title!.trim() : name;
+
   factory MobileRoom.fromJson(Map<String, dynamic> json) {
     return MobileRoom(
       name: (json['room_name'] as String?) ?? (json['name'] as String?) ?? '',
+      title: json['title'] as String?,
+      orgId: json['org_id'] as String?,
       participantCount: (json['count'] as num?)?.toInt() ?? 0,
       recording: json['recording'] == true,
       recordingStatus: (json['recording_status'] as String?) ?? 'not_started',

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Abstraction de stockage chiffré (Keystore Android / Keychain iOS) injectable en test.
@@ -73,15 +75,28 @@ class AuthService extends ChangeNotifier {
   ];
   static const String _legacyRememberMeKey = 'remember_me';
 
+  static const String _googleWebClientId = String.fromEnvironment(
+    'GOOGLE_WEB_CLIENT_ID',
+    defaultValue: '',
+  );
+  static const String _googleIosClientId = String.fromEnvironment(
+    'GOOGLE_IOS_CLIENT_ID',
+    defaultValue: '',
+  );
+
   final SecureTokenStore _secureStore;
   final Future<String?> Function({required bool forceRefresh})?
   _tokenProviderOverride;
+  Future<void>? _googleInitFuture;
+  bool _googleInitialized = false;
 
   FirebaseAuth get _auth => FirebaseAuth.instance;
 
   User? get user => _auth.currentUser;
 
   bool get isSignedIn => user != null;
+
+  bool get isEmailVerified => user?.emailVerified ?? false;
 
   String get uid => user?.uid ?? '';
 
@@ -172,8 +187,143 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// Création de compte email / mot de passe auprès de Firebase avec envoi
+  /// de l'e-mail de vérification.
+  Future<void> signUp({
+    required String email,
+    required String password,
+  }) async {
+    final credential = await _auth.createUserWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
+    final current = credential.user;
+    if (current != null && !current.emailVerified) {
+      await current.sendEmailVerification();
+    }
+    final token = await current?.getIdToken();
+    if (token != null && token.isNotEmpty) {
+      await _secureStore.write(kJwtKey, token);
+    }
+  }
+
+  /// Connexion avec un compte Google via Credential Manager / Google Sign-In,
+  /// suivie de la connexion Firebase (`signInWithCredential`) et du stockage
+  /// sécurisé du JWT Firebase.
+  Future<void> signInWithGoogle() async {
+    await _ensureGoogleInitialized();
+    if (!GoogleSignIn.instance.supportsAuthenticate()) {
+      throw const AuthException(
+        'La connexion Google n\'est pas supportée sur cette plateforme.',
+      );
+    }
+    final account = await GoogleSignIn.instance.authenticate();
+    final idToken = account.authentication.idToken;
+    if (idToken == null || idToken.isEmpty) {
+      throw const AuthException(
+        'Jeton d\'identité Google manquant. Vérifiez la configuration OAuth Firebase.',
+      );
+    }
+    String? accessToken;
+    try {
+      final authz = await account.authorizationClient.authorizationForScopes(
+        const <String>['email', 'profile'],
+      );
+      accessToken = authz?.accessToken;
+    } catch (_) {
+      // L'idToken suffit pour FirebaseAuth.
+    }
+    final credential = GoogleAuthProvider.credential(
+      idToken: idToken,
+      accessToken: accessToken,
+    );
+    final userCred = await _auth.signInWithCredential(credential);
+    final token = await userCred.user?.getIdToken();
+    if (token != null && token.isNotEmpty) {
+      await _secureStore.write(kJwtKey, token);
+    }
+  }
+
+  /// Connexion avec Apple (iOS / macOS) via Firebase Auth provider natif.
+  Future<void> signInWithApple() async {
+    if (kIsWeb || (!Platform.isIOS && !Platform.isMacOS)) {
+      throw const AuthException(
+        'La connexion avec Apple n\'est disponible que sur iOS et macOS.',
+      );
+    }
+    final provider = AppleAuthProvider()
+      ..addScope('email')
+      ..addScope('name');
+    final userCred = await _auth.signInWithProvider(provider);
+    final token = await userCred.user?.getIdToken();
+    if (token != null && token.isNotEmpty) {
+      await _secureStore.write(kJwtKey, token);
+    }
+  }
+
+  /// Envoie un e-mail de réinitialisation de mot de passe via Firebase Auth.
+  Future<void> sendPasswordResetEmail(String email) async {
+    final trimmed = email.trim();
+    if (trimmed.isEmpty) {
+      throw const AuthException('Veuillez saisir votre adresse e-mail.');
+    }
+    await _auth.sendPasswordResetEmail(email: trimmed);
+  }
+
+  Future<void> _ensureGoogleInitialized() {
+    if (_googleInitFuture != null) return _googleInitFuture!;
+    final webId = _googleWebClientId.trim();
+    final iosId = _googleIosClientId.trim();
+    final future = GoogleSignIn.instance
+        .initialize(
+          clientId: !kIsWeb && Platform.isIOS && iosId.isNotEmpty
+              ? iosId
+              : null,
+          serverClientId: webId.isNotEmpty ? webId : null,
+        )
+        .then((_) {
+          _googleInitialized = true;
+        })
+        .catchError((Object err) {
+          _googleInitFuture = null;
+          throw err;
+        });
+    _googleInitFuture = future;
+    return future;
+  }
+
+  /// Envoie (ou renvoie) l'e-mail de vérification Firebase.
+  Future<void> sendEmailVerification() async {
+    final current = _auth.currentUser;
+    if (current == null) {
+      throw const AuthException('Utilisateur Firebase non connecté.');
+    }
+    await current.sendEmailVerification();
+  }
+
+  /// Recharge l'utilisateur Firebase et force le rafraîchissement du JWT
+  /// (nécessaire après validation du lien dans l'e-mail de vérification).
+  Future<bool> reloadAndRefreshToken() async {
+    final current = _auth.currentUser;
+    if (current == null) return false;
+    await current.reload();
+    final refreshedUser = _auth.currentUser;
+    if (refreshedUser == null) return false;
+    final token = await refreshedUser.getIdToken(true);
+    if (token != null && token.isNotEmpty) {
+      await _secureStore.write(kJwtKey, token);
+    }
+    notifyListeners();
+    return refreshedUser.emailVerified;
+  }
+
   Future<void> signOut() async {
     await clearSecureTokens();
+    if (_googleInitialized) {
+      try {
+        await GoogleSignIn.instance.signOut();
+      } catch (_) {}
+    }
     if (_tokenProviderOverride == null) {
       await _auth.signOut();
     }
@@ -209,9 +359,41 @@ class AuthService extends ChangeNotifier {
     return token;
   }
 
+  /// Indique si l'erreur correspond à une annulation volontaire par l'utilisateur.
+  static bool isCancellation(Object error) {
+    if (error is GoogleSignInException &&
+        error.code == GoogleSignInExceptionCode.canceled) {
+      return true;
+    }
+    if (error is FirebaseAuthException &&
+        (error.code == 'canceled' || error.code == 'web-context-canceled')) {
+      return true;
+    }
+    return false;
+  }
+
   /// Message lisible pour les erreurs d'authentification.
   static String messageFor(Object error) {
     if (error is AuthException) return error.message;
+    if (error is GoogleSignInException) {
+      switch (error.code) {
+        case GoogleSignInExceptionCode.canceled:
+          return 'Connexion Google annulée.';
+        case GoogleSignInExceptionCode.interrupted:
+          return 'Connexion Google interrompue. Réessayez.';
+        case GoogleSignInExceptionCode.clientConfigurationError:
+          return 'Configuration OAuth Google incomplète (vérifiez SHA-1/google-services.json dans Firebase).';
+        case GoogleSignInExceptionCode.providerConfigurationError:
+        case GoogleSignInExceptionCode.uiUnavailable:
+          return 'Service Google Sign-In indisponible sur cet appareil.';
+        case GoogleSignInExceptionCode.userMismatch:
+          return 'Le compte Google sélectionné ne correspond pas.';
+        case GoogleSignInExceptionCode.unknownError:
+          return error.description?.isNotEmpty == true
+              ? 'Connexion Google impossible : ${error.description}'
+              : 'Connexion Google impossible.';
+      }
+    }
     if (error is FirebaseAuthException) {
       switch (error.code) {
         case 'invalid-credential':
@@ -227,7 +409,9 @@ class AuthService extends ChangeNotifier {
         case 'network-request-failed':
           return 'Réseau indisponible. Vérifiez votre connexion.';
         case 'operation-not-allowed':
-          return 'La connexion email / mot de passe n\'est pas activée.';
+          return 'Cette méthode de connexion n\'est pas activée dans Firebase.';
+        case 'account-exists-with-different-credential':
+          return 'Un compte existe déjà avec cet email via une autre méthode de connexion.';
         case 'weak-password':
           return 'Mot de passe trop faible.';
         case 'email-already-in-use':

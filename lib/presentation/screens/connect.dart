@@ -9,16 +9,19 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../core/account_controller.dart';
 import '../../core/api_service.dart';
 import '../../core/athletic_haptics.dart';
 import '../../core/auth_service.dart';
 import '../../core/gravity_service.dart';
 import '../../data/livekit_token.dart';
 import '../../data/mobile_room.dart';
+import '../../data/room_lobby.dart';
 import '../../data/user_role.dart';
 import '../../exts.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
+import '../widgets/room_lobby_card.dart';
 
 // Config POC
 const String kDefaultRoom = 'poc-room';
@@ -31,6 +34,7 @@ class RoomRouteArgs {
     required this.role,
     required this.roomName,
     required this.canControlRecording,
+    this.knownParticipantNames = const {},
   });
 
   final Room room;
@@ -38,6 +42,7 @@ class RoomRouteArgs {
   final UserRole role;
   final String roomName;
   final bool canControlRecording;
+  final Map<String, String> knownParticipantNames;
 }
 
 enum _ConnectStage { idle, preparing, connecting, media }
@@ -87,12 +92,21 @@ class _ConnectPageState extends State<ConnectPage> {
   BleStatus _bleStatus = BleStatus.unknown;
   _GpsCheckState _gpsState = _GpsCheckState.checking;
   double? _gpsAccuracyMeters;
+  bool _hasPermanentlyDeniedPermissions = false;
 
-  String get _accountEmail =>
-      AuthService.instance.email ?? AuthService.instance.displayName;
+  // ── Lobby (participants invités / connectés) ──
+  RoomLobby? _lobby;
+  bool _lobbyLoading = true;
+  String? _lobbyError;
+
+  String get _accountDisplayLabel {
+    final full = AccountController.instance.displayName.trim();
+    if (full.isNotEmpty) return full;
+    return AuthService.instance.email ?? AuthService.instance.displayName;
+  }
 
   String get _initials {
-    final source = _accountEmail.trim();
+    final source = _accountDisplayLabel.trim();
     if (source.isEmpty) return '?';
     final parts = source
         .split(RegExp(r'[\s@._-]+'))
@@ -120,7 +134,38 @@ class _ConnectPageState extends State<ConnectPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_loadLobby());
     unawaited(_initPreConnectChecks());
+  }
+
+  Future<void> _loadLobby({bool showLoading = true}) async {
+    if (showLoading && mounted) {
+      setState(() {
+        _lobbyLoading = true;
+        _lobbyError = null;
+      });
+    }
+    try {
+      final fetched = await ApiService.getRoomLobby(widget.roomName);
+      if (!mounted) return;
+      setState(() {
+        _lobby = fetched;
+        _lobbyLoading = false;
+        _lobbyError = null;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _lobbyLoading = false;
+        _lobbyError = error.detail ?? error.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _lobbyLoading = false;
+        _lobbyError = 'Liste des participants indisponible pour le moment.';
+      });
+    }
   }
 
   @override
@@ -147,25 +192,142 @@ class _ConnectPageState extends State<ConnectPage> {
     }
   }
 
+  List<Permission> _requiredPermissions() => [
+    Permission.camera,
+    Permission.microphone,
+    if (lkPlatformIs(PlatformType.android)) ...[
+      Permission.bluetooth,
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+    ] else if (lkPlatformIs(PlatformType.iOS)) ...[
+      Permission.bluetooth,
+    ],
+    Permission.locationWhenInUse,
+  ];
+
   Future<void> _checkPermissions() async {
-    final permissions = [
-      Permission.camera,
-      Permission.microphone,
-      if (lkPlatformIs(PlatformType.android)) ...[
-        Permission.bluetooth,
-        Permission.bluetoothScan,
-        Permission.bluetoothConnect,
-      ] else if (lkPlatformIs(PlatformType.iOS)) ...[
-        Permission.bluetooth,
-      ],
-      Permission.locationWhenInUse,
-    ];
+    final permissions = _requiredPermissions();
+    final pending = <Permission>[];
+    var permanentlyDenied = false;
+
     for (final perm in permissions) {
+      final status = await perm.status;
+      if (status.isPermanentlyDenied) {
+        permanentlyDenied = true;
+      } else if (!status.isGranted && !status.isLimited) {
+        pending.add(perm);
+      }
+    }
+
+    if (mounted) {
+      setState(() => _hasPermanentlyDeniedPermissions = permanentlyDenied);
+    }
+    if (pending.isEmpty || !mounted) return;
+
+    final shouldRequest = await _showPrePermissionRationaleSheet();
+    if (shouldRequest != true || !mounted) return;
+
+    var anyPermanentlyDenied = permanentlyDenied;
+    for (final perm in pending) {
       final status = await perm.request();
       if (status.isPermanentlyDenied) {
+        anyPermanentlyDenied = true;
         debugPrint('Permission $perm refusée définitivement');
       }
     }
+    if (mounted) {
+      setState(() => _hasPermanentlyDeniedPermissions = anyPermanentlyDenied);
+    }
+  }
+
+  Future<bool?> _showPrePermissionRationaleSheet() {
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: UIUtils.paddingXL,
+          decoration: BoxDecoration(
+            color: LKColors.surfaceElevated,
+            borderRadius: UIUtils.borderRadiusAllXL,
+            border: Border.all(color: LKColors.border),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: LKColors.primary.withValues(alpha: 0.14),
+                      borderRadius: UIUtils.borderRadiusAllMD,
+                    ),
+                    child: const Icon(
+                      Icons.verified_user_outlined,
+                      color: LKColors.primary,
+                    ),
+                  ),
+                  SizedBox(width: UIUtils.md),
+                  Expanded(
+                    child: Text(
+                      'Accès nécessaires avant le direct',
+                      style: UIUtils.titleMedium(ctx),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: UIUtils.md),
+              Text(
+                'Pour filmer votre séance, diffuser l\'audio au coach et lire vos capteurs sportifs :',
+                style: UIUtils.bodySmall(ctx),
+              ),
+              SizedBox(height: UIUtils.md),
+              const _RationaleItem(
+                icon: Icons.videocam_outlined,
+                title: 'Caméra & Microphone',
+                subtitle: 'Vidéo en direct et échanges audio avec le coach.',
+              ),
+              const SizedBox(height: 10),
+              const _RationaleItem(
+                icon: Icons.bluetooth_connected_rounded,
+                title: 'Bluetooth (BLE)',
+                subtitle: 'Lunettes Engo, ceinture cardio HRM et cadence.',
+              ),
+              const SizedBox(height: 10),
+              const _RationaleItem(
+                icon: Icons.gps_fixed_rounded,
+                title: 'Localisation (en cours d\'utilisation)',
+                subtitle: 'Vitesse GPS extérieure et scan BLE Android.',
+              ),
+              SizedBox(height: UIUtils.xl),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('Plus tard'),
+                    ),
+                  ),
+                  SizedBox(width: UIUtils.md),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text('Autoriser l\'accès'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── Aperçu caméra ──────────────────────────────────────────────────────────
@@ -409,8 +571,40 @@ class _ConnectPageState extends State<ConnectPage> {
           role: _role,
           roomName: widget.roomName,
           canControlRecording: widget.canControlRecording,
+          knownParticipantNames: _lobby?.namesByUid ?? const {},
         ),
       );
+    } on ApiException catch (error) {
+      debugPrint('Erreur API connexion (${error.statusCode}): $error');
+      await room?.disconnect();
+      await listener?.dispose();
+      if (!ctx.mounted) return;
+      if (error.isGone || error.isNotFound) {
+        await showDialog<void>(
+          context: ctx,
+          builder: (dCtx) => AlertDialog(
+            title: Text(
+              error.isGone ? 'Session expirée' : 'Session terminée',
+            ),
+            content: Text(error.detail ?? error.message),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(dCtx).pop(),
+                child: const Text('Retour aux sessions'),
+              ),
+            ],
+          ),
+        );
+        if (ctx.mounted) {
+          ctx.pop(true);
+        }
+        return;
+      }
+      if (mounted) {
+        if (_cameraEnabled) unawaited(_startCameraPreview());
+        if (_micEnabled) unawaited(_startMicMeter());
+      }
+      await ctx.showErrorDialog(error);
     } catch (error) {
       debugPrint('Erreur connexion: $error');
       await room?.disconnect();
@@ -526,6 +720,21 @@ class _ConnectPageState extends State<ConnectPage> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _buildHeroCard(context),
+                        if (_hasPermanentlyDeniedPermissions) ...[
+                          SizedBox(height: UIUtils.md),
+                          _buildPermissionSettingsBanner(context),
+                        ],
+                        SizedBox(height: UIUtils.md),
+                        RoomLobbyCard(
+                          lobby: _lobby,
+                          loading: _lobbyLoading,
+                          error: _lobbyError,
+                          currentUid: AccountController.instance.uid,
+                          onRefresh: () {
+                            unawaited(HapticFeedback.lightImpact());
+                            unawaited(_loadLobby());
+                          },
+                        ),
                         SizedBox(height: UIUtils.md),
                         _buildMediaPreviewCard(context),
                         SizedBox(height: UIUtils.md),
@@ -708,17 +917,31 @@ class _ConnectPageState extends State<ConnectPage> {
     required String tooltip,
     required VoidCallback? onTap,
   }) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.65),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: Tooltip(
-          message: tooltip,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(icon, size: 18, color: color),
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.68),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.22),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(icon, size: 18, color: color),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -728,63 +951,71 @@ class _ConnectPageState extends State<ConnectPage> {
   Widget _buildMicMeterRow(BuildContext context, double level) {
     const int segments = 14;
     final int activeSegments = _micEnabled ? (level * segments).round() : 0;
+    final pct = (level * 100).round();
 
-    return Row(
-      children: [
-        Icon(
-          _micEnabled ? Icons.graphic_eq_rounded : Icons.mic_off_rounded,
-          size: 18,
-          color: _micEnabled ? LKColors.secondary : LKColors.danger,
-        ),
-        SizedBox(width: UIUtils.sm),
-        Text(
-          _micEnabled ? 'Micro' : 'Micro coupé',
-          style: UIUtils.bodySmall(context).copyWith(
-            fontWeight: FontWeight.w600,
-            color: _micEnabled ? LKColors.textPrimary : LKColors.danger,
-          ),
-        ),
-        SizedBox(width: UIUtils.md),
-        Expanded(
-          child: SizedBox(
-            height: 12,
-            child: Row(
-              children: List.generate(segments, (index) {
-                final isLit = index < activeSegments;
-                final Color barColor = index >= segments - 2
-                    ? LKColors.danger
-                    : index >= segments - 5
-                    ? LKColors.warning
-                    : LKColors.success;
-                return Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                    decoration: BoxDecoration(
-                      color: isLit
-                          ? barColor
-                          : LKColors.border.withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                  ),
-                );
-              }),
+    return Semantics(
+      label: _micEnabled
+          ? 'Niveau du microphone : $pct pour cent'
+          : 'Microphone coupé',
+      child: ExcludeSemantics(
+        child: Row(
+          children: [
+            Icon(
+              _micEnabled ? Icons.graphic_eq_rounded : Icons.mic_off_rounded,
+              size: 18,
+              color: _micEnabled ? LKColors.secondary : LKColors.danger,
             ),
-          ),
-        ),
-        SizedBox(width: UIUtils.sm),
-        SizedBox(
-          width: 38,
-          child: Text(
-            _micEnabled ? '${(level * 100).round()}%' : 'OFF',
-            textAlign: TextAlign.right,
-            style: UIUtils.bodySmall(context).copyWith(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: _micEnabled ? LKColors.textSecondary : LKColors.danger,
+            SizedBox(width: UIUtils.sm),
+            Text(
+              _micEnabled ? 'Micro' : 'Micro coupé',
+              style: UIUtils.bodySmall(context).copyWith(
+                fontWeight: FontWeight.w600,
+                color: _micEnabled ? LKColors.textPrimary : LKColors.danger,
+              ),
             ),
-          ),
+            SizedBox(width: UIUtils.md),
+            Expanded(
+              child: SizedBox(
+                height: 12,
+                child: Row(
+                  children: List.generate(segments, (index) {
+                    final isLit = index < activeSegments;
+                    final Color barColor = index >= segments - 2
+                        ? LKColors.danger
+                        : index >= segments - 5
+                        ? LKColors.warning
+                        : LKColors.success;
+                    return Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                        decoration: BoxDecoration(
+                          color: isLit
+                              ? barColor
+                              : LKColors.border.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+            SizedBox(width: UIUtils.sm),
+            SizedBox(
+              width: 38,
+              child: Text(
+                _micEnabled ? '$pct%' : 'OFF',
+                textAlign: TextAlign.right,
+                style: UIUtils.bodySmall(context).copyWith(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: _micEnabled ? LKColors.textSecondary : LKColors.danger,
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -828,9 +1059,7 @@ class _ConnectPageState extends State<ConnectPage> {
                 icon: const Icon(Icons.refresh_rounded, size: 18),
                 color: LKColors.textSecondary,
                 tooltip: 'Actualiser l\'état des capteurs',
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               ),
             ],
           ),
@@ -947,6 +1176,45 @@ class _ConnectPageState extends State<ConnectPage> {
     }
   }
 
+  Widget _buildPermissionSettingsBanner(BuildContext context) {
+    return Container(
+      padding: UIUtils.paddingMD,
+      decoration: BoxDecoration(
+        color: LKColors.warning.withValues(alpha: 0.12),
+        borderRadius: UIUtils.borderRadiusAllLG,
+        border: Border.all(color: LKColors.warning.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: LKColors.warning),
+          SizedBox(width: UIUtils.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Autorisations bloquées',
+                  style: UIUtils.titleSmall(context).copyWith(
+                    color: LKColors.warning,
+                  ),
+                ),
+                Text(
+                  'Certaines permissions caméra, micro ou capteurs sont refusées dans les réglages.',
+                  style: UIUtils.bodySmall(context),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: UIUtils.sm),
+          TextButton(
+            onPressed: openAppSettings,
+            child: const Text('Réglages'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSensorRow(
     BuildContext context, {
     required IconData icon,
@@ -955,45 +1223,50 @@ class _ConnectPageState extends State<ConnectPage> {
     required String badgeLabel,
     required Color color,
   }) {
-    return Row(
-      children: [
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: UIUtils.borderRadiusAllSM,
-          ),
-          child: Icon(icon, size: 18, color: color),
-        ),
-        SizedBox(width: UIUtils.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: UIUtils.bodyMedium(
-                  context,
-                ).copyWith(fontWeight: FontWeight.w600),
+    return Semantics(
+      label: '$title : $badgeLabel. $subtitle',
+      child: ExcludeSemantics(
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: UIUtils.borderRadiusAllSM,
               ),
-              Text(
-                subtitle,
-                style: UIUtils.bodySmall(
-                  context,
-                ).copyWith(color: LKColors.textHint, fontSize: 11),
+              child: Icon(icon, size: 18, color: color),
+            ),
+            SizedBox(width: UIUtils.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: UIUtils.bodyMedium(
+                      context,
+                    ).copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    subtitle,
+                    style: UIUtils.bodySmall(
+                      context,
+                    ).copyWith(color: LKColors.textHint, fontSize: 11),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+            SizedBox(width: UIUtils.sm),
+            _buildPill(
+              context,
+              icon: Icons.circle,
+              label: badgeLabel,
+              color: color,
+            ),
+          ],
         ),
-        SizedBox(width: UIUtils.sm),
-        _buildPill(
-          context,
-          icon: Icons.circle,
-          label: badgeLabel,
-          color: color,
-        ),
-      ],
+      ),
     );
   }
 
@@ -1051,13 +1324,27 @@ class _ConnectPageState extends State<ConnectPage> {
                     ),
                     SizedBox(height: 2),
                     Text(
-                      widget.roomName,
+                      _lobby?.displayTitle ??
+                          widget.room?.displayTitle ??
+                          widget.roomName,
                       style: UIUtils.titleLarge(
                         context,
                       ).copyWith(fontSize: 22, fontWeight: FontWeight.w700),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    if (_lobby?.orgName != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        _lobby!.orgName!,
+                        style: UIUtils.bodySmall(context).copyWith(
+                          color: LKColors.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1128,7 +1415,7 @@ class _ConnectPageState extends State<ConnectPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _accountEmail,
+                  _accountDisplayLabel,
                   style: UIUtils.bodyMedium(
                     context,
                   ).copyWith(fontWeight: FontWeight.w600),
@@ -1223,7 +1510,10 @@ class _ConnectPageState extends State<ConnectPage> {
               SizedBox(
                 height: 52,
                 child: FilledButton(
-                  onPressed: _busy ? null : () => _connect(context),
+                  onPressed:
+                      (_busy || (_lobby != null && !_lobby!.accessible))
+                      ? null
+                      : () => _connect(context),
                   style: FilledButton.styleFrom(
                     backgroundColor: LKColors.primary,
                     foregroundColor: Colors.white,
@@ -1339,4 +1629,50 @@ class _FramingGridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _RationaleItem extends StatelessWidget {
+  const _RationaleItem({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: LKColors.surface,
+            borderRadius: UIUtils.borderRadiusAllSM,
+            border: Border.all(color: LKColors.border),
+          ),
+          child: Icon(icon, size: 18, color: LKColors.primary),
+        ),
+        SizedBox(width: UIUtils.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: UIUtils.bodyMedium(context).copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(subtitle, style: UIUtils.bodySmall(context)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }

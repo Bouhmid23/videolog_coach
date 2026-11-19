@@ -34,6 +34,8 @@ abstract class ParticipantWidget extends StatefulWidget {
     VoidCallback? onSwipeLeft,
     VoidCallback? onSwipeRight,
     bool outdoorSunMode = false,
+    String? displayName,
+    bool showNameBadge = true,
   }) {
     final key = ValueKey(
       '${participantTrack.participant.identity}_${participantTrack.type.name}',
@@ -59,6 +61,8 @@ abstract class ParticipantWidget extends StatefulWidget {
         onSwipeLeft: onSwipeLeft,
         onSwipeRight: onSwipeRight,
         outdoorSunMode: outdoorSunMode,
+        displayName: displayName,
+        showNameBadge: showNameBadge,
       );
     } else if (participantTrack.participant is RemoteParticipant) {
       return RemoteParticipantWidget(
@@ -80,6 +84,8 @@ abstract class ParticipantWidget extends StatefulWidget {
         onSwipeLeft: onSwipeLeft,
         onSwipeRight: onSwipeRight,
         outdoorSunMode: outdoorSunMode,
+        displayName: displayName,
+        showNameBadge: showNameBadge,
       );
     }
     throw UnimplementedError('Unknown participant type');
@@ -110,6 +116,8 @@ abstract class ParticipantWidget extends StatefulWidget {
   final VoidCallback? onSwipeLeft;
   final VoidCallback? onSwipeRight;
   final bool outdoorSunMode;
+  final String? displayName;
+  final bool showNameBadge;
   final VideoQuality quality;
   final RecordingController? recordingController;
 
@@ -134,6 +142,8 @@ abstract class ParticipantWidget extends StatefulWidget {
     this.onSwipeLeft,
     this.onSwipeRight,
     this.outdoorSunMode = false,
+    this.displayName,
+    this.showNameBadge = true,
     this.quality = VideoQuality.HIGH,
     this.recordingController,
     super.key,
@@ -173,6 +183,8 @@ class LocalParticipantWidget extends ParticipantWidget {
     super.onSwipeLeft,
     super.onSwipeRight,
     super.outdoorSunMode,
+    super.displayName,
+    super.showNameBadge,
     super.key,
   });
 
@@ -213,6 +225,8 @@ class RemoteParticipantWidget extends ParticipantWidget {
     super.onSwipeLeft,
     super.onSwipeRight,
     super.outdoorSunMode,
+    super.displayName,
+    super.showNameBadge,
     super.key,
   });
 
@@ -423,7 +437,14 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     return _buildVideoStack();
   }
 
+  String get _resolvedParticipantName {
+    final override = widget.displayName?.trim();
+    if (override != null && override.isNotEmpty) return override;
+    return displayNameForParticipant(widget.participant);
+  }
+
   Widget _buildVideoStack() {
+    final resolvedName = _resolvedParticipantName;
     return Stack(
       children: [
         // 1. FLUX VIDEO PRINCIPAL
@@ -442,9 +463,8 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
                                 videoPublication?.muted == true
                             ? NoVideoState.videoMuted
                             : NoVideoState.videoDisabled),
-                    participantName: widget.participant.name.isNotEmpty
-                        ? displayNameForIdentity(widget.participant.name)
-                        : displayNameForIdentity(widget.participant.identity),
+                    participantName: resolvedName,
+                    showLabel: widget.showNameBadge,
                   ),
           ),
         ),
@@ -538,9 +558,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
     Widget buildInfo({Widget? trailing, bool showConnectionStatus = true}) {
       final usePrimaryDataHud = widget.showDataHud && !isScreenShare;
       return ParticipantInfoWidget(
-        title: widget.participant.name.isNotEmpty
-            ? displayNameForIdentity(widget.participant.name)
-            : displayNameForIdentity(widget.participant.identity),
+        title: widget.showNameBadge ? _resolvedParticipantName : null,
         titleContent: usePrimaryDataHud
             ? DataHud(
                 telemetry: widget.telemetry,
@@ -562,6 +580,7 @@ abstract class _ParticipantWidgetState<T extends ParticipantWidget>
         isTop: widget.infoAtTop,
         trailing: trailing,
         showConnectionStatus: showConnectionStatus,
+        outdoorSunMode: widget.outdoorSunMode,
       );
     }
 

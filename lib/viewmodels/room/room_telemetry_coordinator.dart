@@ -148,17 +148,27 @@ class RoomTelemetryCoordinator {
     return true;
   }
 
-  RemoteTelemetry buildLocalTelemetry(UserRole role) => RemoteTelemetry(
-    heartRate: sensorService.isHrmConnected ? _sensorHeartRate : null,
-    cadence: sensorService.isCadenceConnected ? _sensorCadence?.toDouble() : null,
-    speed: sanitizeSpeedKmh(_lastPosition),
-    lat: _lastPosition?.latitude,
-    lng: _lastPosition?.longitude,
-    altitude: _lastPosition?.altitude,
-    bearing: _lastPosition?.heading,
-    role: role.wire,
-    receivedAt: DateTime.now(),
-  );
+  RemoteTelemetry buildLocalTelemetry(UserRole role) {
+    final rawHeading = _lastPosition?.heading;
+    final bearing = (rawHeading != null &&
+            !rawHeading.isNaN &&
+            !rawHeading.isInfinite &&
+            rawHeading >= 0 &&
+            rawHeading <= 360)
+        ? (rawHeading.round() % 360).toDouble()
+        : null;
+    return RemoteTelemetry(
+      heartRate: sensorService.isHrmConnected ? _sensorHeartRate : null,
+      cadence: sensorService.isCadenceConnected ? _sensorCadence?.toDouble() : null,
+      speed: sanitizeSpeedKmh(_lastPosition),
+      lat: _lastPosition?.latitude,
+      lng: _lastPosition?.longitude,
+      altitude: _lastPosition?.altitude,
+      bearing: bearing,
+      role: role.wire,
+      receivedAt: DateTime.now(),
+    );
+  }
 
   void start(Room room, UserRole role) {
     unawaited(_loadProfile());
@@ -232,7 +242,7 @@ class RoomTelemetryCoordinator {
       lat = position.latitude;
       lng = position.longitude;
       altitude = position.altitude;
-      bearing = position.heading;
+      bearing = position.heading >= 0 ? position.heading : null;
     }
 
     final bytes = TelemetryCodec.encode(

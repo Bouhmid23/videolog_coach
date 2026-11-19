@@ -36,6 +36,7 @@ class DataHud extends StatefulWidget {
 }
 
 class _HudItemData {
+  final String semanticName;
   final IconData icon;
   final Color standardColor;
   final Color neonColor;
@@ -44,6 +45,7 @@ class _HudItemData {
   final String unit;
 
   const _HudItemData({
+    required this.semanticName,
     required this.icon,
     required this.standardColor,
     required this.neonColor,
@@ -66,6 +68,7 @@ class _DataHudState extends State<DataHud> {
 
     if (telemetry.speed != null) {
       items.add(_HudItemData(
+        semanticName: 'Vitesse',
         icon: Icons.speed_rounded,
         standardColor: LKColors.warning,
         neonColor: const Color(0xFFFFD700), // Ambre / Or fluo
@@ -76,6 +79,7 @@ class _DataHudState extends State<DataHud> {
     }
     if (telemetry.cadence != null) {
       items.add(_HudItemData(
+        semanticName: 'Cadence',
         icon: Icons.pedal_bike_rounded,
         standardColor: LKColors.success,
         neonColor: const Color(0xFF00FF66), // Vert néon saturé
@@ -84,8 +88,20 @@ class _DataHudState extends State<DataHud> {
         unit: 'rpm',
       ));
     }
+    if (telemetry.powerWatts != null) {
+      items.add(_HudItemData(
+        semanticName: 'Puissance',
+        icon: Icons.bolt_rounded,
+        standardColor: LKColors.primary,
+        neonColor: const Color(0xFFFFFF00), // Jaune néon saturé
+        value: telemetry.powerWatts!.toDouble(),
+        fractionDigits: 0,
+        unit: 'W',
+      ));
+    }
     if (telemetry.altitude != null) {
       items.add(_HudItemData(
+        semanticName: 'Altitude',
         icon: Icons.height_rounded,
         standardColor: LKColors.secondary,
         neonColor: const Color(0xFF00E5FF), // Cyan néon
@@ -96,6 +112,7 @@ class _DataHudState extends State<DataHud> {
     }
     if (telemetry.bearing != null) {
       items.add(_HudItemData(
+        semanticName: 'Cap',
         icon: Icons.explore_rounded,
         standardColor: LKColors.warning,
         neonColor: const Color(0xFFFF6600), // Orange néon
@@ -181,6 +198,8 @@ class _DataHudState extends State<DataHud> {
               ),
             for (final item in items)
               _HudChip(
+                semanticLabel:
+                    '${item.semanticName} ${item.value.toStringAsFixed(item.fractionDigits)} ${item.unit}',
                 icon: item.icon,
                 color: item.color(outdoorSunMode: widget.outdoorSunMode),
                 text: widget.showValues
@@ -196,10 +215,15 @@ class _DataHudState extends State<DataHud> {
               ),
             if (widget.showToggle && !compact && !widget.transparent)
               _HudChip(
+                semanticLabel: _expanded
+                    ? 'Réduire la télémétrie'
+                    : 'Détailler la télémétrie',
                 icon: _expanded
                     ? Icons.unfold_less_rounded
                     : Icons.unfold_more_rounded,
-                color: widget.outdoorSunMode ? Colors.white : LKColors.textSecondary,
+                color: widget.outdoorSunMode
+                    ? Colors.white
+                    : LKColors.textSecondary,
                 text: _expanded ? 'Reduire' : 'Details',
                 showText: _expanded,
                 compact: compact,
@@ -241,6 +265,7 @@ class _DataHudState extends State<DataHud> {
 }
 
 class _HudChip extends StatelessWidget {
+  final String semanticLabel;
   final IconData icon;
   final Color color;
   final String text;
@@ -254,6 +279,7 @@ class _HudChip extends StatelessWidget {
   final VoidCallback? onTap;
 
   const _HudChip({
+    required this.semanticLabel,
     required this.icon,
     required this.color,
     required this.text,
@@ -282,7 +308,7 @@ class _HudChip extends StatelessWidget {
         ? color
         : LKColors.border.withValues(alpha: 0.6);
 
-    return AnimatedContainer(
+    final chip = AnimatedContainer(
       duration: UIUtils.animationDuration,
       curve: UIUtils.animationCurve,
       padding: EdgeInsets.symmetric(
@@ -344,5 +370,18 @@ class _HudChip extends StatelessWidget {
       ),
     );
 
+    return Semantics(
+      button: onTap != null,
+      label: semanticLabel,
+      child: ExcludeSemantics(
+        child: onTap != null
+            ? InkWell(
+                onTap: onTap,
+                borderRadius: borderRadius,
+                child: chip,
+              )
+            : chip,
+      ),
+    );
   }
 }

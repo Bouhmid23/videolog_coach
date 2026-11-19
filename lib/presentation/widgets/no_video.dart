@@ -20,20 +20,47 @@ class NoVideoWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final trimmedName = participantName?.trim() ?? '';
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact =
             constraints.maxHeight < 140 || constraints.maxWidth < 140;
+        final canShowLabel =
+            showLabel &&
+            trimmedName.isNotEmpty &&
+            (!isCompact || constraints.maxHeight >= 96);
 
         return Container(
           width: double.infinity,
           height: double.infinity,
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             color: LKColors.lkDarkBlue,
           ),
           child: Center(
-            child:
-            _buildAvatar(isCompact),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildAvatar(isCompact),
+                  if (canShowLabel) ...[
+                    SizedBox(height: isCompact ? 6 : 12),
+                    Text(
+                      trimmedName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: LKColors.textPrimary,
+                        fontSize: isCompact ? 11 : 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         );
       },

@@ -12,6 +12,7 @@ import '../../core/recording_controller.dart';
 import '../../core/remote_shutter_service.dart';
 import '../../data/remote_telemetry.dart';
 import '../../data/user_role.dart';
+import '../../exts.dart';
 import '../../theme.dart';
 import '../../utils.dart';
 import '../utils/ui_utils.dart';
@@ -28,6 +29,7 @@ class RoomPage extends StatefulWidget {
   final bool fastConnection;
   final String? roomName;
   final bool canControlRecording;
+  final Map<String, String> knownParticipantNames;
 
   const RoomPage(
     this.room,
@@ -36,6 +38,7 @@ class RoomPage extends StatefulWidget {
     this.fastConnection = false,
     this.roomName,
     this.canControlRecording = false,
+    this.knownParticipantNames = const {},
     super.key,
   });
 
@@ -55,6 +58,8 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   String? _gestureFeedbackMessage;
   IconData? _gestureFeedbackIcon;
   Timer? _gestureFeedbackTimer;
+  bool _allowPop = false;
+  bool _isConfirmingExit = false;
 
   static const Duration _controlsAutoHideDuration = Duration(seconds: 4);
   static const double _galleryHeight = 180;
@@ -104,9 +109,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     if (switched) {
       unawaited(AthleticHaptics.participantSwitched());
       final primary = _vm.primaryTrack;
-      final name = primary?.participant.name.isNotEmpty == true
-          ? displayNameForIdentity(primary!.participant.name)
-          : displayNameForIdentity(primary?.participant.identity ?? '');
+      final name = primary != null
+          ? _vm.displayNameForParticipant(primary.participant)
+          : '';
       _showGestureFeedback('Participant : $name', Icons.swap_horiz_rounded);
     }
   }
@@ -118,9 +123,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     if (switched) {
       unawaited(AthleticHaptics.participantSwitched());
       final primary = _vm.primaryTrack;
-      final name = primary?.participant.name.isNotEmpty == true
-          ? displayNameForIdentity(primary!.participant.name)
-          : displayNameForIdentity(primary?.participant.identity ?? '');
+      final name = primary != null
+          ? _vm.displayNameForParticipant(primary.participant)
+          : '';
       _showGestureFeedback('Participant : $name', Icons.swap_horiz_rounded);
     }
   }
@@ -199,10 +204,26 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
         widget.room,
         widget.listener,
         role: widget.role,
-        onDisconnected: () {
-          if (mounted) {
-            context.pop();
+        knownParticipantNames: widget.knownParticipantNames,
+        onDisconnected: (reason) {
+          if (!mounted) return;
+          _allowPop = true;
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          if (reason == DisconnectReason.roomDeleted ||
+              reason == DisconnectReason.roomClosed) {
+            messenger?.showSnackBar(
+              const SnackBar(
+                content: Text('La session a été fermée par le coach.'),
+              ),
+            );
+          } else if (reason == DisconnectReason.participantRemoved) {
+            messenger?.showSnackBar(
+              const SnackBar(
+                content: Text('Vous avez été retiré de la session.'),
+              ),
+            );
           }
+          context.pop();
         },
       );
       if (mounted) setState(() {});
@@ -292,6 +313,32 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _handleBackAttempt() async {
+    if (_isScreenLocked.value) {
+      unawaited(HapticFeedback.heavyImpact());
+      _showGestureFeedback(
+        'Écran verrouillé — maintenez 1,5 s',
+        Icons.lock_rounded,
+      );
+      return;
+    }
+    if (_isConfirmingExit) return;
+    _isConfirmingExit = true;
+    try {
+      final shouldLeave = await context.showDisconnectDialog();
+      if (shouldLeave == true && mounted) {
+        setState(() => _allowPop = true);
+        if (widget.room.connectionState == ConnectionState.disconnected) {
+          context.pop();
+        } else {
+          await widget.room.disconnect();
+        }
+      }
+    } finally {
+      _isConfirmingExit = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -307,7 +354,13 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                 final isLandscape = orientation == Orientation.landscape;
                 final useTwoColumns = isLandscape && !inPip;
 
-                return Scaffold(
+                return PopScope(
+                  canPop: _allowPop,
+                  onPopInvokedWithResult: (didPop, _) {
+                    if (didPop) return;
+                    unawaited(_handleBackAttempt());
+                  },
+                  child: Scaffold(
                   extendBody: true,
                   extendBodyBehindAppBar: true,
                   backgroundColor: outdoorSunMode
@@ -424,6 +477,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                         ),
                     ],
                   ),
+                ),
                 );
               },
             );
@@ -551,6 +605,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                     onSwipeLeft: _isScreenLocked.value ? null : _onSwipeLeft,
                     onSwipeRight: _isScreenLocked.value ? null : _onSwipeRight,
                     outdoorSunMode: _isOutdoorSunMode.value,
+                    displayName: _vm.displayNameForParticipant(
+                      primaryTrack.participant,
+                    ),
                   )
                 : GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -644,6 +701,10 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                             showDataHud: false,
                             recordingController: _recordingController,
                             onTap: selectTrack,
+                            outdoorSunMode: _isOutdoorSunMode.value,
+                            displayName: _vm.displayNameForParticipant(
+                              track.participant,
+                            ),
                           ),
                         ),
                       ],
@@ -841,6 +902,11 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                             showDataHud: false,
                             recordingController: _recordingController,
                             onTap: selectTrack,
+                            outdoorSunMode: _isOutdoorSunMode.value,
+                            displayName: _vm.displayNameForParticipant(
+                              track.participant,
+                            ),
+                            showNameBadge: false,
                           ),
                         ),
                       ),
@@ -850,7 +916,7 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                       children: [
                         Expanded(
                           child: Text(
-                            displayNameForIdentity(track.participant.identity),
+                            _vm.displayNameForParticipant(track.participant),
                             style: UIUtils.labelMedium(context).copyWith(
                               fontWeight: FontWeight.bold,
                               color: LKColors.textPrimary,

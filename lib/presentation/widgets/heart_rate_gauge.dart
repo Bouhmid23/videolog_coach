@@ -42,85 +42,97 @@ class HeartRateHudGauge extends StatelessWidget {
         ? zoneColor
         : zoneColor.withValues(alpha: 0.65);
 
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 6 : 10,
-        vertical: compact ? 3 : 5,
-      ),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: borderRadius,
-        border: Border.all(
-          color: borderColor,
-          width: outdoorSunMode ? 1.5 : 0.9,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Colored heart icon matching zone
-          Icon(
-            Icons.favorite_rounded,
-            color: zoneColor,
-            size: compact ? 12 : 14,
+    return Semantics(
+      label:
+          'Fréquence cardiaque $bpm battements par minute, zone ${zone.code} ${zone.name}',
+      child: ExcludeSemantics(
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 6 : 10,
+            vertical: compact ? 3 : 5,
           ),
-          const SizedBox(width: 3.5),
-
-          // High-contrast zone badge (Z1..Z5)
-          Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 3 : 5,
-              vertical: 0.8,
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: borderRadius,
+            border: Border.all(
+              color: borderColor,
+              width: outdoorSunMode ? 1.5 : 0.9,
             ),
-            decoration: BoxDecoration(
-              color: zoneColor,
-              borderRadius: BorderRadius.circular(3.5),
-              boxShadow: [
-                BoxShadow(
-                  color: zoneColor.withValues(alpha: outdoorSunMode ? 0.6 : 0.35),
-                  blurRadius: outdoorSunMode ? 4 : 3,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Colored heart icon matching zone
+              Icon(
+                Icons.favorite_rounded,
+                color: zoneColor,
+                size: compact ? 12 : 14,
+              ),
+              const SizedBox(width: 3.5),
+
+              // High-contrast zone badge (Z1..Z5)
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 3 : 5,
+                  vertical: 0.8,
+                ),
+                decoration: BoxDecoration(
+                  color: zoneColor,
+                  borderRadius: BorderRadius.circular(3.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: zoneColor.withValues(
+                        alpha: outdoorSunMode ? 0.6 : 0.35,
+                      ),
+                      blurRadius: outdoorSunMode ? 4 : 3,
+                    ),
+                  ],
+                ),
+                child: Text(
+                  zone.code,
+                  style: TextStyle(
+                    color:
+                        outdoorSunMode &&
+                            (zone.level == HeartRateZoneLevel.z2 ||
+                                zone.level == HeartRateZoneLevel.z3)
+                        ? Colors.black
+                        : Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: compact ? 7.5 : 8.5,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+
+              // 5-segment athletic intensity bar (hidden in compact mode or when showZoneBar is false)
+              if (showZoneBar && !compact && showValue) ...[
+                const SizedBox(width: 5),
+                _SportsIntensityBar(
+                  activeZoneIndex: zone.level.index,
+                  outdoorSunMode: outdoorSunMode,
                 ),
               ],
-            ),
-            child: Text(
-              zone.code,
-              style: TextStyle(
-                color: outdoorSunMode && (zone.level == HeartRateZoneLevel.z2 || zone.level == HeartRateZoneLevel.z3)
-                    ? Colors.black
-                    : Colors.white,
-                fontWeight: FontWeight.w900,
-                fontSize: compact ? 7.5 : 8.5,
-                letterSpacing: 0.3,
-              ),
-            ),
+
+              // Formatted bpm with tabular figures to avoid jitter
+              if (showValue) ...[
+                const SizedBox(width: 4.5),
+                AnimatedSportsCount(
+                  value: bpm.toDouble(),
+                  fractionDigits: 0,
+                  suffix: ' bpm',
+                  outdoorSunMode: outdoorSunMode,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: outdoorSunMode ? Colors.white : LKColors.textPrimary,
+                    fontWeight:
+                        outdoorSunMode ? FontWeight.w900 : FontWeight.w700,
+                    fontSize: transparent ? 10 : (compact ? 9 : 10),
+                    fontFeatures: const [ui.FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ],
           ),
-
-          // 5-segment athletic intensity bar (hidden in compact mode or when showZoneBar is false)
-          if (showZoneBar && !compact && showValue) ...[
-            const SizedBox(width: 5),
-            _SportsIntensityBar(
-              activeZoneIndex: zone.level.index,
-              outdoorSunMode: outdoorSunMode,
-            ),
-          ],
-
-          // Formatted bpm with tabular figures to avoid jitter
-          if (showValue) ...[
-            const SizedBox(width: 4.5),
-            AnimatedSportsCount(
-              value: bpm.toDouble(),
-              fractionDigits: 0,
-              suffix: ' bpm',
-              outdoorSunMode: outdoorSunMode,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: outdoorSunMode ? Colors.white : LKColors.textPrimary,
-                fontWeight: outdoorSunMode ? FontWeight.w900 : FontWeight.w700,
-                fontSize: transparent ? 10 : (compact ? 9 : 10),
-                fontFeatures: const [ui.FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-        ],
+        ),
       ),
     );
   }

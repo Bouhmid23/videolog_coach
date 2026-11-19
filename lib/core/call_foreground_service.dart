@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 const int _serviceId = 256;
@@ -14,7 +15,20 @@ const String _startedAtKey = 'call_started_at';
 
 @pragma('vm:entry-point')
 void callForegroundTaskCallback() {
-  FlutterForegroundTask.setTaskHandler(CallTaskHandler());
+  runZonedGuarded(
+    () {
+      FlutterForegroundTask.setTaskHandler(CallTaskHandler());
+    },
+    (error, stack) {
+      if (error is MissingPluginException) {
+        debugPrint(
+          'Foreground task callback interrompu pendant la fermeture du service: $error',
+        );
+        return;
+      }
+      debugPrint('Erreur isolate foreground task: $error\n$stack');
+    },
+  );
 }
 
 class CallTaskHandler extends TaskHandler {
@@ -86,6 +100,7 @@ class CallForegroundService {
 
   static bool _initialized = false;
   static VoidCallback? _onEndCall;
+  static int _sessionToken = 0;
 
   static void initialize() {
     if (_initialized) return;
@@ -138,8 +153,10 @@ class CallForegroundService {
   }) async {
     if (!Platform.isAndroid) return;
     initialize();
+    final token = ++_sessionToken;
 
     if (await FlutterForegroundTask.isRunningService) {
+      if (token != _sessionToken) return;
       await FlutterForegroundTask.updateService(
         notificationTitle: 'Appel en cours',
         notificationText: '$username • $roomName',
@@ -149,12 +166,16 @@ class CallForegroundService {
 
     final permission =
         await FlutterForegroundTask.checkNotificationPermission();
+    if (token != _sessionToken) return;
     if (permission != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();
-      if (await FlutterForegroundTask.checkNotificationPermission() != NotificationPermission.granted) {
+      if (token != _sessionToken) return;
+      if (await FlutterForegroundTask.checkNotificationPermission() !=
+          NotificationPermission.granted) {
         debugPrint('Foreground service: Notification permission denied by user');
         return;
       }
+      if (token != _sessionToken) return;
     }
 
     await FlutterForegroundTask.saveData(key: _roomKey, value: roomName);
@@ -163,6 +184,7 @@ class CallForegroundService {
       key: _startedAtKey,
       value: DateTime.now().millisecondsSinceEpoch,
     );
+    if (token != _sessionToken) return;
 
     final result = await FlutterForegroundTask.startService(
       serviceId: _serviceId,
@@ -182,6 +204,7 @@ class CallForegroundService {
   }
 
   static Future<void> stop() async {
+    _sessionToken++;
     if (!Platform.isAndroid) return;
     if (!await FlutterForegroundTask.isRunningService) return;
     final result = await FlutterForegroundTask.stopService();

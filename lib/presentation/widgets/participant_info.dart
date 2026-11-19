@@ -63,6 +63,7 @@ class ParticipantInfoWidget extends StatelessWidget {
   final bool isTop;
   final Widget? trailing;
   final bool showConnectionStatus;
+  final bool outdoorSunMode;
 
   const ParticipantInfoWidget({
     this.title,
@@ -75,11 +76,58 @@ class ParticipantInfoWidget extends StatelessWidget {
     this.isTop = false,
     this.trailing,
     this.showConnectionStatus = true,
+    this.outdoorSunMode = false,
     super.key,
   });
 
+  Widget _buildNameBadge(BuildContext context, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: outdoorSunMode
+            ? Colors.black
+            : LKColors.background.withValues(alpha: 0.68),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: outdoorSunMode
+              ? Colors.white
+              : LKColors.border.withValues(alpha: 0.65),
+          width: outdoorSunMode ? 1.2 : 0.8,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isScreenShare) ...[
+            Icon(
+              Icons.monitor_rounded,
+              size: 13,
+              color: outdoorSunMode ? Colors.white : LKColors.primary,
+            ),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: UIUtils.labelMedium(context).copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final trimmedTitle = title?.trim() ?? '';
+    final hasTitle = trimmedTitle.isNotEmpty;
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.transparent,
@@ -103,17 +151,18 @@ class ParticipantInfoWidget extends StatelessWidget {
         children: [
           // Nom du participant + télémétrie
           Expanded(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (titleContent != null)
-                  Flexible(
-                    child: Padding(
-                      padding: EdgeInsets.only(right: UIUtils.sm),
-                      child: titleContent,
-                    ),
-                  ),
-              ],
+            child: Padding(
+              padding: EdgeInsets.only(right: UIUtils.sm),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (hasTitle) _buildNameBadge(context, trimmedTitle),
+                  if (hasTitle && titleContent != null)
+                    const SizedBox(height: 4),
+                  ?titleContent,
+                ],
+              ),
             ),
           ),
 

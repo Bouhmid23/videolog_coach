@@ -94,6 +94,30 @@ extension LKExampleExt on BuildContext {
     ),
   );
 
+  Future<bool?> showSignOutDialog() => showDialog<bool>(
+    context: this,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Se déconnecter'),
+      content: const Text(
+        'Voulez-vous vraiment vous déconnecter de votre compte VideoLog ?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Annuler'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: LKColors.danger,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Se déconnecter'),
+        ),
+      ],
+    ),
+  );
+
   Future<bool?> showReconnectDialog() => showDialog<bool>(
     context: this,
     builder: (ctx) => AlertDialog(

@@ -31,29 +31,33 @@ dependencies:
   flutter:
     sdk: flutter
 
-  livekit_client: ^2.13.2
+  livekit_client: ^2.14.0
   intl: ^0.20.2
-  flutter_background: ^1.3.1
-  permission_handler: ^12.0.1
+  permission_handler: ^13.0.2
   provider: ^6.1.5+1
   device_info_plus: ^13.3.0
   logging: ^1.3.0
-  shared_preferences: ^2.5.5
+  shared_preferences: ^2.5.6
   flutter_secure_storage: ^11.2.0
-  google_fonts: ^8.0.2
-  flutter_svg: ^2.2.4
+  google_fonts: ^9.0.0
+  flutter_svg: ^2.4.0
   http: ^1.6.0
-  flutter_foreground_task: ^9.2.2
-  wakelock_plus: ^1.5.2
+  flutter_foreground_task: ^11.0.3
+  wakelock_plus: ^1.8.0
   flutter_reactive_ble: ^5.4.2
 
   flutter_pose_detection: ^0.4.0
   path_provider: ^2.1.5
-  geolocator: ^13.0.2
-  sensors_plus: ^6.1.1
-  go_router: ^14.8.1
-  firebase_core: ^5.1.0
-  firebase_auth: ^7.0.1
+  geolocator: ^14.1.2
+  sensors_plus: ^7.1.1
+  go_router: ^18.1.4
+  firebase_core: ^5.2.0
+  firebase_auth: ^7.1.0
+  video_player: ^2.9.5
+  google_sign_in: ^7.2.0
+  share_plus: ^13.3.1
+  file_picker: ^13.4.0
+  fl_chart: ^1.3.1
 
 dependency_overrides:
   flutter_pose_detection:
@@ -69,11 +73,6 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
-
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
-
-# The following section is specific to Flutter packages.
 flutter:
   config:
     enable-swift-package-manager: false

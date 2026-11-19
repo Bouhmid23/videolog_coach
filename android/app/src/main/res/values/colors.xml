@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="videolog_background">#090B0E</color>
+    <color name="videolog_surface">#0F1318</color>
+</resources>

@@ -69,11 +69,10 @@ class RecordingControls extends StatelessWidget {
                   icon: const Icon(Icons.refresh_rounded, size: 18),
                   color: LKColors.primary,
                   tooltip: "Vérifier l'état auprès du serveur",
-                  visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(
-                    minWidth: 28,
-                    minHeight: 28,
+                    minWidth: 48,
+                    minHeight: 48,
                   ),
                 ),
             ] else if (showActions && controller.state == null) ...[
@@ -86,9 +85,8 @@ class RecordingControls extends StatelessWidget {
                 icon: const Icon(Icons.refresh_rounded, size: 18),
                 color: LKColors.primary,
                 tooltip: 'Réessayer la vérification',
-                visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               ),
             ] else if (isActive) ...[
               _RecordingPill(
@@ -102,11 +100,10 @@ class RecordingControls extends StatelessWidget {
                   icon: const Icon(Icons.stop_circle_rounded, size: 21),
                   color: LKColors.danger,
                   tooltip: 'Arrêter l\'enregistrement',
-                  visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(
-                    minWidth: 28,
-                    minHeight: 28,
+                    minWidth: 48,
+                    minHeight: 48,
                   ),
                 ),
             ] else if (showActions && controller.canControl) ...[
@@ -117,11 +114,10 @@ class RecordingControls extends StatelessWidget {
                   icon: const Icon(Icons.error_outline_rounded, size: 17),
                   color: LKColors.danger,
                   tooltip: 'Voir la raison de l\'échec',
-                  visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(
-                    minWidth: 24,
-                    minHeight: 28,
+                    minWidth: 48,
+                    minHeight: 48,
                   ),
                 ),
               ],
@@ -142,8 +138,8 @@ class RecordingControls extends StatelessWidget {
                   ),
                 ],
                 child: const SizedBox(
-                  width: 28,
-                  height: 28,
+                  width: 48,
+                  height: 48,
                   child: Icon(
                     Icons.fiber_manual_record_rounded,
                     size: 20,
@@ -298,8 +294,7 @@ class RecordingControls extends StatelessWidget {
         icon: const Icon(Icons.error_outline_rounded, size: 17),
         color: LKColors.danger,
         padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
-        constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       ),
     );
   }

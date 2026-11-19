@@ -6,6 +6,7 @@ class RemoteTelemetry {
   final double? lng;
   final double? altitude;
   final double? bearing;
+  final int? powerWatts;
   final String? role;
   final DateTime receivedAt;
 
@@ -17,6 +18,7 @@ class RemoteTelemetry {
     this.lng,
     this.altitude,
     this.bearing,
+    this.powerWatts,
     this.role,
     required this.receivedAt,
   });
@@ -30,7 +32,8 @@ class RemoteTelemetry {
       lat != null ||
       lng != null ||
       altitude != null ||
-      bearing != null;
+      bearing != null ||
+      powerWatts != null;
 
   /// Compare les valeurs affichables (sans `receivedAt`) pour éviter de
   /// redessiner le HUD quand un tick répète les mêmes mesures.
@@ -43,6 +46,7 @@ class RemoteTelemetry {
       lng == other.lng &&
       altitude == other.altitude &&
       bearing == other.bearing &&
+      powerWatts == other.powerWatts &&
       role == other.role;
 
   factory RemoteTelemetry.fromJson(
@@ -79,6 +83,7 @@ class RemoteTelemetry {
       lng: lng,
       altitude: altitude,
       bearing: bearing,
+      powerWatts: _readInt(inner['power_w'] ?? inner['power_watts']),
       role: inner['role'] is String ? inner['role'] as String : null,
       receivedAt: receivedAt ?? DateTime.now(),
     );

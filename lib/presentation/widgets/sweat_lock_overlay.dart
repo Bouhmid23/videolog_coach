@@ -154,92 +154,118 @@ class _SweatLockOverlayState extends State<SweatLockOverlay>
                 // ── Bouton central / inférieur d'appui long pour déverrouiller ──
                 Align(
                   alignment: Alignment.center,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerDown: (_) => _startHolding(),
-                        onPointerUp: (_) => _cancelHolding(),
-                        onPointerCancel: (_) => _cancelHolding(),
-                        child: AnimatedBuilder(
-                          animation: _holdController,
-                          builder: (context, _) {
-                            final progress = _holdController.value;
-                            return Container(
-                              width: 86,
-                              height: 86,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: sun
-                                    ? Colors.black
-                                    : LKColors.lkDarkBlue.withValues(alpha: 0.9),
-                                border: Border.all(
+                  child: Semantics(
+                    container: true,
+                    excludeSemantics: true,
+                    button: true,
+                    label: 'Écran verrouillé contre la sueur',
+                    hint: 'Maintenir appuyé 1,5 seconde pour déverrouiller',
+                    onLongPress: _completeUnlock,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerDown: (_) => _startHolding(),
+                          onPointerUp: (_) => _cancelHolding(),
+                          onPointerCancel: (_) => _cancelHolding(),
+                          child: AnimatedBuilder(
+                            animation: _holdController,
+                            builder: (context, _) {
+                              final progress = _holdController.value;
+                              return Container(
+                                width: 86,
+                                height: 86,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
                                   color: sun
-                                      ? Colors.white
-                                      : Colors.white.withValues(alpha: 0.3),
-                                  width: 2.0,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: accentColor.withValues(alpha: _isHolding ? 0.45 : 0.15),
-                                    blurRadius: _isHolding ? 20 : 10,
-                                    spreadRadius: _isHolding ? 4 : 1,
+                                      ? Colors.black
+                                      : LKColors.lkDarkBlue.withValues(alpha: 0.9),
+                                  border: Border.all(
+                                    color: sun
+                                        ? Colors.white
+                                        : Colors.white.withValues(alpha: 0.3),
+                                    width: 2.0,
                                   ),
-                                ],
-                              ),
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  // Anneau de progression circulaire
-                                  SizedBox(
-                                    width: 74,
-                                    height: 74,
-                                    child: CircularProgressIndicator(
-                                      value: progress,
-                                      strokeWidth: 4.5,
-                                      valueColor: AlwaysStoppedAnimation<Color>(accentColor),
-                                      backgroundColor: Colors.white.withValues(alpha: 0.15),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: accentColor.withValues(
+                                        alpha: _isHolding ? 0.45 : 0.15,
+                                      ),
+                                      blurRadius: _isHolding ? 20 : 10,
+                                      spreadRadius: _isHolding ? 4 : 1,
                                     ),
-                                  ),
-                                  // Icône cadenas au centre
-                                  Icon(
-                                    _isHolding
-                                        ? Icons.lock_open_rounded
-                                        : Icons.lock_outline_rounded,
-                                    size: 32,
-                                    color: _isHolding ? accentColor : Colors.white,
-                                  ),
-                                ],
+                                  ],
+                                ),
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    // Anneau de progression circulaire
+                                    SizedBox(
+                                      width: 74,
+                                      height: 74,
+                                      child: CircularProgressIndicator(
+                                        value: progress,
+                                        strokeWidth: 4.5,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          accentColor,
+                                        ),
+                                        backgroundColor: Colors.white.withValues(
+                                          alpha: 0.15,
+                                        ),
+                                      ),
+                                    ),
+                                    // Icône cadenas au centre
+                                    Icon(
+                                      _isHolding
+                                          ? Icons.lock_open_rounded
+                                          : Icons.lock_outline_rounded,
+                                      size: 32,
+                                      color: _isHolding
+                                          ? accentColor
+                                          : Colors.white,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        ExcludeSemantics(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: sun
+                                  ? Colors.black
+                                  : Colors.black.withValues(alpha: 0.65),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: sun
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.2),
+                                width: 0.8,
                               ),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: sun ? Colors.black : Colors.black.withValues(alpha: 0.65),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: sun ? Colors.white : Colors.white.withValues(alpha: 0.2),
-                            width: 0.8,
+                            ),
+                            child: Text(
+                              _isHolding
+                                  ? 'Maintenez...'
+                                  : 'Maintenir 1.5s pour déverrouiller',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight:
+                                    sun ? FontWeight.w900 : FontWeight.w700,
+                                fontSize: 12,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
                           ),
                         ),
-                        child: Text(
-                          _isHolding
-                              ? 'Maintenez...'
-                              : 'Maintenir 1.5s pour déverrouiller',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: sun ? FontWeight.w900 : FontWeight.w700,
-                            fontSize: 12,
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],

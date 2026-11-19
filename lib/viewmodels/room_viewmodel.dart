@@ -2,15 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show AppLifecycleState;
 import 'package:flutter/foundation.dart'
-    show
-        ChangeNotifier,
-        ValueListenable,
-        debugPrint,
-        VoidCallback;
+    show ChangeNotifier, ValueListenable, debugPrint;
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:livekit_client/livekit_client.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../core/account_controller.dart';
 import '../core/athletic_haptics.dart';
 import '../core/auth_service.dart';
 import '../core/beep_service.dart';
@@ -49,13 +46,14 @@ class RoomViewModel extends ChangeNotifier {
   late final ParticipantTrackManager _trackManager;
 
   // ── Callbacks & lifecycle ──
-  VoidCallback? _onDisconnected;
+  void Function(DisconnectReason? reason)? _onDisconnected;
   bool _disposed = false;
 
   // ── Room references ──
   Room? _room;
   EventsListener<RoomEvent>? _listener;
   UserRole _role = UserRole.trainee;
+  Map<String, String> _knownParticipantNames = const {};
 
   RoomViewModel({
     BleTelemetryService? bleService,
@@ -161,17 +159,60 @@ class RoomViewModel extends ChangeNotifier {
   RemoteTelemetry? telemetryForParticipant(Participant participant) =>
       _trackManager.telemetryForParticipant(participant);
 
+  /// Résout le nom lisible d'un participant LiveKit en conservant son
+  /// `identity` (UID Firebase ou `uid:web`) comme identifiant technique.
+  String displayNameForParticipant(Participant participant) {
+    final baseUid = baseUidForIdentity(participant.identity);
+    String? fallbackName;
+
+    final account = AccountController.instance;
+    final isLocal =
+        participant is LocalParticipant ||
+        (account.uid.isNotEmpty && baseUid == account.uid);
+    if (isLocal) {
+      final accountName = account.displayName.trim();
+      fallbackName = accountName.isNotEmpty
+          ? accountName
+          : AuthService.instance.displayName;
+    } else if (baseUid.isNotEmpty) {
+      final lobbyName = _knownParticipantNames[baseUid]?.trim();
+      if (lobbyName != null && lobbyName.isNotEmpty) {
+        fallbackName = lobbyName;
+      } else {
+        for (final membership in account.memberships) {
+          for (final coach in membership.coaches) {
+            if (coach.uid == baseUid && coach.name.trim().isNotEmpty) {
+              fallbackName = coach.name.trim();
+              break;
+            }
+          }
+          if (fallbackName != null) break;
+        }
+      }
+    }
+
+    return displayNameFromIdentityAndName(
+      identity: participant.identity,
+      name: participant.name,
+      fallbackName: fallbackName,
+    );
+  }
+
   // ── Initialisation ──
   Future<void> init(
     Room room,
     EventsListener<RoomEvent> listener, {
     UserRole role = UserRole.trainee,
-    VoidCallback? onDisconnected,
+    Map<String, String> knownParticipantNames = const {},
+    void Function(DisconnectReason? reason)? onDisconnected,
   }) async {
     if (_disposed) return;
     _room = room;
     _listener = listener;
     _role = role;
+    _knownParticipantNames = Map<String, String>.unmodifiable(
+      knownParticipantNames,
+    );
     _onDisconnected = onDisconnected;
 
     unawaited(WakelockPlus.enable());
@@ -179,14 +220,15 @@ class RoomViewModel extends ChangeNotifier {
     CallForegroundService.setOnEndCall(() {
       unawaited(room.disconnect());
     });
-    final firebaseName = AuthService.instance.displayName;
+    final localParticipant = room.localParticipant;
+    final foregroundUsername = localParticipant != null
+        ? displayNameForParticipant(localParticipant)
+        : (AccountController.instance.displayName.trim().isNotEmpty
+              ? AccountController.instance.displayName.trim()
+              : AuthService.instance.displayName);
     unawaited(CallForegroundService.start(
       roomName: room.name ?? '',
-      username: firebaseName.isNotEmpty
-          ? firebaseName
-          : displayNameForIdentity(
-              room.localParticipant?.identity ?? '',
-            ),
+      username: foregroundUsername,
     ));
 
     controlsViewModel.init(
@@ -227,7 +269,7 @@ class RoomViewModel extends ChangeNotifier {
         _telemetryCoordinator.stop();
         markers.clear();
         poseViewModel.stop();
-        _onDisconnected?.call();
+        _onDisconnected?.call(event.reason);
       })
       ..on<RoomReconnectingEvent>((_) => _notifySafe())
       ..on<RoomReconnectedEvent>((_) => _notifySafe())
@@ -241,6 +283,7 @@ class RoomViewModel extends ChangeNotifier {
       ..on<TrackUnmutedEvent>((_) => _sortParticipants())
       ..on<ActiveSpeakersChangedEvent>((_) => _sortParticipants())
       ..on<ParticipantConnectedEvent>((event) => _sortParticipants())
+      ..on<ParticipantNameUpdatedEvent>((_) => _notifySafe())
       ..on<ParticipantDisconnectedEvent>((event) {
         final identity = event.participant.identity;
         _trackManager.removeParticipant(identity);

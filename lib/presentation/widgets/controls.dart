@@ -149,21 +149,25 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     bool isActive = false,
     Widget? badge,
   }) {
+    final outdoor = widget.isOutdoorSunMode;
     final circle = Container(
       constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        // Enhanced outdoor/sunlight support: deeper contrast background and crisp border
-        color: LKColors.lkDarkBlue.withValues(alpha: 0.92),
+        color: outdoor
+            ? Colors.black
+            : LKColors.lkDarkBlue.withValues(alpha: 0.92),
         border: Border.all(
-          color: isActive
-              ? LKColors.primary
-              : Colors.white.withValues(alpha: 0.35),
-          width: 1.2,
+          color: outdoor
+              ? (isActive ? const Color(0xFFFFD700) : Colors.white)
+              : (isActive
+                    ? LKColors.primary
+                    : Colors.white.withValues(alpha: 0.35)),
+          width: outdoor ? 1.6 : 1.2,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
+            color: Colors.black.withValues(alpha: outdoor ? 0.65 : 0.35),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),
@@ -194,22 +198,33 @@ class _ControlsWidgetState extends State<ControlsWidget> {
     Widget? badge,
     Widget? iconWidget,
   }) {
+    final outdoor = widget.isOutdoorSunMode;
+    final effectiveIconColor =
+        outdoor &&
+                (iconColor == null ||
+                    iconColor == LKColors.textSecondary ||
+                    iconColor == LKColors.textPrimary)
+            ? Colors.white
+            : iconColor;
     final iconChild =
-        iconWidget ?? Icon(icon, size: iconSize, color: iconColor);
+        iconWidget ?? Icon(icon, size: iconSize, color: effectiveIconColor);
     return AnimatedScale(
       duration: UIUtils.animationDurationFast,
       scale: isActive ? 1.05 : 1.0,
       child: Tooltip(
         message: tooltip,
         decoration: BoxDecoration(
-          color: LKColors.lkDarkBlue,
+          color: outdoor ? Colors.black : LKColors.lkDarkBlue,
           borderRadius: UIUtils.borderRadiusAllSM,
-          border: Border.all(color: LKColors.border, width: 0.5),
+          border: Border.all(
+            color: outdoor ? Colors.white : LKColors.border,
+            width: outdoor ? 1.2 : 0.5,
+          ),
         ),
         textStyle: TextStyle(
-          color: LKColors.textPrimary,
+          color: outdoor ? Colors.white : LKColors.textPrimary,
           fontSize: 11,
-          fontWeight: FontWeight.w500,
+          fontWeight: outdoor ? FontWeight.w700 : FontWeight.w500,
         ),
         padding: UIUtils.paddingHorizontalSM.add(UIUtils.paddingVerticalSM),
         margin: UIUtils.paddingXS,
@@ -236,7 +251,7 @@ class _ControlsWidgetState extends State<ControlsWidget> {
               style: IconButton.styleFrom(
                 minimumSize: const Size(48, 48),
                 tapTargetSize: MaterialTapTargetSize.padded,
-                foregroundColor: LKColors.textPrimary,
+                foregroundColor: outdoor ? Colors.white : LKColors.textPrimary,
                 backgroundColor: Colors.transparent,
                 hoverColor: LKColors.primary.withValues(alpha: 0.2),
                 disabledForegroundColor: LKColors.textHint,
@@ -406,10 +421,14 @@ class _ControlsWidgetState extends State<ControlsWidget> {
           child: PopupMenuButton<String>(
             tooltip: 'Démarrer l\'enregistrement',
             offset: const Offset(0, -140),
-            color: LKColors.lkDarkBlue,
+            color: widget.isOutdoorSunMode ? Colors.black : LKColors.lkDarkBlue,
             surfaceTintColor: Colors.transparent,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             shape: RoundedRectangleBorder(
               borderRadius: UIUtils.borderRadiusAllMD,
+              side: widget.isOutdoorSunMode
+                  ? const BorderSide(color: Colors.white, width: 1.2)
+                  : BorderSide.none,
             ),
             icon: const Icon(
               Icons.fiber_manual_record_rounded,
