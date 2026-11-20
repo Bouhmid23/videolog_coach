@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -362,39 +363,58 @@ class _SessionReplayScreenState extends State<SessionReplayScreen> {
                   ),
                 ),
               )
-            : Column(
-                children: [
-                  _buildVideoSection(detail!),
-                  _buildTelemetryStrip(),
-                  const TabBar(
-                    indicatorColor: LKColors.primary,
-                    labelColor: LKColors.primary,
-                    unselectedLabelColor: LKColors.textSecondary,
-                    tabs: [
-                      Tab(text: 'Marqueurs'),
-                      Tab(text: 'Alertes'),
-                      Tab(text: 'Participants'),
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  // Réserve l'espace pour les contrôles vidéo, la bande télémétrie,
+                  // la TabBar et un minimum de contenu dans la TabBarView, afin
+                  // qu'une vidéo portrait (9:16) ou un écran paysage ne déborde jamais.
+                  final maxVideoHeight = math
+                      .min(
+                        constraints.maxHeight * 0.45,
+                        math.max(120.0, constraints.maxHeight - 220.0),
+                      )
+                      .clamp(120.0, 420.0);
+                  return Column(
+                    children: [
+                      _buildVideoSection(
+                        detail!,
+                        maxVideoHeight: maxVideoHeight,
+                      ),
+                      _buildTelemetryStrip(),
+                      const TabBar(
+                        indicatorColor: LKColors.primary,
+                        labelColor: LKColors.primary,
+                        unselectedLabelColor: LKColors.textSecondary,
+                        tabs: [
+                          Tab(text: 'Marqueurs'),
+                          Tab(text: 'Alertes'),
+                          Tab(text: 'Participants'),
+                        ],
+                      ),
+                      Expanded(
+                        child: TabBarView(
+                          children: [
+                            _buildMarkersTab(),
+                            _buildAlertsTab(),
+                            _buildParticipantsTab(detail),
+                          ],
+                        ),
+                      ),
                     ],
-                  ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        _buildMarkersTab(),
-                        _buildAlertsTab(),
-                        _buildParticipantsTab(detail),
-                      ],
-                    ),
-                  ),
-                ],
+                  );
+                },
               ),
       ),
     );
   }
 
-  Widget _buildVideoSection(SessionDetail detail) {
+  Widget _buildVideoSection(
+    SessionDetail detail, {
+    required double maxVideoHeight,
+  }) {
     if (detail.recordings.isEmpty) {
       return Container(
-        height: 160,
+        height: math.min(160.0, maxVideoHeight),
         width: double.infinity,
         color: LKColors.surface,
         alignment: Alignment.center,
@@ -418,6 +438,9 @@ class _SessionReplayScreenState extends State<SessionReplayScreen> {
 
     final ctrl = _videoCtrl;
     final initialized = ctrl != null && ctrl.value.isInitialized;
+    final rawRatio = initialized ? ctrl.value.aspectRatio : (16 / 9);
+    final aspectRatio =
+        rawRatio.isFinite && rawRatio > 0 ? rawRatio : (16 / 9);
     final maxMs = _totalDuration.inMilliseconds > 0
         ? _totalDuration.inMilliseconds.toDouble()
         : 1.0;
@@ -430,37 +453,48 @@ class _SessionReplayScreenState extends State<SessionReplayScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AspectRatio(
-            aspectRatio: initialized ? ctrl.value.aspectRatio : 16 / 9,
-            child: _videoInitializing
-                ? const Center(child: CircularProgressIndicator())
-                : _videoError != null
-                ? Center(
-                    child: Padding(
-                      padding: UIUtils.paddingLG,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _videoError!,
-                            textAlign: TextAlign.center,
-                            style: UIUtils.bodySmall(
-                              context,
-                            ).copyWith(color: LKColors.danger),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxVideoHeight),
+            child: SizedBox(
+              width: double.infinity,
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: aspectRatio,
+                  child: _videoInitializing
+                      ? const Center(child: CircularProgressIndicator())
+                      : _videoError != null
+                      ? Center(
+                          child: SingleChildScrollView(
+                            padding: UIUtils.paddingLG,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _videoError!,
+                                  textAlign: TextAlign.center,
+                                  style: UIUtils.bodySmall(
+                                    context,
+                                  ).copyWith(color: LKColors.danger),
+                                ),
+                                SizedBox(height: UIUtils.sm),
+                                FilledButton.icon(
+                                  onPressed: _refreshPresignedUrlsAndResume,
+                                  icon: const Icon(
+                                    Icons.refresh_rounded,
+                                    size: 16,
+                                  ),
+                                  label: const Text('Renouveler le lien vidéo'),
+                                ),
+                              ],
+                            ),
                           ),
-                          SizedBox(height: UIUtils.sm),
-                          FilledButton.icon(
-                            onPressed: _refreshPresignedUrlsAndResume,
-                            icon: const Icon(Icons.refresh_rounded, size: 16),
-                            label: const Text('Renouveler le lien vidéo'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : initialized
-                ? VideoPlayer(ctrl)
-                : const SizedBox.shrink(),
+                        )
+                      : initialized
+                      ? VideoPlayer(ctrl)
+                      : const SizedBox.shrink(),
+                ),
+              ),
+            ),
           ),
           Container(
             color: LKColors.surface,

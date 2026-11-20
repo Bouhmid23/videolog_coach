@@ -51,10 +51,6 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
     }
 
     packaging {
@@ -75,7 +71,15 @@ android {
     }
 
     buildTypes {
+        debug {
+            ndk {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

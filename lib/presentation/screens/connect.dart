@@ -21,6 +21,9 @@ import '../../data/user_role.dart';
 import '../../exts.dart';
 import '../../theme.dart';
 import '../utils/ui_utils.dart';
+import '../widgets/connect/connect_cards.dart';
+import '../widgets/connect/connect_media_preview_card.dart';
+import '../widgets/connect/connect_sensors_status_card.dart';
 import '../widgets/room_lobby_card.dart';
 
 // Config POC
@@ -46,8 +49,6 @@ class RoomRouteArgs {
 }
 
 enum _ConnectStage { idle, preparing, connecting, media }
-
-enum _GpsCheckState { checking, ready, searching, disabled, denied }
 
 // -----------------------------------------------------------------------------
 // ConnectPage
@@ -90,7 +91,7 @@ class _ConnectPageState extends State<ConnectPage> {
   // ── État Capteurs BLE & GPS ──
   StreamSubscription<BleStatus>? _bleStatusSub;
   BleStatus _bleStatus = BleStatus.unknown;
-  _GpsCheckState _gpsState = _GpsCheckState.checking;
+  GpsCheckState _gpsState = GpsCheckState.checking;
   double? _gpsAccuracyMeters;
   bool _hasPermanentlyDeniedPermissions = false;
 
@@ -224,7 +225,7 @@ class _ConnectPageState extends State<ConnectPage> {
     }
     if (pending.isEmpty || !mounted) return;
 
-    final shouldRequest = await _showPrePermissionRationaleSheet();
+    final shouldRequest = await showConnectPrePermissionRationaleSheet(context);
     if (shouldRequest != true || !mounted) return;
 
     var anyPermanentlyDenied = permanentlyDenied;
@@ -238,96 +239,6 @@ class _ConnectPageState extends State<ConnectPage> {
     if (mounted) {
       setState(() => _hasPermanentlyDeniedPermissions = anyPermanentlyDenied);
     }
-  }
-
-  Future<bool?> _showPrePermissionRationaleSheet() {
-    return showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SafeArea(
-        child: Container(
-          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          padding: UIUtils.paddingXL,
-          decoration: BoxDecoration(
-            color: LKColors.surfaceElevated,
-            borderRadius: UIUtils.borderRadiusAllXL,
-            border: Border.all(color: LKColors.border),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: LKColors.primary.withValues(alpha: 0.14),
-                      borderRadius: UIUtils.borderRadiusAllMD,
-                    ),
-                    child: const Icon(
-                      Icons.verified_user_outlined,
-                      color: LKColors.primary,
-                    ),
-                  ),
-                  SizedBox(width: UIUtils.md),
-                  Expanded(
-                    child: Text(
-                      'Accès nécessaires avant le direct',
-                      style: UIUtils.titleMedium(ctx),
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: UIUtils.md),
-              Text(
-                'Pour filmer votre séance, diffuser l\'audio au coach et lire vos capteurs sportifs :',
-                style: UIUtils.bodySmall(ctx),
-              ),
-              SizedBox(height: UIUtils.md),
-              const _RationaleItem(
-                icon: Icons.videocam_outlined,
-                title: 'Caméra & Microphone',
-                subtitle: 'Vidéo en direct et échanges audio avec le coach.',
-              ),
-              const SizedBox(height: 10),
-              const _RationaleItem(
-                icon: Icons.bluetooth_connected_rounded,
-                title: 'Bluetooth (BLE)',
-                subtitle: 'Lunettes Engo, ceinture cardio HRM et cadence.',
-              ),
-              const SizedBox(height: 10),
-              const _RationaleItem(
-                icon: Icons.gps_fixed_rounded,
-                title: 'Localisation (en cours d\'utilisation)',
-                subtitle: 'Vitesse GPS extérieure et scan BLE Android.',
-              ),
-              SizedBox(height: UIUtils.xl),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(ctx).pop(false),
-                      child: const Text('Plus tard'),
-                    ),
-                  ),
-                  SizedBox(width: UIUtils.md),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      child: const Text('Autoriser l\'accès'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   // ── Aperçu caméra ──────────────────────────────────────────────────────────
@@ -345,7 +256,7 @@ class _ConnectPageState extends State<ConnectPage> {
         CameraCaptureOptions(
           cameraPosition: _cameraPosition,
           maxFrameRate: 30,
-          params: const VideoParameters(dimensions: VideoDimensions(640, 480)),
+          params: const VideoParameters(dimensions: VideoDimensions(1280, 720)),
         ),
       );
       if (!mounted || !_cameraEnabled || _busy) {
@@ -400,9 +311,7 @@ class _ConnectPageState extends State<ConnectPage> {
         await track.setCameraPosition(nextPosition);
         if (mounted) setState(() {});
         return;
-      } catch (_) {
-        // Recréation de piste en repli si le changement à chaud échoue.
-      }
+      } catch (_) {}
     }
     if (_cameraEnabled) {
       await _startCameraPreview();
@@ -475,11 +384,11 @@ class _ConnectPageState extends State<ConnectPage> {
 
   Future<void> _refreshGpsStatus() async {
     if (!mounted) return;
-    setState(() => _gpsState = _GpsCheckState.checking);
+    setState(() => _gpsState = GpsCheckState.checking);
     try {
       final enabled = await Geolocator.isLocationServiceEnabled();
       if (!enabled) {
-        if (mounted) setState(() => _gpsState = _GpsCheckState.disabled);
+        if (mounted) setState(() => _gpsState = GpsCheckState.disabled);
         return;
       }
       var permission = await Geolocator.checkPermission();
@@ -488,7 +397,7 @@ class _ConnectPageState extends State<ConnectPage> {
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        if (mounted) setState(() => _gpsState = _GpsCheckState.denied);
+        if (mounted) setState(() => _gpsState = GpsCheckState.denied);
         return;
       }
 
@@ -502,14 +411,14 @@ class _ConnectPageState extends State<ConnectPage> {
       if (!mounted) return;
       setState(() {
         _gpsAccuracyMeters = pos?.accuracy;
-        _gpsState = _GpsCheckState.ready;
+        _gpsState = GpsCheckState.ready;
       });
     } on TimeoutException {
       if (!mounted) return;
-      setState(() => _gpsState = _GpsCheckState.searching);
+      setState(() => _gpsState = GpsCheckState.searching);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _gpsState = _GpsCheckState.searching);
+      setState(() => _gpsState = GpsCheckState.searching);
     }
   }
 
@@ -525,14 +434,12 @@ class _ConnectPageState extends State<ConnectPage> {
       _stage = _ConnectStage.preparing;
     });
 
-    // Libère la caméra et le micro de prévisualisation avant que WebRTC ne les ouvre.
     await _stopPreviewMedia();
 
     Room? room;
     EventsListener<RoomEvent>? listener;
 
     try {
-      // L'identité LiveKit est dérivée du UID Firebase par le serveur.
       final tokenResult = await _fetchToken();
 
       if (mounted) setState(() => _stage = _ConnectStage.connecting);
@@ -544,8 +451,6 @@ class _ConnectPageState extends State<ConnectPage> {
         await room.prepareConnection(tokenResult.url, tokenResult.token);
         await room.connect(tokenResult.url, tokenResult.token);
       } catch (_) {
-        // Une tentative de connexion peut consommer ou expirer le JWT.
-        // Redemander un token avant l'unique nouvelle tentative.
         await room.disconnect();
         final refreshed = await _fetchToken();
         await room.prepareConnection(refreshed.url, refreshed.token);
@@ -554,7 +459,6 @@ class _ConnectPageState extends State<ConnectPage> {
 
       if (mounted) setState(() => _stage = _ConnectStage.media);
 
-      // Publie micro et caméra selon les choix validés sur l'aperçu.
       await _publishDefaultDevices(room);
 
       if (!ctx.mounted) {
@@ -642,7 +546,7 @@ class _ConnectPageState extends State<ConnectPage> {
         defaultCameraCaptureOptions: CameraCaptureOptions(
           cameraPosition: _cameraPosition,
           maxFrameRate: 30,
-          params: const VideoParameters(dimensions: VideoDimensions(640, 480)),
+          params: const VideoParameters(dimensions: VideoDimensions(1280, 720)),
         ),
         defaultAudioPublishOptions: const AudioPublishOptions(
           name: 'custom_audio_track_name',
@@ -678,7 +582,7 @@ class _ConnectPageState extends State<ConnectPage> {
             cameraPosition: _cameraPosition,
             maxFrameRate: 30,
             params: const VideoParameters(
-              dimensions: VideoDimensions(640, 480),
+              dimensions: VideoDimensions(1280, 720),
             ),
           ),
         );
@@ -719,10 +623,15 @@ class _ConnectPageState extends State<ConnectPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _buildHeroCard(context),
+                        ConnectHeroCard(
+                          title: _lobby?.displayTitle ??
+                              widget.room?.displayTitle ??
+                              widget.roomName,
+                          orgName: _lobby?.orgName,
+                        ),
                         if (_hasPermanentlyDeniedPermissions) ...[
                           SizedBox(height: UIUtils.md),
-                          _buildPermissionSettingsBanner(context),
+                          const ConnectPermissionSettingsBanner(),
                         ],
                         SizedBox(height: UIUtils.md),
                         RoomLobbyCard(
@@ -736,943 +645,49 @@ class _ConnectPageState extends State<ConnectPage> {
                           },
                         ),
                         SizedBox(height: UIUtils.md),
-                        _buildMediaPreviewCard(context),
+                        ConnectMediaPreviewCard(
+                          previewVideoTrack: _previewVideoTrack,
+                          previewInitializing: _previewInitializing,
+                          cameraEnabled: _cameraEnabled,
+                          micEnabled: _micEnabled,
+                          busy: _busy,
+                          micLevelListenable: _micLevel,
+                          onToggleMic: _togglePreviewMic,
+                          onToggleCamera: _togglePreviewCamera,
+                          onSwitchCamera: _switchPreviewCamera,
+                        ),
                         SizedBox(height: UIUtils.md),
-                        _buildSensorsStatusCard(context),
+                        ConnectSensorsStatusCard(
+                          bleStatus: _bleStatus,
+                          gpsState: _gpsState,
+                          gpsAccuracyMeters: _gpsAccuracyMeters,
+                          onRefresh: () {
+                            unawaited(HapticFeedback.lightImpact());
+                            _startBleStatusMonitor();
+                            unawaited(_refreshGpsStatus());
+                          },
+                        ),
                         SizedBox(height: UIUtils.md),
-                        _buildAccountCard(context),
+                        ConnectAccountCard(
+                          initials: _initials,
+                          displayLabel: _accountDisplayLabel,
+                        ),
                       ],
                     ),
                   ),
                 ),
               ),
             ),
-            _buildBottomBar(context),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── Mini Aperçu Caméra + Jauge Micro ──────────────────────────────────────
-  Widget _buildMediaPreviewCard(BuildContext context) {
-    final previewTrack = _previewVideoTrack;
-
-    return Container(
-      padding: UIUtils.paddingLG,
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllLG,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.center_focus_strong_rounded,
-                size: 18,
-                color: LKColors.primary,
-              ),
-              SizedBox(width: UIUtils.sm),
-              Expanded(
-                child: Text(
-                  'Aperçu cadrage & audio',
-                  style: UIUtils.labelLarge(
-                    context,
-                  ).copyWith(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: UIUtils.md),
-          ClipRRect(
-            borderRadius: UIUtils.borderRadiusAllMD,
-            child: SizedBox(
-              height: 210,
-              width: double.infinity,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Container(color: LKColors.background),
-                  if (_cameraEnabled && previewTrack != null)
-                    RepaintBoundary(
-                      child: VideoTrackRenderer(
-                        previewTrack,
-                        fit: VideoViewFit.cover,
-                        renderMode: VideoRenderMode.auto,
-                      ),
-                    )
-                  else if (_previewInitializing)
-                    const Center(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          LKColors.primary,
-                        ),
-                      ),
-                    )
-                  else
-                    Center(
-                      child: Icon(
-                        _cameraEnabled
-                            ? Icons.videocam_rounded
-                            : Icons.videocam_off_rounded,
-                        size: 40,
-                        color: LKColors.textHint,
-                      ),
-                    ),
-                  // Repères discrets de cadrage (tiers) lorsque la caméra est active
-                  if (_cameraEnabled && previewTrack != null)
-                    const IgnorePointer(child: _FramingGridOverlay()),
-
-                  // Boutons rapides : Caméra on/off, Switch avant/arrière, Micro on/off
-                  Positioned(
-                      left: UIUtils.sm,
-                      right: UIUtils.sm,
-                      bottom: UIUtils.sm,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.62),
-                          borderRadius: UIUtils.borderRadiusAllFull,
-                        ),
-                        child: Text(
-                          'Vérifiez votre recul pour la détection de posture',
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
-                          style: UIUtils.bodySmall(context).copyWith(
-                            color: Colors.white.withValues(alpha: 0.9),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                  ),
-                  Positioned(
-                    //left: UIUtils.sm,
-                    right: UIUtils.sm,
-                    top: UIUtils.sm,
-                    child:
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildPreviewIconButton(
-                              icon: _micEnabled
-                                  ? Icons.mic_rounded
-                                  : Icons.mic_off_rounded,
-                              color: _micEnabled
-                                  ? Colors.white
-                                  : LKColors.danger,
-                              tooltip: _micEnabled
-                                  ? 'Couper le micro'
-                                  : 'Activer le micro',
-                              onTap: _busy ? null : _togglePreviewMic,
-                            ),
-                            const SizedBox(height: 3),
-                            _buildPreviewIconButton(
-                              icon: _cameraEnabled
-                                  ? Icons.videocam_rounded
-                                  : Icons.videocam_off_rounded,
-                              color: _cameraEnabled
-                                  ? Colors.white
-                                  : LKColors.danger,
-                              tooltip: _cameraEnabled
-                                  ? 'Couper la caméra'
-                                  : 'Activer la caméra',
-                              onTap: _busy ? null : _togglePreviewCamera,
-                            ),
-                            const SizedBox(height: 3),
-                            _buildPreviewIconButton(
-                              icon: Icons.cameraswitch_rounded,
-                              color: Colors.white,
-                              tooltip: 'Basculer avant / arrière',
-                              onTap: _busy ? null : _switchPreviewCamera,
-                            ),
-                          ],
-                        ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          SizedBox(height: UIUtils.md),
-          // Jauge niveau microphone isolée par ValueListenableBuilder
-          ValueListenableBuilder<double>(
-            valueListenable: _micLevel,
-            builder: (context, level, _) => _buildMicMeterRow(context, level),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPreviewIconButton({
-    required IconData icon,
-    required Color color,
-    required String tooltip,
-    required VoidCallback? onTap,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: SizedBox(
-            width: 48,
-            height: 48,
-            child: Center(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.68),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.22),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(icon, size: 18, color: color),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMicMeterRow(BuildContext context, double level) {
-    const int segments = 14;
-    final int activeSegments = _micEnabled ? (level * segments).round() : 0;
-    final pct = (level * 100).round();
-
-    return Semantics(
-      label: _micEnabled
-          ? 'Niveau du microphone : $pct pour cent'
-          : 'Microphone coupé',
-      child: ExcludeSemantics(
-        child: Row(
-          children: [
-            Icon(
-              _micEnabled ? Icons.graphic_eq_rounded : Icons.mic_off_rounded,
-              size: 18,
-              color: _micEnabled ? LKColors.secondary : LKColors.danger,
-            ),
-            SizedBox(width: UIUtils.sm),
-            Text(
-              _micEnabled ? 'Micro' : 'Micro coupé',
-              style: UIUtils.bodySmall(context).copyWith(
-                fontWeight: FontWeight.w600,
-                color: _micEnabled ? LKColors.textPrimary : LKColors.danger,
-              ),
-            ),
-            SizedBox(width: UIUtils.md),
-            Expanded(
-              child: SizedBox(
-                height: 12,
-                child: Row(
-                  children: List.generate(segments, (index) {
-                    final isLit = index < activeSegments;
-                    final Color barColor = index >= segments - 2
-                        ? LKColors.danger
-                        : index >= segments - 5
-                        ? LKColors.warning
-                        : LKColors.success;
-                    return Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                        decoration: BoxDecoration(
-                          color: isLit
-                              ? barColor
-                              : LKColors.border.withValues(alpha: 0.55),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-            ),
-            SizedBox(width: UIUtils.sm),
-            SizedBox(
-              width: 38,
-              child: Text(
-                _micEnabled ? '$pct%' : 'OFF',
-                textAlign: TextAlign.right,
-                style: UIUtils.bodySmall(context).copyWith(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: _micEnabled ? LKColors.textSecondary : LKColors.danger,
-                ),
-              ),
+            ConnectBottomBar(
+              busy: _busy,
+              stageLabel: _stageLabel,
+              onConnect: (_busy || (_lobby != null && !_lobby!.accessible))
+                  ? null
+                  : () => _connect(context),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  // ── État Capteurs BLE & GPS ────────────────────────────────────────────────
-  Widget _buildSensorsStatusCard(BuildContext context) {
-    final (bleLabel, bleSubtitle, bleColor, bleIcon) = _bleStatusPresentation();
-    final (gpsLabel, gpsSubtitle, gpsColor, gpsIcon) = _gpsStatusPresentation();
-
-    return Container(
-      padding: UIUtils.paddingLG,
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllLG,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.sensors_rounded,
-                size: 18,
-                color: LKColors.secondary,
-              ),
-              SizedBox(width: UIUtils.sm),
-              Expanded(
-                child: Text(
-                  'État des capteurs (BLE & GPS)',
-                  style: UIUtils.labelLarge(
-                    context,
-                  ).copyWith(fontWeight: FontWeight.w700),
-                ),
-              ),
-              IconButton(
-                onPressed: () {
-                  unawaited(HapticFeedback.lightImpact());
-                  _startBleStatusMonitor();
-                  unawaited(_refreshGpsStatus());
-                },
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                color: LKColors.textSecondary,
-                tooltip: 'Actualiser l\'état des capteurs',
-                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-              ),
-            ],
-          ),
-          SizedBox(height: UIUtils.sm),
-          _buildSensorRow(
-            context,
-            icon: bleIcon,
-            title: 'Bluetooth Low Energy (BLE)',
-            subtitle: bleSubtitle,
-            badgeLabel: bleLabel,
-            color: bleColor,
-          ),
-          _buildConfigDivider(),
-          _buildSensorRow(
-            context,
-            icon: gpsIcon,
-            title: 'Géolocalisation GPS',
-            subtitle: gpsSubtitle,
-            badgeLabel: gpsLabel,
-            color: gpsColor,
-          ),
-        ],
-      ),
-    );
-  }
-
-  (String, String, Color, IconData) _bleStatusPresentation() {
-    switch (_bleStatus) {
-      case BleStatus.ready:
-        return (
-          'Prêt',
-          'Prêt pour lunettes Engo, cardio HRM et cadence',
-          LKColors.success,
-          Icons.bluetooth_connected_rounded,
-        );
-      case BleStatus.poweredOff:
-        return (
-          'Désactivé',
-          'Activez le Bluetooth pour connecter vos capteurs',
-          LKColors.danger,
-          Icons.bluetooth_disabled_rounded,
-        );
-      case BleStatus.unauthorized:
-        return (
-          'Permission',
-          'Autorisation Bluetooth requise dans les réglages',
-          LKColors.warning,
-          Icons.bluetooth_searching_rounded,
-        );
-      case BleStatus.locationServicesDisabled:
-        return (
-          'Localisation off',
-          'La localisation est requise pour le scan BLE Android',
-          LKColors.warning,
-          Icons.location_disabled_rounded,
-        );
-      case BleStatus.unsupported:
-        return (
-          'Non supporté',
-          'Bluetooth Low Energy non disponible sur cet appareil',
-          LKColors.textHint,
-          Icons.bluetooth_disabled_rounded,
-        );
-      case BleStatus.unknown:
-        return (
-          'Vérification…',
-          'Initialisation de l\'adaptateur Bluetooth…',
-          LKColors.secondary,
-          Icons.bluetooth_rounded,
-        );
-    }
-  }
-
-  (String, String, Color, IconData) _gpsStatusPresentation() {
-    switch (_gpsState) {
-      case _GpsCheckState.ready:
-        final acc = _gpsAccuracyMeters != null
-            ? ' (±${_gpsAccuracyMeters!.round()} m)'
-            : '';
-        return (
-          'Signal OK$acc',
-          'Vitesse et télémétrie extérieure disponibles',
-          LKColors.success,
-          Icons.gps_fixed_rounded,
-        );
-      case _GpsCheckState.searching:
-        return (
-          'Recherche…',
-          'GPS actif · Acquisition des satellites en cours',
-          LKColors.secondary,
-          Icons.gps_not_fixed_rounded,
-        );
-      case _GpsCheckState.disabled:
-        return (
-          'Désactivé',
-          'Activez la localisation pour la vitesse GPS',
-          LKColors.danger,
-          Icons.location_disabled_rounded,
-        );
-      case _GpsCheckState.denied:
-        return (
-          'Permission',
-          'Autorisation de localisation refusée',
-          LKColors.warning,
-          Icons.location_off_rounded,
-        );
-      case _GpsCheckState.checking:
-        return (
-          'Vérification…',
-          'Test du capteur GPS…',
-          LKColors.secondary,
-          Icons.my_location_rounded,
-        );
-    }
-  }
-
-  Widget _buildPermissionSettingsBanner(BuildContext context) {
-    return Container(
-      padding: UIUtils.paddingMD,
-      decoration: BoxDecoration(
-        color: LKColors.warning.withValues(alpha: 0.12),
-        borderRadius: UIUtils.borderRadiusAllLG,
-        border: Border.all(color: LKColors.warning.withValues(alpha: 0.45)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: LKColors.warning),
-          SizedBox(width: UIUtils.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Autorisations bloquées',
-                  style: UIUtils.titleSmall(context).copyWith(
-                    color: LKColors.warning,
-                  ),
-                ),
-                Text(
-                  'Certaines permissions caméra, micro ou capteurs sont refusées dans les réglages.',
-                  style: UIUtils.bodySmall(context),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(width: UIUtils.sm),
-          TextButton(
-            onPressed: openAppSettings,
-            child: const Text('Réglages'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSensorRow(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required String badgeLabel,
-    required Color color,
-  }) {
-    return Semantics(
-      label: '$title : $badgeLabel. $subtitle',
-      child: ExcludeSemantics(
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: UIUtils.borderRadiusAllSM,
-              ),
-              child: Icon(icon, size: 18, color: color),
-            ),
-            SizedBox(width: UIUtils.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: UIUtils.bodyMedium(
-                      context,
-                    ).copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    subtitle,
-                    style: UIUtils.bodySmall(
-                      context,
-                    ).copyWith(color: LKColors.textHint, fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(width: UIUtils.sm),
-            _buildPill(
-              context,
-              icon: Icons.circle,
-              label: badgeLabel,
-              color: color,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeroCard(BuildContext context) {
-
-    return Container(
-      padding: UIUtils.paddingXL,
-      decoration: BoxDecoration(
-        borderRadius: UIUtils.borderRadiusAllXL,
-        border: Border.all(
-          color: LKColors.primary.withValues(alpha: 0.28),
-          width: 0.5,
-        ),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            LKColors.primary.withValues(alpha: 0.2),
-            LKColors.secondary.withValues(alpha: 0.07),
-            LKColors.surface,
-          ],
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: LKColors.primary.withValues(alpha: 0.16),
-                  borderRadius: UIUtils.borderRadiusAllLG,
-                ),
-                child: const Icon(
-                  Icons.videocam_rounded,
-                  color: LKColors.primary,
-                  size: 25,
-                ),
-              ),
-              SizedBox(width: UIUtils.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'SESSION SÉLECTIONNÉE',
-                      style: UIUtils.bodySmall(context).copyWith(
-                        color: LKColors.textHint,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      _lobby?.displayTitle ??
-                          widget.room?.displayTitle ??
-                          widget.roomName,
-                      style: UIUtils.titleLarge(
-                        context,
-                      ).copyWith(fontSize: 22, fontWeight: FontWeight.w700),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (_lobby?.orgName != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        _lobby!.orgName!,
-                        style: UIUtils.bodySmall(context).copyWith(
-                          color: LKColors.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPill(
-    BuildContext context, {
-    required IconData icon,
-    required String label,
-    required Color color,
-  }) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: UIUtils.sm, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: UIUtils.borderRadiusAllFull,
-        border: Border.all(color: color.withValues(alpha: 0.22), width: 0.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: color),
-          SizedBox(width: 5),
-          Text(
-            label,
-            style: UIUtils.bodySmall(
-              context,
-            ).copyWith(color: color, fontSize: 10, fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAccountCard(BuildContext context) {
-    return Container(
-      padding: UIUtils.paddingLG,
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllLG,
-        border: Border.all(color: LKColors.border, width: 0.5),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: LKColors.primary.withValues(alpha: 0.14),
-              borderRadius: UIUtils.borderRadiusAllFull,
-            ),
-            child: Text(
-              _initials,
-              style: UIUtils.labelLarge(
-                context,
-              ).copyWith(color: LKColors.primary, fontWeight: FontWeight.w700),
-            ),
-          ),
-          SizedBox(width: UIUtils.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _accountDisplayLabel,
-                  style: UIUtils.bodyMedium(
-                    context,
-                  ).copyWith(fontWeight: FontWeight.w600),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                SizedBox(height: 2),
-                Row(
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: LKColors.success,
-                        borderRadius: UIUtils.borderRadiusAllFull,
-                      ),
-                    ),
-                    SizedBox(width: 5),
-                    Text(
-                      'Compte authentifié',
-                      style: UIUtils.bodySmall(
-                        context,
-                      ).copyWith(color: LKColors.textHint, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Icon(
-            Icons.verified_user_rounded,
-            size: 20,
-            color: LKColors.success.withValues(alpha: 0.8),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConfigDivider() {
-    return Container(
-      height: 0.5,
-      margin: EdgeInsets.symmetric(vertical: UIUtils.sm),
-      color: LKColors.border.withValues(alpha: 0.7),
-    );
-  }
-
-  Widget _buildBottomBar(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-        UIUtils.lg,
-        UIUtils.md,
-        UIUtils.lg,
-        UIUtils.lg,
-      ),
-      decoration: BoxDecoration(
-        color: LKColors.surfaceElevated,
-        border: Border(
-          top: BorderSide(
-            color: LKColors.border.withValues(alpha: 0.7),
-            width: 0.5,
-          ),
-        ),
-      ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              AnimatedSwitcher(
-                duration: UIUtils.animationDuration,
-                child: _busy
-                    ? ClipRRect(
-                        key: const ValueKey('progress'),
-                        borderRadius: UIUtils.borderRadiusAllFull,
-                        child: const LinearProgressIndicator(
-                          minHeight: 3,
-                          backgroundColor: LKColors.border,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            LKColors.primary,
-                          ),
-                        ),
-                      )
-                    : const SizedBox(
-                        key: ValueKey('progress-placeholder'),
-                        height: 3,
-                      ),
-              ),
-              SizedBox(height: UIUtils.md),
-              SizedBox(
-                height: 52,
-                child: FilledButton(
-                  onPressed:
-                      (_busy || (_lobby != null && !_lobby!.accessible))
-                      ? null
-                      : () => _connect(context),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: LKColors.primary,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: LKColors.primary.withValues(
-                      alpha: 0.4,
-                    ),
-                    disabledForegroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: UIUtils.borderRadiusAllMD,
-                    ),
-                    elevation: 0,
-                  ),
-                  child: AnimatedSwitcher(
-                    duration: UIUtils.animationDuration,
-                    child: _busy
-                        ? Row(
-                            key: const ValueKey('connecting'),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              SizedBox(width: UIUtils.md),
-                              Text(
-                                _stageLabel,
-                                style: UIUtils.labelLarge(context).copyWith(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.4,
-                                ),
-                              ),
-                            ],
-                          )
-                        : Row(
-                            key: const ValueKey('idle'),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.login_rounded,
-                                size: 20,
-                                color: Colors.white,
-                              ),
-                              SizedBox(width: UIUtils.sm),
-                              Text(
-                                _stageLabel,
-                                style: UIUtils.labelLarge(context).copyWith(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.4,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                ),
-              ),
-              SizedBox(height: UIUtils.sm),
-              Text(
-                _busy
-                    ? 'Merci de patienter pendant la connexion.'
-                    : 'Cadrage et réglages audio/caméra appliqués dès l\'entrée en session.',
-                textAlign: TextAlign.center,
-                style: UIUtils.bodySmall(
-                  context,
-                ).copyWith(color: LKColors.textHint, fontSize: 10),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Grille de cadrage discrète (règle des tiers) pour aider le sportif à se positionner.
-class _FramingGridOverlay extends StatelessWidget {
-  const _FramingGridOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: _FramingGridPainter());
-  }
-}
-
-class _FramingGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.14)
-      ..strokeWidth = 0.8;
-
-    final thirdW = size.width / 3;
-    final thirdH = size.height / 3;
-
-    canvas.drawLine(Offset(thirdW, 0), Offset(thirdW, size.height), paint);
-    canvas.drawLine(
-      Offset(thirdW * 2, 0),
-      Offset(thirdW * 2, size.height),
-      paint,
-    );
-    canvas.drawLine(Offset(0, thirdH), Offset(size.width, thirdH), paint);
-    canvas.drawLine(
-      Offset(0, thirdH * 2),
-      Offset(size.width, thirdH * 2),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _RationaleItem extends StatelessWidget {
-  const _RationaleItem({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: LKColors.surface,
-            borderRadius: UIUtils.borderRadiusAllSM,
-            border: Border.all(color: LKColors.border),
-          ),
-          child: Icon(icon, size: 18, color: LKColors.primary),
-        ),
-        SizedBox(width: UIUtils.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: UIUtils.bodyMedium(context).copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              Text(subtitle, style: UIUtils.bodySmall(context)),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

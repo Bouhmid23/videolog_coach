@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'dart:ui' show Size;
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 
 /// Chemin du JPEG capturé et instant où l'image a été prise. Le timestamp
 /// reste attaché à l'image : la capture N+1 tourne pendant la détection N.

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' show Size;
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 import 'package:livekit_client/livekit_client.dart';
 import '../../core/gravity_service.dart';
 import '../../data/posture_codec.dart';
@@ -55,6 +55,7 @@ class PosePublisher {
     required Size frameSize,
     required DateTime capturedAt,
     required String deviceModel,
+    String modelLabel = 'lite',
     int? captureMicros,
     int? detectMicros,
     int? inferMicros,
@@ -78,6 +79,7 @@ class PosePublisher {
       bytes: bytes,
       kind: 'posture',
       deviceModel: deviceModel,
+      modelLabel: modelLabel,
       frameSeq: seq,
       frameSize: frameSize,
       captureMicros: captureMicros,
@@ -108,6 +110,7 @@ class PosePublisher {
     required Uint8List bytes,
     required String kind,
     required String deviceModel,
+    String modelLabel = 'lite',
     int? frameSeq,
     Size? frameSize,
     int? captureMicros,
@@ -133,7 +136,7 @@ class PosePublisher {
             _publishSamples++;
             if (kDebugMode && frameSeq != null && frameSize != null) {
               debugPrint(
-                '📊 pose-frame seq=$frameSeq model=lite device=$deviceModel '
+                '📊 pose-frame seq=$frameSeq model=$modelLabel device=$deviceModel '
                 'resolution=${frameSize.width.toInt()}x${frameSize.height.toInt()} '
                 'capture=${(captureMicros ?? 0) / 1000.0}ms '
                 'detect=${(detectMicros ?? 0) / 1000.0}ms '

@@ -25,13 +25,13 @@ n'est déclarée, bien qu'une partie du code contienne des branches de compatibi
 | Framework UI | Flutter (SDK Dart `^3.10.3`), Material 3, thème sombre custom |
 | Temps réel audio/vidéo | LiveKit (`livekit_client ^2.6.4`) + WebRTC |
 | Bluetooth basse consommée | `flutter_reactive_ble ^5.4.2` |
-| Détection de pose (IA locale) | MediaPipe via `flutter_pose_detection ^0.4.0` (détecteur GPU) |
+| Détection de pose (IA locale) | MediaPipe Tasks Vision via `mediapipe_vision ^0.1.3` (CPU / GPU, modèle `lite` ou `full`) |
 | Positionnement | `geolocator ^13.0.2` |
-| Authentification | Firebase Auth (`firebase_core`, `firebase_auth`) — email / mot de passe |
-| Requêtes HTTP | `http ^1.6.0` (token, rooms, enregistrement) |
-| Persistance locale | `shared_preferences` (préférences de pré-connexion) |
+| Authentification | Firebase Auth (`firebase_core`, `firebase_auth`) — email / mot de passe / Google Sign-In |
+| Requêtes HTTP | `http ^1.6.0` (API modulaire `lib/core/api/` : rooms, account, training, directory) |
+| Persistance locale | `shared_preferences` (préférences de pré-connexion, file offline) |
 | Permissions | `permission_handler ^12.0.1` |
-| Gestion d'état | `ChangeNotifier` (pattern observateur) — le package `provider` est déclaré mais non utilisé |
+| Gestion d'état | `ChangeNotifier` (pattern observateur) |
 | Navigation | `go_router ^14.8.1` |
 | Verrouillage écran | `wakelock_plus` |
 | Polices / rendu | `google_fonts`, `flutter_svg`, `dropdown_button2` |
@@ -47,22 +47,23 @@ Le code source est organisé en quatre couches :
 
 ```
 lib/
-├── core/            → SERVICES (accès aux périphériques et aux protocoles)
+├── core/            → SERVICES (accès aux périphériques, API et protocoles)
+│   ├── api_service.dart           client HTTP central + mixins par domaine (lib/core/api/)
 │   ├── ble_telemetry_service      protocole lunettes ActiveLook
 │   ├── ble_sensor_service         capteurs cardio/cadence BLE
-│   ├── posture_detection_service  lissage des landmarks
-│   ├── api_service                (orpheLIN) obtention de token
-│   └── livekit_service            (orpheLIN) encapsulation de session
-├── data/            → MODÈLES DE DONNÉES DISTANTES
+│   ├── posture_detection_service  lissage EMA des landmarks (α = 0.5)
+│   └── thermal_service            surveillance thermique Android/iOS
+├── data/            → MODÈLES DE DONNÉES
 │   ├── remote_telemetry           télémétrie reçue d'un pair
-│   └── remote_posture             posture reçue d'un pair
+│   ├── remote_posture             posture reçue d'un pair (codec v7)
+│   └── account / training / directory / session models
 ├── viewmodels/      → ORCHESTRATION / ÉTAT
-│   ├── room_viewmodel             orchestrateur central de la session
+│   ├── room_viewmodel             orchestrateur central + coordinateurs (lib/viewmodels/room/)
 │   ├── controls_viewmodel         contrôles média + BLE
-│   └── pose_detection_viewmodel   détection → classification → diffusion
+│   └── pose_detection_viewmodel   détection → throttling thermique → classification → diffusion (lib/viewmodels/pose/)
 └── presentation/    → ÉCRANS ET COMPOSANTS D'UI
-    ├── screens/                   login, rooms, connect, room
-    └── widgets/                   contrôles, participant, carte, squelette…
+    ├── screens/                   login, rooms, connect, room, directory, athlete_home…
+    └── widgets/                   contrôles, participant, carte, squelette, cartes modulaires…
 ```
 
 ### Règle de séparation pour le portage
@@ -148,14 +149,10 @@ Un service *foreground* est déclaré avec `foregroundServiceType="camera|microp
 - Descriptions de permissions en français : caméra, microphone, Bluetooth
   (`NSBluetoothAlwaysUsageDescription`), localisation (quand en usage + toujours).
 
-## 8. État du dépôt et dettes techniques
+## 8. État du dépôt et qualité
 
-- **Tests** : 5 tests de modèles (`RecordingState`, `MobileRoom`) ; pas encore de test UI.
-- **README** : template Flutter par défaut (non personnalisé).
-- **Code mort** à ne pas porter (détails dans `08-kmp-porting.md`) :
-  - `core/livekit_service.dart`
-  - `widgets/smoothed_pose_avatar.dart`, `widgets/sound_waveform.dart`, `widgets/text_field.dart`
-- **Bug connu** : `PoseAnimationController` instancie un contrôleur d'animation avec un
-  `vsync` invalide (non utilisé en l'état).
-- **Dépendances déclarées mais inutilisées** : `provider`, `flutter_svg`,
-  `flutter_background`, `flutter_foreground_task`, `camera`, `o3d`.
+- **Tests** : 32 fichiers de tests unitaires et widgets couvrant les modèles, le pipeline de posture (`pose_submodules_test.dart`, `adaptive_throttling_test.dart`, `thermal_alert_test.dart`), les coordinateurs LiveKit (`room_coordinators_test.dart`), l'API, la télémétrie, l'annuaire et les écrans principaux.
+- **Nettoyage effectué (Lots A–D)** :
+  - Les anciens fichiers morts (`livekit_service.dart`, `smoothed_pose_avatar.dart`, `sound_waveform.dart`, `text_field.dart`, `pose_animation.dart`) et le fork local `packages/flutter_pose_detection` ont été supprimés.
+  - Les dépendances inutilisées (`provider`, etc.) ont été retirées de `pubspec.yaml`.
+  - La régulation thermique (`ThermalService`) pilote désormais automatiquement la cadence d'inférence (`30 → 15 → 10 FPS`) et le repli du modèle (`full → lite`).

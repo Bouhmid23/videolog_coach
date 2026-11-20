@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'dart:ui' show Offset, Size;
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 import '../../data/remote_posture.dart';
 
 /// Classification géométrique des postures (debout, assis, allongé)

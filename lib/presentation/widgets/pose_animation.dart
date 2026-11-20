@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 
 import '../../theme.dart';
 
@@ -415,14 +415,6 @@ class PoseAnimationController extends ChangeNotifier {
   void dispose() {
     _controller.dispose();
     super.dispose();
-  }
-}
-
-/// État pour l'animation (nécessaire pour le vsync)
-class AnimatedPoseState extends State<StatefulWidget> {
-  @override
-  Widget build(BuildContext context) {
-    return Container();
   }
 }
 

@@ -2,52 +2,59 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart'
     show
         ChangeNotifier,
+        ValueListenable,
         ValueNotifier,
         TargetPlatform,
         defaultTargetPlatform,
         kDebugMode,
         kIsWeb,
         debugPrint;
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../core/gravity_service.dart';
+import '../core/mediapipe_pose_detector.dart';
 import '../core/posture_detection_service.dart';
 import '../core/thermal_service.dart';
+import '../data/pose_models.dart';
 import '../data/remote_posture.dart';
 import 'pose/motion_detector.dart';
 import 'pose/pose_frame.dart';
 import 'pose/pose_publisher.dart';
 import 'pose/posture_classifier.dart';
 
+export '../core/mediapipe_pose_detector.dart' show PoseModelVariant;
 export 'pose/pose_frame.dart';
 
-/// Orchestrateur de détection posturale :
-/// - Supervise le pipeline matériel Zéro-Copie WebRTC et son repli Capture.
+/// Orchestrateur de détection posturale (branche POC `mediapipe_vision`) :
+/// - Capture les frames de la piste caméra LiveKit (prefetch N+1 pendant N).
+/// - Exécute l'inférence via le package officiel `mediapipe_vision` (switch `lite` / `full`).
 /// - Anime l'overlay local via [frameNotifier].
 /// - Classifie et stabilise la posture en temps réel.
 /// - Émet le flux binaire compact v7 via [PosePublisher].
 class PoseDetectionViewModel extends ChangeNotifier {
+  PoseDetectionViewModel({
+    MediaPipeVisionPoseDetector? poseDetector,
+    ThermalService? thermalService,
+  })  : _poseDetector = poseDetector ?? MediaPipeVisionPoseDetector(),
+        _thermalService = thermalService ?? ThermalService.instance,
+        _modelVariantNotifier = ValueNotifier<PoseModelVariant>(
+          (poseDetector ?? MediaPipeVisionPoseDetector()).modelVariant,
+        ) {
+    _thermalService.thermalInfo.addListener(_onThermalChanged);
+    _applyThermalState(_thermalService.thermalInfo.value, notify: false);
+  }
+
   final PostureSmoothing _smoothing = PostureSmoothing(alpha: 0.5);
+  final MediaPipeVisionPoseDetector _poseDetector;
+  final ThermalService _thermalService;
+  final ValueNotifier<PoseModelVariant> _modelVariantNotifier;
 
-  final NpuPoseDetector _poseDetector = NpuPoseDetector(
-    config: PoseDetectorConfig.realtime().copyWith(
-      maxPoses: 1,
-      minConfidence: 0.85,
-      minPoseDetectionConfidence: 0.85,
-      minPosePresenceConfidence: 0.85,
-      minTrackingConfidence: 0.8,
-      enableZEstimation: true,
-      preferredAcceleration: AccelerationMode.gpu,
-    ),
-  );
-
-  static const Size _fallbackSize = Size(480, 640);
+  static const Size _fallbackSize = Size(720, 1280);
 
   // Sub-modules
   final MotionDetector _motionDetector = MotionDetector();
@@ -58,14 +65,18 @@ class PoseDetectionViewModel extends ChangeNotifier {
   bool _running = false;
   bool _paused = false;
   bool _cameraSwitching = false;
+  bool _modelSwitching = false;
+  Future<void>? _inFlightDetection;
   Room? _room;
 
   bool _hadPose = false;
   DateTime _lastLostSent = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // Statistiques et mesures
+  // Statistiques et mesures de benchmark
   int _captureMicros = 0;
   int _captureSamples = 0;
+  int _decodeMicros = 0;
+  int _decodeSamples = 0;
   int _detectMicros = 0;
   int _detectSamples = 0;
   int _inferMicros = 0;
@@ -79,30 +90,68 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   RemotePosture? _currentPosture;
 
-  // Pipeline natif zéro-copie et FPS adaptatif
-  StreamSubscription<FrameResult>? _webRtcSubscription;
-  bool _isNativePipelineActive = false;
+  // FPS adaptatif mouvement (15 FPS statique / 30 FPS actif) + throttling thermique
   bool _lastIsStatic = false;
-  bool _lastThermalThrottled = false;
-  bool _lastLowBattery = false;
+  bool _thermalThrottled = false;
   int _currentTargetFps = 30;
-  double _nativeFps = 0.0;
-  DateTime? _lastNativeFrameReceivedAt;
-  DateTime? _lastNativeAttemptAt;
-  String? _lastFailedTrackId;
+  double _measuredFps = 0.0;
 
   // ── Getters publics ──
-  bool get isNativePipelineActive => _isNativePipelineActive;
-  bool get isThermalThrottled => _lastThermalThrottled;
-  bool get isLowBattery => _lastLowBattery;
+  bool get isThermalThrottled => _thermalThrottled;
   int get currentTargetFps => _currentTargetFps;
-  double get nativeFps => _nativeFps;
+  double get nativeFps => _measuredFps;
+  String get delegateName => _poseDetector.delegateName;
+  PoseModelVariant get modelVariant => _poseDetector.modelVariant;
+  ValueListenable<PoseModelVariant> get modelVariantListenable =>
+      _modelVariantNotifier;
+  String get modelLabel => _poseDetector.modelLabel;
+  bool get isSwitchingModel => _modelSwitching;
   RemotePosture? get currentPosture => _currentPosture;
   bool get isBusy => _running;
-  double get smoothingAlpha => _smoothing.alpha;
 
   /// Dernière pose pour l'overlay local.
   final ValueNotifier<PoseFrame?> frameNotifier = ValueNotifier<PoseFrame?>(null);
+
+  int _computeTargetFps() {
+    if (_thermalThrottled) {
+      final status = _thermalService.thermalInfo.value.status;
+      // Surchauffe sévère/critique (>= 3) : 10 FPS, sinon 15 FPS max.
+      return status >= 3 ? 10 : 15;
+    }
+    return _lastIsStatic ? 15 : 30;
+  }
+
+  void _onThermalChanged() {
+    _applyThermalState(_thermalService.thermalInfo.value, notify: true);
+  }
+
+  void _applyThermalState(ThermalInfo info, {required bool notify}) {
+    final wasThrottled = _thermalThrottled;
+    _thermalThrottled = info.isOverheating;
+    final previousFps = _currentTargetFps;
+    _currentTargetFps = _computeTargetFps();
+
+    if (_thermalThrottled && !wasThrottled) {
+      debugPrint(
+        '🔥 Pose thermal throttling activated '
+        '(status=${info.statusName}, targetFps=$_currentTargetFps)',
+      );
+      if (_poseDetector.modelVariant == PoseModelVariant.full) {
+        debugPrint('🔥 Downgrading pose model from full to lite due to overheating');
+        unawaited(setModelVariant(PoseModelVariant.lite));
+      }
+    } else if (!_thermalThrottled && wasThrottled) {
+      debugPrint(
+        '❄️ Pose thermal throttling cleared (targetFps=$_currentTargetFps)',
+      );
+    }
+
+    if (notify &&
+        (wasThrottled != _thermalThrottled ||
+            previousFps != _currentTargetFps)) {
+      notifyListeners();
+    }
+  }
 
   Future<void> init() async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
@@ -114,18 +163,72 @@ class PoseDetectionViewModel extends ChangeNotifier {
       }
     }
     _smoothing.alpha = 0.5;
-    final acceleration = await _poseDetector.initialize();
-    final config = _poseDetector.config;
+    final delegate = await _poseDetector.initialize();
+    _modelVariantNotifier.value = _poseDetector.modelVariant;
     debugPrint(
-      '🧠 Pose detector ready: acceleration=${acceleration.name} '
-      'mode=${config.mode.name} maxPoses=${config.maxPoses} '
-      'minConfidence=${config.minConfidence} '
-      'detection=${config.effectivePoseDetectionConfidence} '
-      'presence=${config.effectivePosePresenceConfidence} '
-      'tracking=${config.effectiveTrackingConfidence} '
-      'zEstimation=${config.enableZEstimation} runningMode=VIDEO '
-      'model=lite device=$_deviceModel smoothingAlpha=${_smoothing.alpha.toStringAsFixed(2)}',
+      '🧠 Pose detector ready (mediapipe_vision): delegate=${delegate.name} '
+      'numPoses=${_poseDetector.numPoses} '
+      'detection=${_poseDetector.minPoseDetectionConfidence} '
+      'presence=${_poseDetector.minPosePresenceConfidence} '
+      'tracking=${_poseDetector.minTrackingConfidence} '
+      'runningMode=VIDEO model=${_poseDetector.modelLabel} '
+      'decodeTargetWidth=${_poseDetector.decodeTargetWidth} '
+      'device=$_deviceModel smoothingAlpha=${_smoothing.alpha.toStringAsFixed(2)}',
     );
+  }
+
+  /// Bascule à chaud entre `PoseModelVariant.lite` et `PoseModelVariant.full`.
+  Future<void> toggleModelVariant() =>
+      setModelVariant(_poseDetector.modelVariant.opposite);
+
+  /// Charge la variante demandée en attendant la fin de l'inférence en cours
+  /// puis réinitialise les compteurs de benchmark `📊 pose`.
+  Future<void> setModelVariant(PoseModelVariant variant) async {
+    if (_modelSwitching) return;
+    if (_poseDetector.modelVariant == variant && _poseDetector.isInitialized) {
+      return;
+    }
+
+    _modelSwitching = true;
+    notifyListeners();
+    try {
+      final inFlight = _inFlightDetection;
+      if (inFlight != null) {
+        try {
+          await inFlight;
+        } catch (_) {}
+      }
+
+      final delegate = await _poseDetector.switchModel(variant);
+      _modelVariantNotifier.value = _poseDetector.modelVariant;
+      _motionDetector.reset();
+      _smoothing.reset();
+      _stabilizer.reset();
+      _resetBenchmarkCounters();
+      debugPrint(
+        '🔄 Pose model switched (mediapipe_vision): '
+        'model=${_poseDetector.modelLabel} delegate=${delegate.name}',
+      );
+    } catch (error) {
+      debugPrint('⚠️ Pose model switch to ${variant.label} failed: $error');
+    } finally {
+      _modelSwitching = false;
+      notifyListeners();
+    }
+  }
+
+  void _resetBenchmarkCounters() {
+    _captureMicros = 0;
+    _captureSamples = 0;
+    _decodeMicros = 0;
+    _decodeSamples = 0;
+    _detectMicros = 0;
+    _detectSamples = 0;
+    _inferMicros = 0;
+    _inferSamples = 0;
+    _measuredFps = 0.0;
+    _publisher.resetStats(_publisher.seq);
+    _statsWindowStart = DateTime.now();
   }
 
   void start(Room room, {List<String>? destinationIdentities}) {
@@ -137,7 +240,9 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _statsWindowStart = DateTime.now();
     _publisher.resetStats(_publisher.seq);
     unawaited(_poseLoop());
-    debugPrint('🏃 Pose detection started (temps réel)');
+    debugPrint(
+      '🏃 Pose detection started (mediapipe_vision model=${_poseDetector.modelLabel})',
+    );
   }
 
   void setDestinationIdentities(List<String>? identities) {
@@ -145,7 +250,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
   }
 
   void stop() {
-    _stopNativePipeline();
     if (_running && _hadPose) {
       _publisher.publishLost(
         room: _room,
@@ -157,6 +261,10 @@ class PoseDetectionViewModel extends ChangeNotifier {
     _cameraSwitching = false;
     GravityService.instance.stop();
     _hadPose = false;
+    _lastIsStatic = false;
+    _currentTargetFps = _computeTargetFps();
+    _measuredFps = 0.0;
+    _motionDetector.reset();
     _stabilizer.reset();
     _currentPosture = null;
     _smoothing.reset();
@@ -166,7 +274,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
   void pause() {
     if (!_running || _paused) return;
     _paused = true;
-    _stopNativePipeline();
     if (_hadPose) {
       _publisher.publishLost(
         room: _room,
@@ -189,90 +296,18 @@ class PoseDetectionViewModel extends ChangeNotifier {
   }
 
   /// Appelé juste avant un basculement matériel de caméra (front <-> back).
-  /// Détache proprement le sink natif pour éviter toute contention sur les
-  /// buffers de texture OpenGL / Camera2 et réinitialise le lissage.
   Future<void> beginCameraSwitch() async {
     if (!_running) return;
     _cameraSwitching = true;
-    _webRtcSubscription?.cancel();
-    _webRtcSubscription = null;
-    _lastNativeFrameReceivedAt = null;
-    _isNativePipelineActive = false;
-    _lastFailedTrackId = null;
-    _lastNativeAttemptAt = null;
     _motionDetector.reset();
     _smoothing.reset();
     _stabilizer.reset();
     frameNotifier.value = null;
-    try {
-      await _poseDetector.stopWebRtcDetection();
-    } catch (_) {}
   }
 
   /// Appelé une fois la bascule matérielle de caméra terminée.
-  /// Ré-attache immédiatement le pipeline natif zéro-copie sur la piste active.
   void endCameraSwitch() {
     _cameraSwitching = false;
-    if (!_running || _paused) return;
-    _lastFailedTrackId = null;
-    _lastNativeAttemptAt = DateTime.now();
-    _tryStartNativePipeline();
-  }
-
-  void _stopNativePipeline() {
-    _webRtcSubscription?.cancel();
-    _webRtcSubscription = null;
-    _lastNativeFrameReceivedAt = null;
-    _isNativePipelineActive = false;
-    _motionDetector.reset();
-    _poseDetector.stopWebRtcDetection().catchError((_) {});
-  }
-
-  // ---------------------------------------------------------------------------
-  // Superviseur : Zéro-Copie Natif & Repli Intelligent
-  // ---------------------------------------------------------------------------
-
-  void _tryStartNativePipeline() {
-    final track = _cameraTrack();
-    if (track == null) return;
-    final trackId = track.mediaStreamTrack.id;
-    if (trackId == null || trackId.isEmpty) return;
-
-    if (_lastFailedTrackId == trackId &&
-        _lastNativeAttemptAt != null &&
-        DateTime.now().difference(_lastNativeAttemptAt!) <
-            const Duration(seconds: 30)) {
-      return;
-    }
-
-    try {
-      debugPrint('🚀 [Native Pipeline] Tentative Zéro-Copie WebRTC sur track: $trackId');
-      _webRtcSubscription?.cancel();
-      _webRtcSubscription = _poseDetector
-          .startWebRtcDetection(
-            trackId: trackId,
-            nominalFps: 30,
-            throttledFps: 15,
-            enableAdaptiveThrottling: true,
-          )
-          .listen(
-            _handleNativeFrameResult,
-            onError: (error) {
-              debugPrint('⚠️ [Native Pipeline] Erreur stream natif: $error');
-              _lastFailedTrackId = trackId;
-              _stopNativePipeline();
-            },
-            onDone: () {
-              debugPrint('⏹️ [Native Pipeline] Pipeline natif terminé');
-              _isNativePipelineActive = false;
-              _webRtcSubscription = null;
-            },
-          );
-    } catch (e) {
-      debugPrint('⚠️ [Native Pipeline] Exception démarrage: $e');
-      _lastFailedTrackId = trackId;
-      _stopNativePipeline();
-    }
   }
 
   Future<void> _poseLoop() async {
@@ -281,53 +316,20 @@ class PoseDetectionViewModel extends ChangeNotifier {
     Future<CapturedFrame?>? next;
 
     while (_running) {
-      if (_paused || _cameraSwitching) {
+      if (_paused || _cameraSwitching || _modelSwitching) {
         next = null;
         await Future<void>.delayed(const Duration(milliseconds: 100));
         continue;
       }
 
-      final now = DateTime.now();
-      final hasRecentNativeFrames = _lastNativeFrameReceivedAt != null &&
-          now.difference(_lastNativeFrameReceivedAt!) <
-              const Duration(milliseconds: 1500);
-
-      if (hasRecentNativeFrames) {
-        _isNativePipelineActive = true;
-        next = null;
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        continue;
-      }
-
-      _isNativePipelineActive = false;
-
-      if (_webRtcSubscription != null) {
-        // Si la souscription native est ouverte mais n'a encore rien émis depuis
-        // moins de 1500 ms (phase d'amorçage ou changement de caméra), on patiente
-        // sans lancer captureFrame() en concurrence.
-        final sinceAttempt = _lastNativeAttemptAt != null
-            ? now.difference(_lastNativeAttemptAt!)
-            : const Duration(seconds: 99);
-        if (sinceAttempt < const Duration(milliseconds: 1500)) {
-          next = null;
-          await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!_poseDetector.isInitialized) {
+        try {
+          await _poseDetector.initialize();
+        } catch (error) {
+          debugPrint('⚠️ MediaPipeVision init failed in loop: $error');
+          await Future<void>.delayed(const Duration(milliseconds: 500));
           continue;
         }
-        // Au-delà de 1500 ms sans aucune frame native, le sink est décroché :
-        // on le ferme proprement pour permettre un ré-attachement.
-        debugPrint('🔄 [Native Pipeline] Aucun frame depuis >1.5s, réinitialisation du sink');
-        _stopNativePipeline();
-      }
-
-      if (_webRtcSubscription == null &&
-          (_lastNativeAttemptAt == null ||
-              now.difference(_lastNativeAttemptAt!) >
-                  const Duration(seconds: 2))) {
-        _lastNativeAttemptAt = now;
-        _tryStartNativePipeline();
-        next = null;
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        continue;
       }
 
       final loopWatch = Stopwatch()..start();
@@ -339,15 +341,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
       }
 
       final frame = await (next ?? _capture(track));
-      if (!_running || _paused || _cameraSwitching) break;
-
-      if (_lastNativeFrameReceivedAt != null &&
-          DateTime.now().difference(_lastNativeFrameReceivedAt!) <
-              const Duration(milliseconds: 1500)) {
+      if (!_running || _paused || _cameraSwitching || _modelSwitching) {
+        next = null;
         continue;
       }
 
-      next = (_running && !_paused && !_cameraSwitching && !_isNativePipelineActive)
+      next = (_running && !_paused && !_cameraSwitching && !_modelSwitching)
           ? _capture(track)
           : null;
 
@@ -358,16 +357,21 @@ class PoseDetectionViewModel extends ChangeNotifier {
       }
 
       final detectWatch = Stopwatch()..start();
+      final completer = Completer<void>();
+      _inFlightDetection = completer.future;
       try {
         final result = await _poseDetector.detectPoseVideo(
           frame.bytes,
           frame.videoTimestampMs,
         );
-        if (!_running || _paused) break;
+        if (!_running || _paused || _modelSwitching) continue;
         detectWatch.stop();
+
         final detectMicros = detectWatch.elapsedMicroseconds;
         _detectMicros += detectMicros;
         _detectSamples++;
+        _decodeMicros += result.decodeTimeMs * 1000;
+        _decodeSamples++;
         _inferMicros += result.processingTimeMs * 1000;
         _inferSamples++;
 
@@ -379,7 +383,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
           final isStatic = _motionDetector.update(rawPose);
           if (isStatic != _lastIsStatic) {
             _lastIsStatic = isStatic;
-            _currentTargetFps = isStatic ? 15 : 30;
+            _currentTargetFps = _computeTargetFps();
           }
 
           final size = result.imageWidth > 0 && result.imageHeight > 0
@@ -407,6 +411,7 @@ class PoseDetectionViewModel extends ChangeNotifier {
             frameSize: size,
             capturedAt: frame.capturedAt,
             deviceModel: _deviceModel,
+            modelLabel: _poseDetector.modelLabel,
             captureMicros: frame.captureMicros,
             detectMicros: detectMicros,
             inferMicros: result.processingTimeMs * 1000,
@@ -418,7 +423,12 @@ class PoseDetectionViewModel extends ChangeNotifier {
           _detectMicros += detectWatch.elapsedMicroseconds;
           _detectSamples++;
         }
-        debugPrint('⚠️ Pose detection error: $error');
+        debugPrint('⚠️ Pose detection error (mediapipe_vision): $error');
+      } finally {
+        if (!completer.isCompleted) completer.complete();
+        if (identical(_inFlightDetection, completer.future)) {
+          _inFlightDetection = null;
+        }
       }
 
       _logStats();
@@ -433,84 +443,6 @@ class PoseDetectionViewModel extends ChangeNotifier {
         await Future<void>.delayed(Duration.zero);
       }
     }
-  }
-
-  void _handleNativeFrameResult(FrameResult frameResult) {
-    if (!_running || _paused) return;
-
-    _lastNativeFrameReceivedAt = DateTime.now();
-    _isNativePipelineActive = true;
-    _lastFailedTrackId = null;
-
-    final result = frameResult.result;
-    final capturedAt =
-        DateTime.fromMicrosecondsSinceEpoch(frameResult.timestampUs);
-    _nativeFps = frameResult.fps;
-    _currentTargetFps = frameResult.targetFps ?? 30;
-
-    if (frameResult.isThermalThrottled != _lastThermalThrottled ||
-        frameResult.isLowBattery != _lastLowBattery) {
-      final wasThermalThrottled = _lastThermalThrottled;
-      _lastThermalThrottled = frameResult.isThermalThrottled;
-      _lastLowBattery = frameResult.isLowBattery;
-      notifyListeners();
-
-      if (_lastThermalThrottled && !wasThermalThrottled) {
-        ThermalService.instance.notifyThermalThrottled(
-          isThrottled: true,
-          reason: 'pose_detection_npu',
-        );
-      }
-    }
-
-    if (!result.hasPoses) {
-      _motionDetector.reset();
-      _onLost(capturedAt);
-    } else {
-      final rawPose = result.firstPose!;
-      final isStatic = _motionDetector.update(rawPose);
-      if (isStatic != _lastIsStatic) {
-        _lastIsStatic = isStatic;
-        final targetFps = isStatic ? 15 : 30;
-        _poseDetector.setTargetFps(targetFps);
-      }
-
-      final size = result.imageWidth > 0 && result.imageHeight > 0
-          ? Size(
-              result.imageWidth.toDouble(),
-              result.imageHeight.toDouble(),
-            )
-          : _fallbackSize;
-      _lastFrameSize = size;
-      final pose = _smoothing.smooth(rawPose);
-      _logRuntimeLandmarks(pose);
-      frameNotifier.value = PoseFrame(
-        pose: pose,
-        frameSize: size,
-        capturedAt: capturedAt,
-      );
-      final rawPosture = _classifier.classify(rawPose, frameSize: size);
-      final posture = _stabilizePosture(rawPosture);
-      _hadPose = true;
-      _inferMicros += result.processingTimeMs * 1000;
-      _inferSamples++;
-      _detectMicros += result.processingTimeMs * 1000;
-      _detectSamples++;
-
-      _publisher.publish(
-        room: _room,
-        pose: pose,
-        posture: posture,
-        frameSize: size,
-        capturedAt: capturedAt,
-        deviceModel: _deviceModel,
-        captureMicros: 0,
-        detectMicros: result.processingTimeMs * 1000,
-        inferMicros: result.processingTimeMs * 1000,
-      );
-    }
-
-    _logStats();
   }
 
   RemotePosture? _stabilizePosture(RemotePosture? raw) {
@@ -626,19 +558,21 @@ class PoseDetectionViewModel extends ChangeNotifier {
     final resolution = size == null
         ? 'unknown'
         : '${size.width.toInt()}x${size.height.toInt()}';
+    _measuredFps = _detectSamples / seconds;
 
-    final pipelineMode = _isNativePipelineActive ? 'zero-copy-native' : 'legacy-copy';
     debugPrint(
       '📊 pose ${seconds.toStringAsFixed(2)}s '
-      'pipeline=$pipelineMode '
-      'model=lite resolution=$resolution '
+      'pipeline=mediapipe-vision '
+      'delegate=${_poseDetector.delegateName} '
+      'model=${_poseDetector.modelLabel} '
+      'resolution=$resolution '
       'device=$_deviceModel '
-      'fps=${_isNativePipelineActive ? _nativeFps.toStringAsFixed(1) : (_captureSamples / seconds).toStringAsFixed(1)} '
+      'fps=${_measuredFps.toStringAsFixed(1)} '
       'targetFps=$_currentTargetFps '
-      'thermal=$_lastThermalThrottled lowBat=$_lastLowBattery '
       'capture=${averageMs(_captureMicros, _captureSamples).toStringAsFixed(1)}ms '
-      'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
+      'decode=${averageMs(_decodeMicros, _decodeSamples).toStringAsFixed(1)}ms '
       'infer=${averageMs(_inferMicros, _inferSamples).toStringAsFixed(1)}ms '
+      'detect=${averageMs(_detectMicros, _detectSamples).toStringAsFixed(1)}ms '
       'publish=${averageMs(_publisher.publishMicros, _publisher.publishSamples).toStringAsFixed(1)}ms '
       'publishData=${(_publisher.publishedSinceStats / seconds).toStringAsFixed(1)}/s '
       'seq=${((_publisher.seq - _publisher.seqAtLastStats) / seconds).toStringAsFixed(1)}/s',
@@ -646,6 +580,8 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
     _captureMicros = 0;
     _captureSamples = 0;
+    _decodeMicros = 0;
+    _decodeSamples = 0;
     _detectMicros = 0;
     _detectSamples = 0;
     _inferMicros = 0;
@@ -660,9 +596,11 @@ class PoseDetectionViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
+    _thermalService.thermalInfo.removeListener(_onThermalChanged);
     stop();
     frameNotifier.dispose();
-    _poseDetector.dispose();
+    _modelVariantNotifier.dispose();
+    unawaited(_poseDetector.dispose());
     super.dispose();
   }
 }

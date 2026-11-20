@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>187738294858-9ok6h8n48gu516intticf6bdlholibuc.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.187738294858-9ok6h8n48gu516intticf6bdlholibuc</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>187738294858-u2pbb8bgo3as6ddfomug4ml9u40o148l.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyCf_QYF8rO6i8GiE_ZEF9cyO-qa33btPl8</string>
+	<key>GCM_SENDER_ID</key>
+	<string>187738294858</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.opkodelabs.livekitapp.livekitapp</string>
+	<key>PROJECT_ID</key>
+	<string>videolog-on-air</string>
+	<key>STORAGE_BUCKET</key>
+	<string>videolog-on-air.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:187738294858:ios:994d2a9389aa7d0af3b4b3</string>
+</dict>
+</plist>

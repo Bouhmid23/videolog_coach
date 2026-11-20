@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui';
 
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import 'pose_models.dart';
 
 /// Codec binaire v7 pour le topic `posture` (émission uniquement).
 ///

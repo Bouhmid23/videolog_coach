@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:videolog_coach/presentation/widgets/participant_info.dart';
 

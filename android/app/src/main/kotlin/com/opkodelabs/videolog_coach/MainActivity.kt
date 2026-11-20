@@ -31,7 +31,6 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "videolog/pip"
         const val BEEP_CHANNEL = "videolog/beep"
-        const val MIC_METER_CHANNEL = "videolog/mic_meter"
         const val MIC_METER_STREAM_CHANNEL = "videolog/mic_meter_stream"
         const val THERMAL_CHANNEL = "videolog/thermal"
         const val THERMAL_STREAM_CHANNEL = "videolog/thermal_stream"
@@ -102,20 +101,6 @@ class MainActivity : FlutterActivity() {
                     stopMicMeter()
                 }
             })
-
-        // Rétrocompatibilité : Jauge niveau microphone pour l'écran de pré-connexion.
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MIC_METER_CHANNEL)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "start" -> result.success(startMicMeter())
-                    "stop" -> {
-                        stopMicMeter()
-                        result.success(true)
-                    }
-                    "getLevel" -> result.success(currentMicLevel)
-                    else -> result.notImplemented()
-                }
-            }
 
         pipChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         pipChannel?.setMethodCallHandler { call, result ->

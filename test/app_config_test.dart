@@ -24,7 +24,7 @@ class _InMemoryStore implements SecureTokenStore {
 
 void main() {
   group('AppConfig', () {
-    test('résout correctement local et prod selon APP_ENV', () {
+    test('résout correctement local et prod selon APP_ENV et release mode', () {
       expect(AppConfig.resolveEnvironment('local'), AppEnvironment.local);
       expect(AppConfig.resolveEnvironment('DEV'), AppEnvironment.local);
       expect(AppConfig.resolveEnvironment('prod'), AppEnvironment.prod);
@@ -32,6 +32,14 @@ void main() {
       expect(
         AppConfig.resolveEnvironment(''),
         AppConfig.defaultEnvironment,
+      );
+      expect(
+        AppConfig.resolveEnvironment('', isReleaseMode: true),
+        AppEnvironment.prod,
+      );
+      expect(
+        AppConfig.resolveEnvironment('local', isReleaseMode: true),
+        AppEnvironment.local,
       );
     });
 

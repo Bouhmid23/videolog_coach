@@ -16,6 +16,7 @@ import '../utils/ui_utils.dart';
 import '../widgets/athlete_profile_sheet.dart';
 import '../widgets/create_session_sheet.dart';
 import '../widgets/organization_hub_sheet.dart';
+import '../widgets/rooms/rooms_cards.dart';
 import '../widgets/shimmer_skeleton.dart';
 
 class RoomsScreen extends StatefulWidget {
@@ -293,7 +294,10 @@ class _RoomsScreenState extends State<RoomsScreen> {
                       minHeight: 48,
                     ),
                     onPressed: _loading ? null : () => _load(showSpinner: false),
-                    icon: UIUtils.textPrimaryIcon(Icons.refresh_rounded, size: 24),
+                    icon: UIUtils.textPrimaryIcon(
+                      Icons.refresh_rounded,
+                      size: 24,
+                    ),
                     tooltip: 'Actualiser',
                   ),
                   IconButton(
@@ -307,7 +311,10 @@ class _RoomsScreenState extends State<RoomsScreen> {
                         await AuthService.instance.signOut();
                       }
                     },
-                    icon: UIUtils.textPrimaryIcon(Icons.logout_rounded, size: 24),
+                    icon: UIUtils.textPrimaryIcon(
+                      Icons.logout_rounded,
+                      size: 24,
+                    ),
                     tooltip: 'Se déconnecter',
                   ),
                   SizedBox(width: UIUtils.xs),
@@ -381,8 +388,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
     }
 
     if (_error != null) {
-      return _buildMessageState(
-        context,
+      return RoomsMessageState(
         icon: Icons.cloud_off_rounded,
         title: 'Sessions indisponibles',
         message: _error!,
@@ -392,8 +398,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
     }
 
     if (_rooms.isEmpty) {
-      return _buildMessageState(
-        context,
+      return RoomsMessageState(
         icon: Icons.videocam_off_rounded,
         title: 'Aucune session en cours',
         message:
@@ -404,6 +409,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
       );
     }
 
+    final account = AccountController.instance;
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.fromLTRB(
@@ -415,8 +421,26 @@ class _RoomsScreenState extends State<RoomsScreen> {
       itemCount: _rooms.length + 1,
       separatorBuilder: (_, _) => SizedBox(height: UIUtils.md),
       itemBuilder: (context, index) {
-        if (index == 0) return _buildHeader(context);
-        return _buildRoomCard(context, _rooms[index - 1]);
+        if (index == 0) {
+          return RoomsHeaderCard(
+            displayName: account.displayName,
+            athleteProfile: _athleteProfile,
+            roomsCount: _rooms.length,
+            liveCount: _liveCount,
+            recordingCount: _recordingCount,
+            onEditAthleteProfile: _editAthleteProfile,
+          );
+        }
+        final room = _rooms[index - 1];
+        final effectiveOrgId = room.orgId ?? account.activeOrgId;
+        return MobileRoomCard(
+          room: room,
+          effectiveOrgId: effectiveOrgId,
+          onJoin: () => _openRoom(room),
+          onOpenReplay: effectiveOrgId != null
+              ? () => _openReplay(effectiveOrgId, room.name)
+              : null,
+        );
       },
     );
   }
@@ -428,8 +452,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
 
     final orgId = AccountController.instance.activeOrgId;
     if (orgId == null || orgId.isEmpty) {
-      return _buildMessageState(
-        context,
+      return RoomsMessageState(
         icon: Icons.apartment_rounded,
         title: 'Aucune organisation active',
         message: 'Finalisez votre onboarding ou acceptez une invitation.',
@@ -439,8 +462,7 @@ class _RoomsScreenState extends State<RoomsScreen> {
     }
 
     if (_orgSessions.isEmpty) {
-      return _buildMessageState(
-        context,
+      return RoomsMessageState(
         icon: Icons.video_library_outlined,
         title: 'Aucune séance enregistrée',
         message:
@@ -460,558 +482,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
       ),
       itemCount: _orgSessions.length,
       separatorBuilder: (_, _) => SizedBox(height: UIUtils.md),
-      itemBuilder: (context, index) =>
-          _buildOrgSessionCard(context, orgId, _orgSessions[index]),
-    );
-  }
-
-  Widget _buildOrgSessionCard(
-    BuildContext context,
-    String orgId,
-    OrgSession session,
-  ) {
-    final accent = session.finished
-        ? LKColors.secondary
-        : session.recording
-        ? LKColors.danger
-        : LKColors.success;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllXL,
-        border: Border.all(color: LKColors.border, width: 0.7),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: ListTile(
-        contentPadding: UIUtils.paddingLG,
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: accent.withValues(alpha: 0.14),
-            borderRadius: UIUtils.borderRadiusAllMD,
-          ),
-          child: Icon(
-            session.finished
-                ? Icons.play_circle_outline_rounded
-                : Icons.sensors_rounded,
-            color: accent,
-          ),
-        ),
-        title: Text(
-          session.displayTitle,
-          style: UIUtils.titleMedium(context),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: Text(
-          [
-            session.roomName,
-            if (session.finished) 'Terminée • Relecture' else 'Active',
-            '${session.participantUids.length} membre(s)',
-          ].join(' • '),
-          style: UIUtils.bodySmall(context),
-        ),
-        trailing: const Icon(
-          Icons.chevron_right_rounded,
-          color: LKColors.textSecondary,
-        ),
+      itemBuilder: (context, index) {
+        final session = _orgSessions[index];
+        return OrgSessionCard(
+          session: session,
           onTap: () => _openReplay(orgId, session.roomName),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMessageState(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    required String message,
-    required String actionLabel,
-    required Future<void> Function() onAction,
-  }) {
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: UIUtils.paddingLG,
-      children: [
-        const SizedBox(height: 48),
-        Container(
-          padding: UIUtils.paddingXXL,
-          decoration: BoxDecoration(
-            color: LKColors.surface,
-            borderRadius: UIUtils.borderRadiusAllXL,
-            border: Border.all(color: LKColors.border, width: 0.5),
-          ),
-          child: Column(
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: LKColors.primary.withValues(alpha: 0.1),
-                  borderRadius: UIUtils.borderRadiusAllFull,
-                ),
-                child: Icon(icon, size: 30, color: LKColors.primary),
-              ),
-              SizedBox(height: UIUtils.lg),
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: UIUtils.titleMedium(context),
-              ),
-              SizedBox(height: UIUtils.sm),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: UIUtils.bodySmall(
-                  context,
-                ).copyWith(color: LKColors.textHint, height: 1.5),
-              ),
-              SizedBox(height: UIUtils.xl),
-              FilledButton.icon(
-                onPressed: onAction,
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: Text(actionLabel, style: UIUtils.labelLarge(context)),
-                style: FilledButton.styleFrom(
-                  backgroundColor: LKColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: UIUtils.paddingHorizontalXL.add(
-                    UIUtils.paddingVerticalMD,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: UIUtils.borderRadiusAllMD,
-                  ),
-                  elevation: 0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHeader(BuildContext context) {
-    final account = AccountController.instance;
-    return Container(
-      padding: UIUtils.paddingXL,
-      decoration: BoxDecoration(
-        borderRadius: UIUtils.borderRadiusAllXL,
-        border: Border.all(
-          color: LKColors.primary.withValues(alpha: 0.25),
-          width: 0.5,
-        ),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            LKColors.primary.withValues(alpha: 0.16),
-            LKColors.secondary.withValues(alpha: 0.06),
-            LKColors.surface,
-          ],
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'BON RETOUR',
-                      style: UIUtils.bodySmall(context).copyWith(
-                        color: LKColors.secondary,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    SizedBox(height: UIUtils.xs),
-                    Text(
-                      'Bonjour ${account.displayName}',
-                      style: UIUtils.titleLarge(
-                        context,
-                      ).copyWith(fontSize: 22, fontWeight: FontWeight.w700),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    SizedBox(height: UIUtils.xs),
-                    Text(
-                      'Choisissez la session à rejoindre.',
-                      style: UIUtils.bodySmall(
-                        context,
-                      ).copyWith(color: LKColors.textHint),
-                    ),
-                    SizedBox(height: UIUtils.sm),
-                    InkWell(
-                      onTap: _editAthleteProfile,
-                      borderRadius: UIUtils.borderRadiusAllFull,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: LKColors.primary.withValues(alpha: 0.14),
-                          borderRadius: UIUtils.borderRadiusAllFull,
-                          border: Border.all(
-                            color: LKColors.primary.withValues(alpha: 0.35),
-                            width: 0.6,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.monitor_heart_rounded,
-                              size: 14,
-                              color: LKColors.primary,
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                _athleteProfile.healthConsentGranted
-                                    ? '${_athleteProfile.sport} • ${_athleteProfile.weightKg.toStringAsFixed(0)} kg • FCmax ${_athleteProfile.maxHeartRate} bpm'
-                                    : '${_athleteProfile.sport} • ${_athleteProfile.effectiveAgeYears} ans • Seuils défaut',
-                                style: UIUtils.bodySmall(context).copyWith(
-                                  color: LKColors.textPrimary,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            const Icon(
-                              Icons.edit_rounded,
-                              size: 12,
-                              color: LKColors.textSecondary,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(width: UIUtils.md),
-            ],
-          ),
-          SizedBox(height: UIUtils.lg),
-          Container(
-            padding: UIUtils.paddingMD,
-            decoration: BoxDecoration(
-              color: LKColors.background.withValues(alpha: 0.35),
-              borderRadius: UIUtils.borderRadiusAllMD,
-              border: Border.all(
-                color: LKColors.border.withValues(alpha: 0.6),
-                width: 0.5,
-              ),
-            ),
-            child: Row(
-              children: [
-                _buildStat(
-                  context,
-                  value: '${_rooms.length}',
-                  label: 'session${_rooms.length > 1 ? 's' : ''}',
-                  color: LKColors.textPrimary,
-                ),
-                _buildStatDivider(),
-                _buildStat(
-                  context,
-                  value: '$_liveCount',
-                  label: 'en direct',
-                  color: LKColors.success,
-                ),
-                if (_recordingCount > 0) ...[
-                  _buildStatDivider(),
-                  _buildStat(
-                    context,
-                    value: '$_recordingCount',
-                    label: 'enregistrement',
-                    color: LKColors.danger,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStat(
-    BuildContext context, {
-    required String value,
-    required String label,
-    required Color color,
-  }) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            value,
-            style: UIUtils.titleSmall(
-              context,
-            ).copyWith(color: color, fontSize: 18, fontWeight: FontWeight.w700),
-          ),
-          Text(
-            label,
-            style: UIUtils.bodySmall(
-              context,
-            ).copyWith(color: LKColors.textHint, fontSize: 10),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatDivider() {
-    return Container(
-      width: 0.5,
-      height: 28,
-      margin: EdgeInsets.symmetric(horizontal: UIUtils.md),
-      color: LKColors.border,
-    );
-  }
-
-  Widget _buildRoomCard(BuildContext context, MobileRoom room) {
-    final isLive = room.participantCount > 0;
-    final isRecording = room.isRecording;
-    final accent = isRecording
-        ? LKColors.danger
-        : isLive
-        ? LKColors.success
-        : LKColors.primary;
-    final stateLabel = isRecording
-        ? 'Enregistrement'
-        : room.isBusy
-        ? room.recordingLabel
-        : isLive
-        ? 'En direct'
-        : 'Disponible';
-    final stateIcon = isRecording
-        ? Icons.fiber_manual_record_rounded
-        : isLive
-        ? Icons.sensors_rounded
-        : Icons.videocam_rounded;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: LKColors.surface,
-        borderRadius: UIUtils.borderRadiusAllXL,
-        border: Border.all(
-          color: accent.withValues(alpha: isLive || isRecording ? 0.34 : 0.16),
-          width: 0.5,
-        ),
-        boxShadow: isLive || isRecording
-            ? [
-                BoxShadow(
-                  color: accent.withValues(alpha: 0.06),
-                  blurRadius: 18,
-                  offset: const Offset(0, 6),
-                ),
-              ]
-            : null,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: UIUtils.borderRadiusAllXL,
-          onTap: () => _openRoom(room),
-          child: Padding(
-            padding: UIUtils.paddingLG,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.12),
-                        borderRadius: UIUtils.borderRadiusAllLG,
-                      ),
-                      child: Icon(
-                        isRecording
-                            ? Icons.fiber_manual_record_rounded
-                            : Icons.videocam_rounded,
-                        color: accent,
-                        size: 24,
-                      ),
-                    ),
-                    SizedBox(width: UIUtils.md),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            room.displayTitle,
-                            style: UIUtils.titleMedium(context).copyWith(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (room.title != null &&
-                              room.title!.trim().isNotEmpty &&
-                              room.title!.trim() != room.name)
-                            Text(
-                              room.name,
-                              style: UIUtils.bodySmall(context).copyWith(
-                                color: LKColors.textHint,
-                                fontSize: 11,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          SizedBox(height: UIUtils.sm),
-                          Wrap(
-                            spacing: UIUtils.sm,
-                            runSpacing: UIUtils.xs,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              _buildStatusPill(
-                                context,
-                                label: stateLabel,
-                                icon: stateIcon,
-                                color: accent,
-                                emphasize: isLive || isRecording,
-                              ),
-                              _buildInfoPill(
-                                context,
-                                icon: Icons.people_alt_rounded,
-                                label: room.participantCount == 0
-                                    ? 'Aucun participant'
-                                    : '${room.participantCount} participant${room.participantCount > 1 ? 's' : ''}',
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: UIUtils.md),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 48,
-                        child: FilledButton.icon(
-                          onPressed: () => _openRoom(room),
-                          icon: const Icon(Icons.login_rounded, size: 18),
-                          label: Text(
-                            'Rejoindre la session',
-                            style: UIUtils.labelMedium(context).copyWith(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: accent,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: UIUtils.borderRadiusAllMD,
-                            ),
-                            elevation: 0,
-                          ),
-                        ),
-                      ),
-                    ),
-                    if ((room.orgId ?? AccountController.instance.activeOrgId) !=
-                        null) ...[
-                      SizedBox(width: UIUtils.sm),
-                      SizedBox(
-                        height: 48,
-                        child: OutlinedButton(
-                          onPressed: () => _openReplay(
-                            room.orgId ??
-                                AccountController.instance.activeOrgId!,
-                            room.name,
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: LKColors.border),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: UIUtils.borderRadiusAllMD,
-                            ),
-                          ),
-                          child: const Icon(Icons.analytics_outlined),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusPill(
-    BuildContext context, {
-    required String label,
-    required IconData icon,
-    required Color color,
-    bool emphasize = false,
-  }) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: emphasize ? 9 : 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: emphasize ? 0.14 : 0.1),
-        borderRadius: UIUtils.borderRadiusAllFull,
-        border: Border.all(
-          color: color.withValues(alpha: emphasize ? 0.3 : 0.18),
-          width: 0.5,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: UIUtils.bodySmall(
-              context,
-            ).copyWith(color: color, fontSize: 10, fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoPill(
-    BuildContext context, {
-    required IconData icon,
-    required String label,
-    Color? color,
-  }) {
-    final tone = color ?? LKColors.textSecondary;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: tone),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: UIUtils.bodySmall(context).copyWith(color: tone, fontSize: 11),
-        ),
-      ],
+        );
+      },
     );
   }
 }

@@ -98,8 +98,10 @@ class RoomViewModel extends ChangeNotifier {
   bool get showPosePip => _trackManager.showPosePip;
   bool get showPosture => _trackManager.showPosture;
   ValueListenable<bool> get showPostureListenable => _trackManager.showPostureListenable;
+  ValueListenable<PoseModelVariant> get poseModelVariantListenable =>
+      poseViewModel.modelVariantListenable;
+  Future<void> togglePoseModelVariant() => poseViewModel.toggleModelVariant();
   ValueListenable<List<BallMarker>> get markerListenable => markers.listenable;
-  double get poseSmoothingAlpha => poseViewModel.smoothingAlpha;
   String? get selectedParticipantIdentity => _trackManager.selectedParticipantIdentity;
   bool get showSideSheet => _trackManager.showSideSheet;
 

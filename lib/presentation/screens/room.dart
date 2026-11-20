@@ -7,20 +7,22 @@ import 'package:livekit_client/livekit_client.dart';
 
 import '../../core/athletic_haptics.dart';
 import '../../core/beep_service.dart';
+import '../../core/mediapipe_pose_detector.dart' show PoseModelVariant;
 import '../../core/pip_service.dart';
 import '../../core/recording_controller.dart';
 import '../../core/remote_shutter_service.dart';
-import '../../data/remote_telemetry.dart';
 import '../../data/user_role.dart';
 import '../../exts.dart';
 import '../../theme.dart';
 import '../../utils.dart';
+import '../../viewmodels/room_viewmodel.dart';
 import '../utils/ui_utils.dart';
 import '../widgets/controls.dart';
 import '../widgets/participant.dart';
 import '../widgets/recording_controls.dart';
+import '../widgets/room/room_galleries.dart';
+import '../widgets/room/room_overlays.dart';
 import '../widgets/sweat_lock_overlay.dart';
-import '../../viewmodels/room_viewmodel.dart';
 
 class RoomPage extends StatefulWidget {
   final Room room;
@@ -62,9 +64,6 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
   bool _isConfirmingExit = false;
 
   static const Duration _controlsAutoHideDuration = Duration(seconds: 4);
-  static const double _galleryHeight = 180;
-  static const double _galleryHudSpacing = 4;
-  static const double _galleryHudHeight = 36;
 
   void _scheduleControlsAutoHide() {
     _controlsHideTimer?.cancel();
@@ -272,7 +271,9 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     if (controller == null || !mounted || !widget.canControlRecording) return;
 
     if (controller.loading || controller.isPending) {
-      debugPrint('[RemoteShutter] Clic ignoré car opération en cours (loading/pending)');
+      debugPrint(
+        '[RemoteShutter] Clic ignoré car opération en cours (loading/pending)',
+      );
       return;
     }
 
@@ -296,8 +297,17 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     } else {
       if (controller.canStart) {
         unawaited(BeepService.beep());
-        _showGestureFeedback('REC Démarrage (K28)', Icons.fiber_manual_record_rounded);
-        unawaited(RecordingControls.startWithFeedback(context, controller, controller.layout));
+        _showGestureFeedback(
+          'REC Démarrage (K28)',
+          Icons.fiber_manual_record_rounded,
+        );
+        unawaited(
+          RecordingControls.startWithFeedback(
+            context,
+            controller,
+            controller.layout,
+          ),
+        );
       } else {
         final reason = controller.startBlockReason;
         if (reason != null && mounted) {
@@ -361,123 +371,61 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                     unawaited(_handleBackAttempt());
                   },
                   child: Scaffold(
-                  extendBody: true,
-                  extendBodyBehindAppBar: true,
-                  backgroundColor: outdoorSunMode
-                      ? Colors.black
-                      : LKColors.background,
-                  body: Stack(
-                    children: [
-                      // ========================================================================
-                      // VUE PRINCIPALE (Adaptative 2 colonnes paysage / iPad OU pile portrait)
-                      // ========================================================================
-                      Positioned.fill(
-                        child: useTwoColumns
-                            ? _buildLandscapeLayout(context)
-                            : _buildPortraitLayout(context, inPip: inPip),
-                      ),
-
-                      // ========================================================================
-                      // BANNIÈRE FLOTTANTE DE RETOUR GESTUEL DIRECT
-                      // ========================================================================
-                      if (_gestureFeedbackMessage != null && !inPip)
-                        Positioned(
-                          top: 74,
-                          left: 0,
-                          right: 0,
-                          child: Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: outdoorSunMode
-                                    ? Colors.black
-                                    : Colors.black.withValues(alpha: 0.85),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
+                    extendBody: true,
+                    extendBodyBehindAppBar: true,
+                    backgroundColor:
+                        outdoorSunMode ? Colors.black : LKColors.background,
+                    body: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: useTwoColumns
+                              ? _buildLandscapeLayout(context)
+                              : _buildPortraitLayout(context, inPip: inPip),
+                        ),
+                        if (_gestureFeedbackMessage != null && !inPip)
+                          RoomGestureFeedbackBanner(
+                            message: _gestureFeedbackMessage!,
+                            icon: _gestureFeedbackIcon,
+                            outdoorSunMode: outdoorSunMode,
+                          ),
+                        if (isLocked && !inPip)
+                          SweatLockOverlay(
+                            onUnlock: _toggleSweatLock,
+                            outdoorSunMode: outdoorSunMode,
+                          ),
+                        if (!inPip)
+                          Positioned.fill(
+                            child: ListenableBuilder(
+                              listenable: _vm,
+                              builder: (context, _) {
+                                final isConnected =
+                                    _vm.room?.connectionState ==
+                                    ConnectionState.connected;
+                                if (isConnected) {
+                                  return const IgnorePointer(
+                                    child: SizedBox.shrink(),
+                                  );
+                                }
+                                return Container(
                                   color: outdoorSunMode
-                                      ? Colors.white
-                                      : LKColors.primary,
-                                  width: outdoorSunMode ? 1.5 : 1,
-                                ),
-                                boxShadow: UIUtils.shadowMD,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (_gestureFeedbackIcon != null) ...[
-                                    Icon(
-                                      _gestureFeedbackIcon,
-                                      color: outdoorSunMode
-                                          ? const Color(0xFFFFB800)
-                                          : LKColors.primary,
-                                      size: 18,
-                                    ),
-                                    const SizedBox(width: 8),
-                                  ],
-                                  Text(
-                                    _gestureFeedbackMessage!,
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: outdoorSunMode
-                                          ? FontWeight.w900
-                                          : FontWeight.bold,
-                                      fontSize: 12,
+                                      ? Colors.black.withValues(alpha: 0.9)
+                                      : LKColors.background.withValues(
+                                          alpha: 0.8,
+                                        ),
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        LKColors.primary,
+                                      ),
                                     ),
                                   ),
-                                ],
-                              ),
+                                );
+                              },
                             ),
                           ),
-                        ),
-
-                      // ========================================================================
-                      // OVERLAY DE VERROUILLAGE SWEAT / POCKET LOCK
-                      // ========================================================================
-                      if (isLocked && !inPip)
-                        SweatLockOverlay(
-                          onUnlock: _toggleSweatLock,
-                          outdoorSunMode: outdoorSunMode,
-                        ),
-
-                      // ========================================================================
-                      // INDICATEUR DE CHARGEMENT
-                      // ========================================================================
-                      if (!inPip)
-                        Positioned.fill(
-                          child: ListenableBuilder(
-                            listenable: _vm,
-                            builder: (context, _) {
-                              final isConnected =
-                                  _vm.room?.connectionState ==
-                                  ConnectionState.connected;
-                              if (isConnected) {
-                                return const IgnorePointer(
-                                  child: SizedBox.shrink(),
-                                );
-                              }
-                              return Container(
-                                color: outdoorSunMode
-                                    ? Colors.black.withValues(alpha: 0.9)
-                                    : LKColors.background.withValues(
-                                        alpha: 0.8,
-                                      ),
-                                child: const Center(
-                                  child: CircularProgressIndicator(
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      LKColors.primary,
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
                 );
               },
             );
@@ -502,7 +450,16 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _buildSecondaryHorizontalGallery(context),
+                  ListenableBuilder(
+                    listenable: _vm,
+                    builder: (context, _) => RoomSecondaryHorizontalGallery(
+                      secondaryTracks: _vm.secondaryTracks,
+                      recordingController: _recordingController,
+                      outdoorSunMode: _isOutdoorSunMode.value,
+                      onSelectTrack: _vm.setPrimaryTrack,
+                      displayNameFor: _vm.displayNameForParticipant,
+                    ),
+                  ),
                   _buildPortraitControls(context),
                 ],
               ),
@@ -521,7 +478,6 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
       builder: (context, showSidebar, _) {
         return Row(
           children: [
-            // ── Colonne Gauche : Vidéo Principale + Pose + Poignée Chevron ──
             Expanded(
               child: Stack(
                 children: [
@@ -533,17 +489,16 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                     top: 0,
                     bottom: 0,
                     child: Center(
-                      child: _buildSidebarToggleButton(
-                        context,
+                      child: RoomSidebarToggleButton(
                         isExpanded: showSidebar,
+                        outdoorSunMode: _isOutdoorSunMode.value,
+                        onToggle: _toggleLandscapeSidebar,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-
-            // ── Colonne Droite : Galerie Verticale & Contrôles (Repliable) ──
             AnimatedSize(
               duration: UIUtils.animationDuration,
               curve: UIUtils.animationCurve,
@@ -564,10 +519,21 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _buildSidebarHeader(context),
+                            const RoomSidebarHeader(),
                             const Divider(height: 1, color: LKColors.border),
                             Expanded(
-                              child: _buildSecondaryVerticalGallery(context),
+                              child: ListenableBuilder(
+                                listenable: _vm,
+                                builder: (context, _) =>
+                                    RoomSecondaryVerticalGallery(
+                                      secondaryTracks: _vm.secondaryTracks,
+                                      recordingController: _recordingController,
+                                      outdoorSunMode: _isOutdoorSunMode.value,
+                                      onSelectTrack: _vm.setPrimaryTrack,
+                                      displayNameFor:
+                                          _vm.displayNameForParticipant,
+                                    ),
+                              ),
                             ),
                             const Divider(height: 1, color: LKColors.border),
                             _buildControlsPanel(context),
@@ -599,9 +565,8 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                     infoAtTop: !inPip,
                     recordingController: _recordingController,
                     onTap: _isScreenLocked.value ? null : _toggleControls,
-                    onDoubleTap: _isScreenLocked.value
-                        ? null
-                        : _onDoubleTapVideo,
+                    onDoubleTap:
+                        _isScreenLocked.value ? null : _onDoubleTapVideo,
                     onSwipeLeft: _isScreenLocked.value ? null : _onSwipeLeft,
                     onSwipeRight: _isScreenLocked.value ? null : _onSwipeRight,
                     outdoorSunMode: _isOutdoorSunMode.value,
@@ -612,110 +577,13 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
                 : GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: _isScreenLocked.value ? null : _toggleControls,
-                    child: _buildEmptyState('Aucun participant principal'),
+                    child: const RoomEmptyParticipantState(
+                      message: 'Aucun participant principal',
+                    ),
                   ),
           );
         },
       ),
-    );
-  }
-
-  /// Galerie horizontale pour le mode portrait.
-  Widget _buildSecondaryHorizontalGallery(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _vm,
-      builder: (context, _) {
-        final secondaryTracks = _vm.secondaryTracks;
-        if (secondaryTracks.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return Padding(
-          padding: EdgeInsets.only(bottom: UIUtils.sm),
-          child: RepaintBoundary(
-            child: SizedBox(
-              height: _galleryHeight + _galleryHudHeight + _galleryHudSpacing,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: EdgeInsets.symmetric(horizontal: UIUtils.md),
-                itemCount: secondaryTracks.length,
-                separatorBuilder: (_, _) => SizedBox(width: UIUtils.sm),
-                itemBuilder: (BuildContext context, int index) {
-                  final track = secondaryTracks[index];
-                  void selectTrack() => _vm.setPrimaryTrack(track);
-                  return SizedBox(
-                    key: ValueKey(
-                      '${track.participant.identity}_${track.type.name}',
-                    ),
-                    width: _galleryHeight,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (track.telemetryListenable != null)
-                          ValueListenableBuilder(
-                            valueListenable: track.telemetryListenable!,
-                            builder: (context, telemetry, _) {
-                              if (telemetry?.hasData != true) {
-                                return const SizedBox.shrink();
-                              }
-                              return Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onTap: selectTrack,
-                                    child: DataHud(
-                                      telemetry: telemetry,
-                                      showValues: false,
-                                      compact: true,
-                                      showToggle: false,
-                                      outdoorSunMode: _isOutdoorSunMode.value,
-                                    ),
-                                  ),
-                                  const SizedBox(height: _galleryHudSpacing),
-                                ],
-                              );
-                            },
-                          )
-                        else if (track.telemetry?.hasData == true) ...[
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: selectTrack,
-                            child: DataHud(
-                              telemetry: track.telemetry,
-                              showValues: false,
-                              compact: true,
-                              showToggle: false,
-                              outdoorSunMode: _isOutdoorSunMode.value,
-                            ),
-                          ),
-                          const SizedBox(height: _galleryHudSpacing),
-                        ],
-                        SizedBox(
-                          width: _galleryHeight,
-                          height: _galleryHeight,
-                          child: ParticipantWidget.widgetFor(
-                            track,
-                            showDataHud: false,
-                            recordingController: _recordingController,
-                            onTap: selectTrack,
-                            outdoorSunMode: _isOutdoorSunMode.value,
-                            displayName: _vm.displayNameForParticipant(
-                              track.participant,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -747,229 +615,6 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
     );
   }
 
-  /// En-tête de la barre latérale en mode paysage.
-  Widget _buildSidebarHeader(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: UIUtils.md,
-        vertical: UIUtils.sm,
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.analytics_rounded,
-            color: LKColors.primary,
-            size: 20,
-          ),
-          SizedBox(width: UIUtils.sm),
-          Expanded(
-            child: Text(
-              'Participants & Télémétrie',
-              style: UIUtils.titleSmall(context)
-                  .copyWith(fontWeight: FontWeight.bold, fontSize: 13),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Languette chevron verticale au milieu à l'extérieur du pavé.
-  /// S'oriente dynamiquement vers la droite (fermer) ou vers la gauche (ouvrir).
-  /// Format large et robuste pensé pour un clic facile en pleine session sportive.
-  Widget _buildSidebarToggleButton(
-    BuildContext context, {
-    required bool isExpanded,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _toggleLandscapeSidebar,
-        borderRadius: const BorderRadius.horizontal(left: Radius.circular(28)),
-        child: Container(
-          width: 58,
-          height: 104,
-          decoration: BoxDecoration(
-            color: _isOutdoorSunMode.value
-                ? Colors.black
-                : LKColors.surfaceElevated.withValues(alpha: 0.95),
-            borderRadius: const BorderRadius.horizontal(
-              left: Radius.circular(28),
-            ),
-            border: Border(
-              top: BorderSide(
-                color: _isOutdoorSunMode.value ? Colors.white : LKColors.border,
-                width: 1.5,
-              ),
-              left: BorderSide(
-                color: _isOutdoorSunMode.value ? Colors.white : LKColors.border,
-                width: 1.5,
-              ),
-              bottom: BorderSide(
-                color: _isOutdoorSunMode.value ? Colors.white : LKColors.border,
-                width: 1.5,
-              ),
-              right: BorderSide.none,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.4),
-                blurRadius: 8,
-                offset: const Offset(-3, 0),
-              ),
-            ],
-          ),
-          child: Center(
-            child: AnimatedRotation(
-              turns: isExpanded ? 0.0 : 0.5,
-              duration: UIUtils.animationDuration,
-              curve: UIUtils.animationCurve,
-              child: Icon(
-                Icons.chevron_right_rounded,
-                color: _isOutdoorSunMode.value
-                    ? Colors.white
-                    : LKColors.primary,
-                size: 54,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Galerie verticale des participants secondaires pour l'analyse iPad / Paysage.
-  Widget _buildSecondaryVerticalGallery(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _vm,
-      builder: (context, _) {
-        final secondaryTracks = _vm.secondaryTracks;
-        if (secondaryTracks.isEmpty) {
-          return Center(
-            child: Padding(
-              padding: UIUtils.paddingLG,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.people_outline_rounded,
-                    size: 36,
-                    color: LKColors.textHint,
-                  ),
-                  SizedBox(height: UIUtils.sm),
-                  Text(
-                    'Aucun autre participant',
-                    style: UIUtils.bodySmall(context)
-                        .copyWith(color: LKColors.textHint),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-
-        return ListView.separated(
-          padding: EdgeInsets.all(UIUtils.sm),
-          itemCount: secondaryTracks.length,
-          separatorBuilder: (_, _) => SizedBox(height: UIUtils.sm),
-          itemBuilder: (context, index) {
-            final track = secondaryTracks[index];
-            void selectTrack() => _vm.setPrimaryTrack(track);
-
-            return InkWell(
-              onTap: selectTrack,
-              borderRadius: UIUtils.borderRadiusAllMD,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: LKColors.surfaceElevated,
-                  borderRadius: UIUtils.borderRadiusAllMD,
-                  border: Border.all(
-                    color: LKColors.border.withValues(alpha: 0.6),
-                    width: 0.8,
-                  ),
-                ),
-                padding: EdgeInsets.all(UIUtils.xs),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ClipRRect(
-                      borderRadius: UIUtils.borderRadiusAllSM,
-                      child: SizedBox(
-                        height: 120,
-                        child: RepaintBoundary(
-                          child: ParticipantWidget.widgetFor(
-                            track,
-                            showDataHud: false,
-                            recordingController: _recordingController,
-                            onTap: selectTrack,
-                            outdoorSunMode: _isOutdoorSunMode.value,
-                            displayName: _vm.displayNameForParticipant(
-                              track.participant,
-                            ),
-                            showNameBadge: false,
-                          ),
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: UIUtils.xs),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _vm.displayNameForParticipant(track.participant),
-                            style: UIUtils.labelMedium(context).copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: LKColors.textPrimary,
-                              fontSize: 11,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const Icon(
-                          Icons.touch_app_rounded,
-                          size: 13,
-                          color: LKColors.textHint,
-                        ),
-                      ],
-                    ),
-                    if (track.telemetryListenable != null) ...[
-                      SizedBox(height: UIUtils.xs),
-                      ValueListenableBuilder<RemoteTelemetry?>(
-                        valueListenable: track.telemetryListenable!,
-                        builder: (context, telemetry, _) {
-                          if (telemetry?.hasData != true) {
-                            return const SizedBox.shrink();
-                          }
-                          return DataHud(
-                            telemetry: telemetry,
-                            showValues: true,
-                            compact: true,
-                            showToggle: false,
-                            outdoorSunMode: _isOutdoorSunMode.value,
-                          );
-                        },
-                      ),
-                    ] else if (track.telemetry?.hasData == true) ...[
-                      SizedBox(height: UIUtils.xs),
-                      DataHud(
-                        telemetry: track.telemetry,
-                        showValues: true,
-                        compact: true,
-                        showToggle: false,
-                        outdoorSunMode: _isOutdoorSunMode.value,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
   /// Panneau de contrôles réutilisable.
   Widget _buildControlsPanel(BuildContext context) {
     final localParticipant = _vm.room?.localParticipant;
@@ -977,53 +622,28 @@ class _RoomPageState extends State<RoomPage> with WidgetsBindingObserver {
 
     return ValueListenableBuilder<bool>(
       valueListenable: _vm.showPostureListenable,
-      builder: (context, showPosture, _) => ControlsWidget(
-        _vm.room!,
-        localParticipant,
-        bleService: _vm.bleService,
-        sensorService: _vm.sensorService,
-        controlsViewModel: _vm.controlsViewModel,
-        onBleConnected: _vm.onBleConnected,
-        onBleDisconnected: _vm.onBleDisconnected,
-        showPosture: showPosture,
-        onTogglePosture: _vm.togglePosture,
-        postureSmoothingAlpha: _vm.poseSmoothingAlpha,
-        //onSetPostureSmoothingAlpha: widget.role.isTrainee ? _vm.setPoseSmoothingAlpha : null,
-        recordingController: _recordingController,
-        isScreenLocked: _isScreenLocked.value,
-        onToggleSweatLock: _toggleSweatLock,
-        isOutdoorSunMode: _isOutdoorSunMode.value,
-        onToggleOutdoorSunMode: _toggleOutdoorSunMode,
-      ),
-    );
-  }
-
-  /// Construit un état vide avec un message
-  Widget _buildEmptyState(String message) {
-    return Container(
-      color: LKColors.surface,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.videocam_off_rounded,
-              size: 64,
-              color: LKColors.textSecondary,
-            ),
-            SizedBox(height: UIUtils.md),
-            Text(
-              message,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(color: LKColors.textSecondary),
-            ),
-            SizedBox(height: UIUtils.sm),
-            Text(
-              'En attente des participants...',
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: LKColors.textHint),
-            ),
-          ],
+      builder: (context, showPosture, _) =>
+          ValueListenableBuilder<PoseModelVariant>(
+        valueListenable: _vm.poseModelVariantListenable,
+        builder: (context, poseModelVariant, _) => ControlsWidget(
+          _vm.room!,
+          localParticipant,
+          bleService: _vm.bleService,
+          sensorService: _vm.sensorService,
+          controlsViewModel: _vm.controlsViewModel,
+          onBleConnected: _vm.onBleConnected,
+          onBleDisconnected: _vm.onBleDisconnected,
+          showPosture: showPosture,
+          onTogglePosture: _vm.togglePosture,
+          poseModelVariant: poseModelVariant,
+          onTogglePoseModel: widget.role.isTrainee
+              ? () => unawaited(_vm.togglePoseModelVariant())
+              : null,
+          recordingController: _recordingController,
+          isScreenLocked: _isScreenLocked.value,
+          onToggleSweatLock: _toggleSweatLock,
+          isOutdoorSunMode: _isOutdoorSunMode.value,
+          onToggleOutdoorSunMode: _toggleOutdoorSunMode,
         ),
       ),
     );

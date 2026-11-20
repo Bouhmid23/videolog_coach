@@ -8,19 +8,19 @@ sérialisation et diffusion aux pairs.
 
 ```
 Piste caméra locale
-      │  capture JPEG en mémoire
+      │  capture frame en mémoire (cadence adaptative 30 / 15 / 10 FPS)
       ▼
-Détecteur MediaPipe lite (RunningMode.VIDEO, accélération demandée GPU)
+Détecteur MediaPipe Tasks Vision (mediapipe_vision ^0.1.3, RunningMode.VIDEO, modèle lite ou full)
       │  Pose : image landmarks + worldLandmarks
       ▼
-Lissage exponentiel (α = 0.35)          ← posture_detection_service
+Lissage exponentiel (α = 0.5)           ← posture_detection_service
       │  Pose lissée
       ├──────────────────────────────→ Rendu local du squelette
       ▼
-Classification (debout / assis / allongé)
+Classification (debout / assis / allongé) + hystérésis 3 frames (PostureClassifier)
       │  {label, confidence}
       ▼
-Sérialisation binaire compact → publishData(topic="posture")  (lossy, temps réel)
+Sérialisation binaire v7 (275 octets) → publishData(topic="posture")  (lossy, temps réel)
       │
       ▼
 Tous les pairs : RemotePosture.tryParseBinary → stockage → rendu interpolé
@@ -30,14 +30,14 @@ Tous les pairs : RemotePosture.tryParseBinary → stockage → rendu interpolé
 
 | Paramètre | Valeur |
 |---|---|
-| Fréquence d'analyse | Continue, sans plafond explicite; débit réel à mesurer sur appareil |
-| Détecteur | Fork local `flutter_pose_detection` 0.4.1, MediaPipe lite, mode `VIDEO` |
-| Paramètres détecteur | `maxPoses: 1`, seuils détection / présence / suivi à `0.5`, accélération GPU demandée |
+| Fréquence d'analyse | Plafond adaptatif piloté par `ThermalService` : **30 FPS** (`normal`/`fair`), **15 FPS** (`serious`), **10 FPS** (`critical`) |
+| Détecteur | `mediapipe_vision ^0.1.3`, modèle `lite` (défaut) ou `full` (bascule auto `full → lite` dès niveau `serious`), mode `VIDEO` |
+| Paramètres détecteur | `maxPoses: 1`, seuils détection / présence / suivi à `0.5`, délégation CPU ou GPU |
 | Nombre de landmarks | 33 points image et 33 world landmarks en mètres |
-| Alpha de lissage | **0.35** |
-| Source image | `captureFrame` de la piste caméra locale, JPEG transmis en mémoire |
-| Concurrency | Boucle séquentielle (flag `_running`), un seul tick à la fois |
-| Transport | DataChannel LiveKit **lossy** (`reliable: false`), payload binaire |
+| Alpha de lissage | **0.5** (fixe) |
+| Source image | `captureFrame` de la piste caméra locale, transmis en mémoire |
+| Concurrency | Boucle séquentielle (`_poseLoop`), un seul tick à la fois avec respect de `minFrameIntervalMs` |
+| Transport | DataChannel LiveKit **lossy** (`reliable: false`), payload binaire v7 |
 | Web | Détecteur désactivé (branche ignorée) |
 
 ### 2.1 Cycle d'un tick
@@ -81,7 +81,7 @@ Pour chaque landmark (clé = type de landmark), état maintainu entre les ticks 
 ```
 x = x + α × (x_nouveau − x)        // idem pour y et z
 visibility : non lissée (conservée telle quelle)
-α = 0.35
+α = 0.5
 ```
 
 - Le premier échantillon d'un landmark initialise la position sans lissage.
@@ -322,9 +322,6 @@ courbe : easeOut
 
 > Un changement de résolution (`frameSize`) désactive l'interpolation pour la
 > frame concernée (saut direct) afin d'éviter un étirement.
-> Le contrôleur historique `PoseAnimationController` de `pose_animation.dart`
-> reste inutilisable (construction avec un `vsync` invalide) — voir
-> `08-kmp-porting.md`.
 
 ### 9.5 Palette (référence)
 

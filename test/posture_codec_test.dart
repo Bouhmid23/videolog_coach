@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart' show TargetPlatform;
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import 'package:videolog_coach/data/pose_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:videolog_coach/core/call_foreground_service.dart';

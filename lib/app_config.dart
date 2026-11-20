@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, visibleForTesting;
+    show TargetPlatform, defaultTargetPlatform, kReleaseMode, visibleForTesting;
 
 /// Environnements disponibles pour l'application Videolog.
 enum AppEnvironment {
@@ -12,26 +12,25 @@ enum AppEnvironment {
 
 /// Configuration centrale des endpoints de l'application.
 ///
-/// Pour basculer entre **local** et **prod**, modifiez simplement
-/// [defaultEnvironment] ci-dessous :
-/// ```dart
-/// static const AppEnvironment defaultEnvironment = AppEnvironment.local;
-/// // ou
-/// static const AppEnvironment defaultEnvironment = AppEnvironment.prod;
-/// ```
+/// En mode **debug / profile**, l'environnement par défaut est [AppEnvironment.local].
+/// En mode **release** (`kReleaseMode`), l'environnement bascule automatiquement sur
+/// [AppEnvironment.prod] sauf surcharge explicite via `--dart-define=APP_ENV=local`.
 ///
 /// Vous pouvez aussi surcharger sans modifier ce fichier via `--dart-define` :
 /// - `flutter run --dart-define=APP_ENV=local`
+/// - `flutter run --dart-define=APP_ENV=prod`
 /// - `flutter run --dart-define=APP_ENV=local --dart-define=API_BASE_URL=http://192.168.1.25:8000`
 class AppConfig {
   const AppConfig._();
 
   // ===========================================================================
-  // BASCULE RAPIDE LOCAL <-> PROD (modifier cette ligne)
+  // BASCULE RAPIDE LOCAL <-> PROD
   // ===========================================================================
 
   /// Environnement actif par défaut lorsque `--dart-define=APP_ENV` n'est pas fourni.
-  static const AppEnvironment defaultEnvironment = AppEnvironment.local;
+  /// En build release (`kReleaseMode`), pointe toujours sur [AppEnvironment.prod] par sécurité.
+  static AppEnvironment get defaultEnvironment =>
+      kReleaseMode ? AppEnvironment.prod : AppEnvironment.local;
 
   // ===========================================================================
   // ADRESSES DES SERVEURS
@@ -107,7 +106,10 @@ class AppConfig {
   static String get environmentLabel => isLocal ? 'LOCAL' : 'PROD';
 
   @visibleForTesting
-  static AppEnvironment resolveEnvironment(String envName) {
+  static AppEnvironment resolveEnvironment(
+    String envName, {
+    bool isReleaseMode = kReleaseMode,
+  }) {
     switch (envName.trim().toLowerCase()) {
       case 'local':
       case 'dev':
@@ -117,7 +119,7 @@ class AppConfig {
       case 'production':
         return AppEnvironment.prod;
       default:
-        return defaultEnvironment;
+        return isReleaseMode ? AppEnvironment.prod : defaultEnvironment;
     }
   }
 

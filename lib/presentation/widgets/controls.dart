@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:livekit_client/livekit_client.dart';
 import '../../core/ble_sensor_service.dart';
 import '../../core/ble_telemetry_service.dart';
+import '../../core/mediapipe_pose_detector.dart' show PoseModelVariant;
 import '../../core/recording_controller.dart';
 import '../../exts.dart';
 import '../../theme.dart';
@@ -18,7 +19,6 @@ import 'recording_controls.dart';
 export 'controls/audio_sheet_content.dart';
 export 'controls/ble_sheet_content.dart';
 export 'controls/glasses_icon.dart';
-export 'controls/posture_smoothing_dialog.dart';
 export 'controls/sensor_sheet_content.dart';
 
 class ControlsWidget extends StatefulWidget {
@@ -32,8 +32,8 @@ class ControlsWidget extends StatefulWidget {
   final VoidCallback onBleDisconnected;
   final bool showPosture;
   final VoidCallback? onTogglePosture;
-  final double postureSmoothingAlpha;
-  //final Future<void> Function(double alpha)? onSetPostureSmoothingAlpha;
+  final PoseModelVariant? poseModelVariant;
+  final VoidCallback? onTogglePoseModel;
   final RecordingController? recordingController;
   final bool isScreenLocked;
   final VoidCallback? onToggleSweatLock;
@@ -50,8 +50,8 @@ class ControlsWidget extends StatefulWidget {
     required this.onBleDisconnected,
     this.showPosture = false,
     this.onTogglePosture,
-    this.postureSmoothingAlpha = 0.5,
-    //this.onSetPostureSmoothingAlpha,
+    this.poseModelVariant,
+    this.onTogglePoseModel,
     this.recordingController,
     this.isScreenLocked = false,
     this.onToggleSweatLock,
@@ -128,16 +128,6 @@ class _ControlsWidgetState extends State<ControlsWidget> {
       builder: (_) => AudioSheetContent(vm: _vm, room: widget.room),
     );
   }
-
-  /*Future<void> _openPostureSmoothingDialog() async {
-    final onChange = widget.onSetPostureSmoothingAlpha;
-    if (onChange == null) return;
-    await PostureSmoothingDialog.show(
-      context,
-      initialAlpha: widget.postureSmoothingAlpha,
-      onApply: onChange,
-    );
-  }*/
 
   void _onTapDisconnect() async {
     final result = await context.showDisconnectDialog();
@@ -690,6 +680,50 @@ class _ControlsWidgetState extends State<ControlsWidget> {
                 isActive: widget.showPosture,
               ),
 
+              // ── Modèle Pose (Lite / Full) ──
+              if (widget.showPosture &&
+                  widget.onTogglePoseModel != null &&
+                  widget.poseModelVariant != null)
+                Tooltip(
+                  message: widget.poseModelVariant == PoseModelVariant.full
+                      ? 'Modèle pose : Full (toucher pour passer en Lite)'
+                      : 'Modèle pose : Lite (toucher pour passer en Full)',
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      widget.onTogglePoseModel!();
+                    },
+                    child: Container(
+                      height: 44,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: widget.poseModelVariant == PoseModelVariant.full
+                            ? LKColors.primary.withValues(alpha: 0.22)
+                            : LKColors.surfaceElevated,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: widget.poseModelVariant == PoseModelVariant.full
+                              ? LKColors.primary
+                              : LKColors.border,
+                        ),
+                      ),
+                      child: Text(
+                        widget.poseModelVariant!.label.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.6,
+                          color: widget.poseModelVariant == PoseModelVariant.full
+                              ? LKColors.primary
+                              : LKColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
               // ── Sweat / Pocket Lock ──
               if (widget.onToggleSweatLock != null)
                 _buildControlButton(
@@ -719,12 +753,6 @@ class _ControlsWidgetState extends State<ControlsWidget> {
                       : LKColors.textPrimary,
                   isActive: widget.isOutdoorSunMode,
                 ),
-              /*if (widget.onSetPostureSmoothingAlpha != null)
-                _buildControlButton(
-                  icon: Icons.tune_rounded,
-                  onPressed: _openPostureSmoothingDialog,
-                  tooltip: 'Régler le lissage de la posture',
-                ),*/
 
               // ── Recording (Egress) ──
               if (widget.recordingController != null)

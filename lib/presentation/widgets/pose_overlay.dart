@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 
 import '../../data/posture_codec.dart';
 import '../../theme.dart';

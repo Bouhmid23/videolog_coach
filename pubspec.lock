@@ -355,13 +355,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  flutter_pose_detection:
-    dependency: "direct main"
-    description:
-      path: "packages/flutter_pose_detection"
-      relative: true
-    source: path
-    version: "0.4.1"
   flutter_reactive_ble:
     dependency: "direct main"
     description:
@@ -748,6 +741,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.11.1"
+  mediapipe_core:
+    dependency: transitive
+    description:
+      name: mediapipe_core
+      sha256: "14a36b8e4f14944e817c40e0ffda6377a56ee0a62e362ed225ea57c258b130c0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.0"
+  mediapipe_vision:
+    dependency: "direct main"
+    description:
+      name: mediapipe_vision
+      sha256: "8082d46a45c33787b2f7d698d7ce4c63c3b3ce178e679fe6886d774f7cd66457"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.0"
   meta:
     dependency: transitive
     description:
@@ -772,14 +781,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.1"
-  nested:
-    dependency: transitive
-    description:
-      name: nested
-      sha256: "03bac4c528c64c95c722ec99280375a6f2fc708eec17c7b3f07253b626cd2a20"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.0"
   nm:
     dependency: transitive
     description:
@@ -980,14 +981,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.1.0"
-  provider:
-    dependency: "direct main"
-    description:
-      name: provider
-      sha256: "4e82183fa20e5ca25703ead7e05de9e4cceed1fbd1eadc1ac3cb6f565a09f272"
-      url: "https://pub.dev"
-    source: hosted
-    version: "6.1.5+1"
   pub_semver:
     dependency: transitive
     description:

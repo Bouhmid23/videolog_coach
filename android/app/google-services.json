@@ -1,0 +1,62 @@
+{
+  "project_info": {
+    "project_number": "187738294858",
+    "project_id": "videolog-on-air",
+    "storage_bucket": "videolog-on-air.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:187738294858:android:619169881c5d0026f3b4b3",
+        "android_client_info": {
+          "package_name": "com.opkodelabs.videolog_coach"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "187738294858-jc18brr1pk5vrss9nau7mg3as842e4j3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.opkodelabs.videolog_coach",
+            "certificate_hash": "5d0fb9de44f1e34e144c007ccb0e01c0f33ce2c5"
+          }
+        },
+        {
+          "client_id": "187738294858-u2pbb8bgo3as6ddfomug4ml9u40o148l.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.opkodelabs.videolog_coach",
+            "certificate_hash": "c5f130dfc1e84fcb299feb9d789bf96d88629797"
+          }
+        },
+        {
+          "client_id": "187738294858-nd17l1v7ovoilkc854rrtpj0f4adgk6c.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJQdyk_k5baZr4F8ZAaUm9EjSmx16nUvE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "187738294858-nd17l1v7ovoilkc854rrtpj0f4adgk6c.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "187738294858-9ok6h8n48gu516intticf6bdlholibuc.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.opkodelabs.livekitapp.livekitapp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

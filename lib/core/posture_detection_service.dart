@@ -1,5 +1,5 @@
 
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../data/pose_models.dart';
 
 class PostureSmoothing {
   final Map<LandmarkType, _SmoothedPoint> _smoothedPoints = {};

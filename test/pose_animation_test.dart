@@ -1,4 +1,4 @@
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import 'package:videolog_coach/data/pose_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videolog_coach/presentation/widgets/pose_animation.dart';
 

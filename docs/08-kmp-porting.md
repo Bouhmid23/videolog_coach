@@ -146,33 +146,31 @@ dispose()
 | Tri participants | parlant > récent > ancienneté, screen share en tête |
 | Calories | formule ACSM homme/femme, formule simplifiée, clamps |
 
-## 7. Pièges et dettes connus
+## 7. Points d'attention et historique de nettoyage
 
-| # | Problème | Impact sur le portage |
+| # | Élément | Statut actuel / Impact sur le portage |
 |---|---|---|
-| 1 | `core/livekit_service.dart` non utilisé (remplacé par l'usage direct de la salle) | Référence seulement ; candidate à une `RoomGateway` |
-| 2 | `core/api_service.dart` actif (Bearer Firebase, `/token`, `/mobile/rooms`, Egress) | Contrat documenté dans `01` et `MOBILE_RECORDING_WORKFLOW.md` |
-| 3 | Widgets non référencés : `smoothed_pose_avatar.dart`, `sound_waveform.dart`, `text_field.dart` | Non portés (ou portés plus tard si besoin) |
-| 4 | **Bug** : `PoseAnimationController` construit un contrôleur d'animation avec un `vsync` invalide (`AnimatedGridState()`) — inutilisable tel quel | Réécrire proprement en KMP si l'interpolation est souhaitée |
-| 5 | Dépendances déclarées mais inutilisées : `provider`, `flutter_svg`, `flutter_background`, `flutter_foreground_task`, `camera`, `o3d` | Aucune équivalence à porter |
-| 6 | `o3d` (avatar 3D) déclaré mais l'avatar associé est orphelin | Fonctionnalité non intégrée |
-| 7 | Authentification Firebase Auth (email / mot de passe) | Prévoir l'équivalent Firebase Auth côté KMP |
-| 8 | Les libellés de posture sont en **français** et encodés dans les payloads | Décider : garder (compatibilité) ou internationaliser (breaking) |
-| 9 | Index `type` des landmarks basé sur l'enum du moteur de pose | **Figer** l'ordre MediaPipe 33 dans une enum partagée |
-| 10 | Distance interne en **miles**, affichage en km | Conserver l'unité interne pour la compatibilité des payloads |
-| 11 | Schéma token unifié | `POST /token {room}` avec `Authorization: Bearer <Firebase ID token>` |
-| 12 | Le test existant (template) est obsolète et échouerait | Le remplacer par les tests de la section 6 |
-| 13 | `usesCleartextTraffic="true"` (Android) | À revoir pour la production |
+| 1 | `core/api_service.dart` + `core/api/*.dart` (Bearer Firebase, `/token`, `/mobile/rooms`, Egress, compte, training, annuaire) | Découpé en 4 mixins métier ; contrat documenté dans `01` et `MOBILE_RECORDING_WORKFLOW.md` |
+| 2 | Anciens fichiers morts (`livekit_service.dart`, `smoothed_pose_avatar.dart`, `sound_waveform.dart`, `text_field.dart`, `pose_animation.dart`) | **Supprimés** du dépôt (Lot A) |
+| 3 | Anciennes dépendances inutilisées (`provider`, `packages/flutter_pose_detection`, etc.) | **Supprimées** de `pubspec.yaml` ; remplacées par `mediapipe_vision ^0.1.3` |
+| 4 | Régulation thermique (`ThermalService`) | Connectée à `PoseDetectionViewModel` (cadence `30 → 15 → 10 FPS` et repli auto `full → lite`) |
+| 5 | Authentification Firebase Auth (email / mot de passe / Google) | Prévoir l'équivalent Firebase Auth côté KMP |
+| 6 | Les libellés de posture sont en **français** et encodés dans les payloads | Décider : garder (compatibilité) ou internationaliser (breaking) |
+| 7 | Index `type` des landmarks basé sur l'enum du moteur de pose | **Figer** l'ordre MediaPipe 33 dans une enum partagée |
+| 8 | Distance interne en **miles**, affichage en km | Conserver l'unité interne pour la compatibilité des payloads |
+| 9 | Schéma token unifié | `POST /token {room}` avec `Authorization: Bearer <Firebase ID token>` |
+| 10 | Suite de tests Flutter | 32 fichiers de tests unitaires et widgets actifs dans `test/` |
+| 11 | Garde-fou `AppConfig.isLocal` | Désactivé d'office en `kReleaseMode` |
 
 ## 8. Constantes à porter telles quelles
 
 | Domaine | Constantes critiques | Doc |
 |---|---|---|
 | Réseau | `https://api.videolog.app/token`, `wss://livekit.videolog.app`, room `poc-room` | 01 |
-| Fréquences | télémétrie 500 ms (2 Hz) ; posture **continue** (débit GPU, repli 100 ms) ; HUD lunettes throttle 2 s | 02, 06, 04 |
+| Fréquences | télémétrie 500 ms (2 Hz) ; posture adaptative **30 / 15 / 10 FPS** selon état thermique (repli 100 ms) ; HUD lunettes throttle 2 s | 02, 06, 04 |
 | ActiveLook | service `…CB7`, RX `…CBA`, cmdIds `00/01/05/10/22/37/39`, rotation `0x04`, fonts 1/2/3, couleurs `0x0F`/`0x09`, y = 25/85/145/205, MTU 512, chunk 128 | 04 |
 | Capteurs | HR `180D/2A37`, CSC `1816/2A5B`, Battery `180F/2A19` | 05 |
-| Posture | α = 0.35, seuils 48° / 0.35 / 0.7, confiance = moyenne épaules+hanches, visibilité filtre 0.2 | 06 |
+| Posture | α = 0.5, seuils 48° / 0.35 / 0.7, confiance = moyenne épaules+hanches, visibilité filtre 0.2 | 06 |
 | GPS | distanceFilter 5 m, précision haute, rayon 3958.8 mi, facteur 1.60934, 6 décimales | 03 |
 | Carte | 140×140, zoom 18→3, fit 85 %, padding 20 %, tile 256 px | 03 |
 | Calories | simplifiée `bpm × 0.05 × t_s / 60` clamp [0,9999] ; ACSM : coefficients −55.0969/0.6309/0.1988/0.2017 et −20.4022/0.4472/−0.1263/0.074, division 4.184 | 04 |

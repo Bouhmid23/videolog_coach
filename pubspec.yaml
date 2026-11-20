@@ -34,7 +34,6 @@ dependencies:
   livekit_client: ^2.14.0
   intl: ^0.20.2
   permission_handler: ^13.0.2
-  provider: ^6.1.5+1
   device_info_plus: ^13.3.0
   logging: ^1.3.0
   shared_preferences: ^2.5.6
@@ -46,7 +45,7 @@ dependencies:
   wakelock_plus: ^1.8.0
   flutter_reactive_ble: ^5.4.2
 
-  flutter_pose_detection: ^0.4.0
+  mediapipe_vision: ^0.4.0
   path_provider: ^2.1.5
   geolocator: ^14.1.2
   sensors_plus: ^7.1.1
@@ -58,10 +57,6 @@ dependencies:
   share_plus: ^13.3.1
   file_picker: ^13.4.0
   fl_chart: ^1.3.1
-
-dependency_overrides:
-  flutter_pose_detection:
-    path: packages/flutter_pose_detection
 
 dev_dependencies:
   flutter_test:
@@ -84,6 +79,8 @@ flutter:
   assets:
     - images/
     - docs/ballon.svg
+    - assets/mediapipe/
+    - assets/models/pose_landmarker_full.task
   fonts:
     - family: TradeGothic
       fonts:
@@ -97,3 +94,9 @@ flutter:
           weight: 700
         - asset: assets/fonts/TradeGothic-Bold.ttf
           weight: 800
+
+hooks:
+  user_defines:
+    mediapipe_vision:
+      tasks: [pose_landmarker]
+      models: [pose_landmarker]

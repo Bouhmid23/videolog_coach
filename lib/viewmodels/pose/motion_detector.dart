@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'package:flutter_pose_detection/flutter_pose_detection.dart';
+import '../../data/pose_models.dart';
 
 /// Détecteur de mouvement pour l'adaptation intelligente du framerate.
 /// Si la variation moyenne des articulations est faible pendant plusieurs frames,
